@@ -110,6 +110,7 @@ class HarnessActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
+        AppForeground.onActivityResumed(this)
         AppOrientationPreference.apply(this)
         // 运行时停止或自动重启会撤销上一周期的授权。此 Activity 可能仍在任务栈里，
         // 不能让它继续展示或使用旧的 WebView 凭据；管理页重新打开 Harness 时会重新绑定。
@@ -123,6 +124,13 @@ class HarnessActivity : AppCompatActivity() {
         // 用户可能刚在外壳里点过「让 DSH 使用当前主题」：从后台回来时补一次，
         // 不要求他手动刷新页面。
         if (::webView.isInitialized) HarnessThemeBridge.apply(webView)
+        // 若有等待应用内确认的高危/极危 Root 命令，回到对话页时立即拉起警告确认页。
+        io.deepseekharness.mobile.shizuku.RootApprovalCoordinator.presentIfPending(this)
+    }
+
+    override fun onPause() {
+        AppForeground.onActivityPaused(this)
+        super.onPause()
     }
 
     override fun onStart() {

@@ -817,3 +817,228 @@ test('Shizuku Binder 与用户服务连接失败全部携带中文恢复提示�
     )
   }
 })
+
+test('高风险根命令（Tier 1）在 ask 策略下调取 dsh 官方审批，日志原因脱敏且界面展示完整命令', async t => {
+  const challengeId = '11111111-2222-3333-4444-555555555555'
+  const approvalCalls = []
+  const approval = {
+    effectivePolicy: () => 'ask',
+    async request(req) {
+      approvalCalls.push(req)
+      return 'allowed-once'
+    },
+  }
+  const f = fixture(t, request => {
+    if (request.command === 'shell') {
+      return {
+        ok: false,
+        exitCode: 1,
+        truncated: false,
+        errorCode: 'ROOT_APPROVAL_REQUIRED',
+        text: JSON.stringify({
+          schemaVersion: 1,
+          channel: 'root',
+          tier: 'elevated',
+          route: 'dsh_approval',
+          requiresHostConfirm: false,
+          actions: ['挂载或卸载'],
+          snippet: 'mount -o remount,rw /data',
+          challengeId,
+          guardProfile: 'strict',
+          degraded: true,
+          degradations: ['NAMESPACE_UNAVAILABLE'],
+        }),
+      }
+    }
+    assert.equal(request.command, 'shellApproved')
+    return ok('mounted-ok')
+  }, { get: name => (name === 'approval' ? approval : undefined) })
+
+  const script = 'mount -o remount,rw /data # \u202Esecret-token'
+  const fakeAgent = { session: { id: 'sess-1' } }
+  const res = await f.tools.get('mobile_device_shell').execute(
+    { script, justification: '挂载数据分区以调试日志' },
+    { agent: fakeAgent, callId: 'call-1' },
+  )
+
+  assert.equal(res.output, 'mounted-ok')
+  assert.equal(approvalCalls.length, 1)
+  assert.equal(approvalCalls[0].toolName, 'mobile_device_shell')
+  assert.equal(approvalCalls[0].callId, 'call-1')
+  // reason 会写入会话持久化审计日志，不得含明文脚本。
+  assert.doesNotMatch(approvalCalls[0].reason, /secret-token/u)
+  assert.match(approvalCalls[0].reason, /tier=elevated/u)
+  // displayReason 只展示给前端审批面板：必须含脚本预览（且剔除 BiDi 欺骗字符）、降级提示与 AI 说明。
+  assert.match(approvalCalls[0].displayReason.zh, /mount -o remount,rw \/data/u)
+  assert.match(approvalCalls[0].displayReason.zh, /挂载数据分区以调试日志/u)
+  assert.match(approvalCalls[0].displayReason.zh, /沙箱降级/u)
+  assert.equal(approvalCalls[0].displayReason.zh.includes('\u202E'), false)
+  assert.deepEqual(JSON.parse(f.requests[1].param), {
+    script,
+    challengeId,
+    approvalMode: 'dsh_approved',
+    justification: '挂载数据分区以调试日志',
+  })
+})
+
+test('高风险根命令被用户拒绝/取消/无应答通道时立即终止，绝不提交 shellApproved', async t => {
+  const challengePayload = JSON.stringify({
+    schemaVersion: 1,
+    channel: 'root',
+    tier: 'elevated',
+    route: 'dsh_approval',
+    requiresHostConfirm: false,
+    actions: ['修改 Android 系统属性'],
+    snippet: 'setprop foo bar',
+    challengeId: '22222222-2222-3333-4444-555555555555',
+    guardProfile: 'strict',
+    degraded: false,
+    degradations: [],
+  })
+  for (const [outcome, expectedCode] of [
+    ['rejected', /ROOT_APPROVAL_REJECTED/u],
+    ['cancelled', /ROOT_APPROVAL_CANCELLED/u],
+    ['unavailable', /ROOT_APPROVAL_UNAVAILABLE/u],
+  ]) {
+    const f = fixture(
+      t,
+      () => ({ ok: false, exitCode: 1, truncated: false, errorCode: 'ROOT_APPROVAL_REQUIRED', text: challengePayload }),
+      { get: name => (name === 'approval' ? { effectivePolicy: () => 'ask', request: async () => outcome } : undefined) },
+    )
+    await assert.rejects(
+      f.tools.get('mobile_device_shell').execute({ script: 'setprop foo bar' }, { agent: { session: {} } }),
+      expectedCode,
+    )
+    assert.deepEqual(f.requests.map(r => r.command), ['shell'])
+  }
+})
+
+test('dsh 完全权限（approval=never）下：Tier 1 尊重 dsh 直接放行，Tier 3 跳过静默拒绝直达 App 警告页', async t => {
+  let approvalAsked = 0
+  const approval = {
+    effectivePolicy: () => 'never',
+    async request() {
+      approvalAsked += 1
+      return 'rejected'
+    },
+  }
+  const tier1Challenge = '33333333-2222-3333-4444-555555555555'
+  const tier3Challenge = '44444444-2222-3333-4444-555555555555'
+  const f = fixture(t, request => {
+    if (request.command === 'shell' && request.param.startsWith('setprop')) {
+      return {
+        ok: false,
+        exitCode: 1,
+        truncated: false,
+        errorCode: 'ROOT_APPROVAL_REQUIRED',
+        text: JSON.stringify({
+          schemaVersion: 1,
+          channel: 'root',
+          tier: 'elevated',
+          route: 'dsh_approval',
+          requiresHostConfirm: false,
+          actions: ['修改 Android 系统属性'],
+          snippet: 'setprop a 1',
+          challengeId: tier1Challenge,
+          guardProfile: 'strict',
+          degraded: false,
+          degradations: [],
+        }),
+      }
+    }
+    if (request.command === 'shell' && request.param.startsWith('rm -rf /data')) {
+      return {
+        ok: false,
+        exitCode: 1,
+        truncated: false,
+        errorCode: 'ROOT_APPROVAL_REQUIRED',
+        text: JSON.stringify({
+          schemaVersion: 1,
+          channel: 'root',
+          tier: 'critical',
+          route: 'app_warning',
+          requiresHostConfirm: true,
+          actions: ['删除数据根'],
+          snippet: 'rm -rf /data',
+          challengeId: tier3Challenge,
+          guardProfile: 'maximum',
+          degraded: false,
+          degradations: [],
+        }),
+      }
+    }
+    assert.equal(request.command, 'shellApproved')
+    return ok('executed-after-policy')
+  }, { get: name => (name === 'approval' ? approval : undefined) })
+
+  const tool = f.tools.get('mobile_device_shell')
+  const agent = { session: { id: 'full-access' } }
+  const r1 = await tool.execute({ script: 'setprop a 1' }, { agent })
+  assert.equal(r1.output, 'executed-after-policy')
+  assert.equal(approvalAsked, 0)
+  assert.equal(JSON.parse(f.requests[1].param).approvalMode, 'dsh_full_access')
+
+  const r3 = await tool.execute({ script: 'rm -rf /data', justification: '清空测试数据' }, { agent })
+  assert.equal(r3.output, 'executed-after-policy')
+  assert.equal(approvalAsked, 0)
+  assert.deepEqual(JSON.parse(f.requests[3].param), {
+    script: 'rm -rf /data',
+    challengeId: tier3Challenge,
+    approvalMode: 'dsh_full_access',
+    justification: '清空测试数据',
+  })
+})
+
+test('极危根命令在 ask 策略下先经 dsh 官方询问，取消信号时联动发送 shellApprovalCancel', async t => {
+  const challengeId = '55555555-2222-3333-4444-555555555555'
+  const prompts = []
+  const controller = new AbortController()
+  const f = fixture(t, request => {
+    if (request.command === 'shell') {
+      return {
+        ok: false,
+        exitCode: 1,
+        truncated: false,
+        errorCode: 'ROOT_APPROVAL_REQUIRED',
+        text: JSON.stringify({
+          schemaVersion: 1,
+          channel: 'root',
+          tier: 'critical',
+          route: 'app_warning',
+          requiresHostConfirm: true,
+          actions: ['直写物理块设备'],
+          snippet: 'dd of=/dev/block/sda',
+          challengeId,
+          guardProfile: 'maximum',
+          degraded: false,
+          degradations: [],
+        }),
+      }
+    }
+    if (request.command === 'shellApproved') {
+      // 模拟宿主正在等待用户确认期间，用户在聊天里点了停止。
+      controller.abort()
+      return Promise.reject(new Error('aborted'))
+    }
+    return ok('')
+  }, {
+    get: name => (name === 'approval' ? {
+      effectivePolicy: () => 'ask',
+      request: async req => {
+        prompts.push(req)
+        return 'allowed-once'
+      },
+    } : undefined),
+  })
+
+  await assert.rejects(
+    f.tools.get('mobile_device_shell').execute(
+      { script: 'dd if=/dev/zero of=/dev/block/sda', justification: '刷写测试镜像' },
+      { agent: { session: {} }, signal: controller.signal },
+    ),
+    /DEVICE_COMMAND_CANCELLED/u,
+  )
+  assert.equal(prompts.length, 1)
+  assert.match(prompts[0].displayReason.zh, /打开应用极危警告页/u)
+  assert.ok(f.requests.some(r => r.command === 'shellApprovalCancel' && r.param === challengeId))
+})

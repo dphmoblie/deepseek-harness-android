@@ -483,6 +483,24 @@ class MobileRuntimePlugin : Plugin() {
         }
     }
 
+    /**
+     * 退出应用：用于首次免责条款门禁「不同意并退出」等明确要求关闭应用的场景。
+     *
+     * 先 resolve 避免调用方 Promise 悬空或阻塞 Capacitor 串行桥，再在主线程结束并移除当前任务；
+     * 若 finishAndRemoveTask 异常，回落 finishAffinity，确保不会滞留主界面。
+     */
+    @PluginMethod
+    fun exitApp(call: PluginCall) {
+        val host = activity
+        call.resolve()
+        host?.runOnUiThread {
+            if (!host.isFinishing && !host.isDestroyed) {
+                runCatching { host.finishAndRemoveTask() }
+                    .onFailure { host.finishAffinity() }
+            }
+        }
+    }
+
     /** 只读取应用宿主的方向；与目标应用副屏的 orientation 设置相互独立。 */
     @PluginMethod
     fun getAppOrientation(call: PluginCall) {

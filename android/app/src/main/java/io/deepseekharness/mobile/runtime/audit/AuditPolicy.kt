@@ -95,6 +95,15 @@ enum class AuditEvent {
      */
     DEVICE_POWER_ACTION,
 
+    /**
+     * 高风险根命令审批与 App 警告确认结果。
+     *
+     * 只记风险层级、审批途径与受控结果码（如 `TIER_ELEVATED_DSH_APPROVED`、
+     * `TIER_CRITICAL_APP_WARNING_APPROVED`、`ROOT_APPROVAL_REJECTED`）；
+     * 脚本正文、命中片段与 AI 说明一律不落审计，避免把敏感命令长期留在本地。
+     */
+    ROOT_COMMAND_APPROVAL,
+
     /** 无障碍应用白名单与系统设置入口。 */
     ACCESSIBILITY_CONFIG,
 

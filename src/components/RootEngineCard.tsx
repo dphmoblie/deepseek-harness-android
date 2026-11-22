@@ -216,8 +216,8 @@ export function RootEngineCard({ bridge = runtimeBridge }: { bridge?: RuntimeBri
     </p>}
     {value !== null && value.enabled && value.usable && <p className="settings-note">
       {profile === 'maximum'
-        ? t('最大档：mount、dd（普通文件）、insmod、setprop（普通属性）放行；刷机、块设备、核心分区写入、数据销毁与电源仍拦截。')
-        : t('严格档：拦截 mount、dd、insmod、setprop。')}
+        ? t('最大档：mount、dd（普通文件）、insmod、setprop（普通属性）与动态脚本放行；电源、SELinux、核心分区写入及刷机/块设备/数据销毁等极危操作需打开应用警告页确认。')
+        : t('严格档：mount、dd、insmod、setprop 与动态脚本走 dsh 审批（dsh 完全权限下放行）；高危与极危操作需打开应用警告页确认。')}
     </p>}
     {value !== null && value.degraded && <>
       <p className="settings-note">{t('隔离不完整，少了这些保护：')}</p>
@@ -236,8 +236,8 @@ export function RootEngineCard({ bridge = runtimeBridge }: { bridge?: RuntimeBri
     {value !== null && <button className="button button-secondary compact-button" type="button" disabled={busy} onClick={() => { void refresh() }}>{t('重新检测')}</button>}
 
     {value !== null && <>
-      <p className="settings-note">{t('设备电源（仅手动）')}</p>
-      <p className="settings-note">{t('AI 无电源权限，操作需系统身份确认')}</p>
+      <p className="settings-note">{t('设备电源（快捷操作）')}</p>
+      <p className="settings-note">{t('手动电源操作需系统身份确认；AI 请求电源命令需打开应用警告页确认')}</p>
       <div className="settings-note">
         <button
           className="button button-secondary compact-button"

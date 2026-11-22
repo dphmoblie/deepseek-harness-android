@@ -100,12 +100,20 @@ class MainActivity : BridgeActivity() {
 
     override fun onResume() {
         super.onResume()
+        AppForeground.onActivityResumed(this)
         AppOrientationPreference.apply(this)
         // 主题可能刚在 Web 侧被改过，系统深色模式也可能在后台切换过；每次回到前台重算一次状态栏，
         // 比在每条改动路径上分别通知可靠。
         AppThemePreference.applySafely(this)
         // 用户已经回到应用，界面本身就会显示运行时状态：任务通知在这里没有存在价值（登记册 §5.5）。
         io.deepseekharness.mobile.runtime.TaskNotification.clear(this)
+        // 若有等待应用内确认的高危/极危 Root 命令，用户回到应用时立即打开警告确认页。
+        io.deepseekharness.mobile.shizuku.RootApprovalCoordinator.presentIfPending(this)
+    }
+
+    override fun onPause() {
+        AppForeground.onActivityPaused(this)
+        super.onPause()
     }
 
     override fun onConfigurationChanged(newConfig: Configuration) {

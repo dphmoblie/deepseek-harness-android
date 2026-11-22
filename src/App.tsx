@@ -9,6 +9,7 @@ import { AutomationRuleForm } from './components/AutomationRuleForm'
 import type { AutomationRuleDefaults } from './components/AutomationRuleForm'
 import { AutomationAppConfigForm } from './components/AutomationAppConfigForm'
 import { AutomationDisclaimer } from './components/AutomationDisclaimer'
+import { AppDisclaimer } from './components/AppDisclaimer'
 import { AutomationTaskCard } from './components/AutomationTaskCard'
 import { AppBackground } from './components/AppBackground'
 import { LanguageSettings } from './components/LanguageSettings'
@@ -49,6 +50,7 @@ import {
   Database,
   Download,
   ExternalLink,
+  FileText,
   FolderInput,
   Gauge,
   HardDrive,
@@ -98,6 +100,7 @@ import { Capacitor } from '@capacitor/core'
 import { observeKeyboardInset } from './keyboardInset'
 import { applyShellFontScale, SHELL_FONT_BASELINE_PX } from './shellFont'
 import { acknowledgeAutomationDisclaimer, isAutomationDisclaimerAcknowledged } from './accessibilityDisclaimer'
+import { acknowledgeAppDisclaimer, isAppDisclaimerAcknowledged } from './appDisclaimer'
 import { assertMailboxSubdirectory, validateAccessibilityPasswordInput } from './platform/validation'
 import {
   type SelfCheckOperation,
@@ -237,7 +240,7 @@ function isSettingsView(view: AppView): boolean {
 }
 
 /** 按用户用途分类；分类只影响入口展示，不改动设置草稿。 */
-type SettingsHomeGroup = 'runtime' | 'files' | 'versions' | 'models' | 'appearance' | 'device' | 'diagnostics'
+type SettingsHomeGroup = 'runtime' | 'files' | 'versions' | 'models' | 'appearance' | 'device' | 'diagnostics' | 'about'
 
 const SETTINGS_HOME_GROUPS: { id: SettingsHomeGroup; label: string }[] = [
   { id: 'models', label: '模型连接' },
@@ -247,10 +250,11 @@ const SETTINGS_HOME_GROUPS: { id: SettingsHomeGroup; label: string }[] = [
   { id: 'files', label: '文件管理' },
   { id: 'versions', label: '版本管理' },
   { id: 'diagnostics', label: '日志与排查' },
+  { id: 'about', label: '关于与条款' },
 ]
 
 /** 入口点下去要去哪：设置二级页，或外壳一级页。 */
-type SettingsHomeTarget = { kind: 'page'; page: SettingsPage } | { kind: 'view'; view: AppView } | { kind: 'permissions' }
+type SettingsHomeTarget = { kind: 'page'; page: SettingsPage } | { kind: 'view'; view: AppView } | { kind: 'permissions' } | { kind: 'disclaimer' }
 
 interface SettingsHomeEntry {
   /** 稳定标识：只用于 React key、图标与测试定位；改标题不影响它，也不参与匹配。 */
@@ -371,6 +375,15 @@ const SETTINGS_HOME_ENTRIES: SettingsHomeEntry[] = [
     keywords: ['诊断', '日志', 'log', 'logs', '采集', '保留', '导出', '排查', '报错', '错误', '崩溃', '重启', '自检', 'self check', '浏览器', '系统浏览器', '外置浏览器', 'browser', 'chrome', 'webview'],
     target: { kind: 'page', page: 'diagnostics' },
     icon: <ScrollText size={20} />,
+  },
+  {
+    id: 'disclaimer',
+    group: 'about',
+    title: '免责条款',
+    hint: '查看软件使用声明与风险告知',
+    keywords: ['免责', '条款', '声明', '风险', '法律', '协议', '关于', '开源', 'disclaimer', 'terms', 'legal', 'risk', 'notice', 'license'],
+    target: { kind: 'disclaimer' },
+    icon: <FileText size={20} />,
   },
 ]
 
@@ -1378,6 +1391,7 @@ interface SettingsHomeScreenProps {
   onOpenPage: (page: SettingsPage) => void
   onOpenView: (view: AppView) => void
   onOpenPermissions: () => void
+  onOpenDisclaimer: () => void
 }
 
 /**
@@ -1385,7 +1399,7 @@ interface SettingsHomeScreenProps {
  *
  * 筛选只决定这一屏显示哪些入口，不改变任何行为：点下去走的是同一条路。
  */
-function SettingsHomeScreen({ busy, launchBlocked, diagnostic, keepAlive, runtime, shizuku, onLaunch, onOpenPage, onOpenView, onOpenPermissions }: SettingsHomeScreenProps) {
+function SettingsHomeScreen({ busy, launchBlocked, diagnostic, keepAlive, runtime, shizuku, onLaunch, onOpenPage, onOpenView, onOpenPermissions, onOpenDisclaimer }: SettingsHomeScreenProps) {
   /** 过滤词只活在组件里：离开设置首页即清空，下次进来不该被上次的搜索框卡住。 */
   const [query, setQuery] = useState('')
   /** 已确认的查找词：只有点搜索图标或按回车才落地。输入过程本身不筛选——
@@ -1437,6 +1451,7 @@ function SettingsHomeScreen({ busy, launchBlocked, diagnostic, keepAlive, runtim
   const openEntry = (entry: SettingsHomeEntry): void => {
     if (entry.target.kind === 'page') onOpenPage(entry.target.page)
     else if (entry.target.kind === 'view') onOpenView(entry.target.view)
+    else if (entry.target.kind === 'disclaimer') onOpenDisclaimer()
     else onOpenPermissions()
   }
 
@@ -3938,6 +3953,28 @@ export function App() {
   const [lastMailboxExport, setLastMailboxExport] = useState<MailboxExportResult | null>(null)
   const [diagnostic, setDiagnostic] = useState<DiagnosticLogState>(EMPTY_DIAGNOSTIC)
   const [booting, setBooting] = useState(true)
+  /**
+   * 首次启动应用级免责条款门禁：未同意当前版本条款前阻止进入主界面与任何后台预启动；
+   * 用户点「不同意并退出」时直接调用原生 exitApp 退出应用。
+   */
+  const [appDisclaimerOpen, setAppDisclaimerOpen] = useState(() => !isAppDisclaimerAcknowledged())
+  const [disclaimerDeclined, setDisclaimerDeclined] = useState(false)
+  /** 设置页「免责条款」入口触发的只读回看弹窗。 */
+  const [disclaimerViewerOpen, setDisclaimerViewerOpen] = useState(false)
+  const acceptAppDisclaimer = useCallback(() => {
+    acknowledgeAppDisclaimer()
+    setDisclaimerDeclined(false)
+    setAppDisclaimerOpen(false)
+  }, [])
+  const declineAppDisclaimer = useCallback(() => {
+    setDisclaimerDeclined(true)
+    void runtimeBridge.exitApp().catch(() => {
+      // 浏览器标签页或旧宿主无法自动关闭窗口时，保持门禁锁定并显示手动退出提示。
+    })
+  }, [])
+  const openDisclaimerViewer = useCallback(() => {
+    setDisclaimerViewerOpen(true)
+  }, [])
   const [onboardingOpen, setOnboardingOpen] = useState(() => {
     try { return window.localStorage.getItem(ONBOARDING_STORAGE_KEY) === null } catch { return true }
   })
@@ -4275,7 +4312,7 @@ export function App() {
    * 且向右滑动超过 75px 且纵向偏差较小时，触发返回上一级并伴随轻微触感振动。
    */
   useEffect(() => {
-    if (activeView === ROOT_VIEW || resetOpen || repairOpen || pendingInstall !== null || onboardingOpen || firstRunPermissionsOpen) return
+    if (activeView === ROOT_VIEW || resetOpen || repairOpen || pendingInstall !== null || appDisclaimerOpen || disclaimerViewerOpen || onboardingOpen || firstRunPermissionsOpen) return
 
     let startX = 0
     let startY = 0
@@ -4322,7 +4359,7 @@ export function App() {
       window.removeEventListener('touchend', handleTouchEnd)
       window.removeEventListener('touchcancel', handleTouchCancel)
     }
-  }, [activeView, backToView, resetOpen, repairOpen, pendingInstall, onboardingOpen, firstRunPermissionsOpen])
+  }, [activeView, backToView, resetOpen, repairOpen, pendingInstall, appDisclaimerOpen, disclaimerViewerOpen, onboardingOpen, firstRunPermissionsOpen])
 
   /**
    * 「离开这一页就保存」。
@@ -4547,7 +4584,7 @@ export function App() {
    * 一个进程生命周期只尝试一次：依赖变化导致的反复重试会变成后台风暴。
    */
   useEffect(() => {
-    if (booting || onboardingOpen || firstRunPermissionsOpen || settings === null) return
+    if (booting || appDisclaimerOpen || onboardingOpen || firstRunPermissionsOpen || settings === null) return
     /*
      * 触发口径是「这项设置由关变开」，且**必须区分相位**（AGENTS.md §5）：
      *
@@ -4613,7 +4650,7 @@ export function App() {
     void attempt.finally(() => {
       if (prewarmInFlight.current === attempt) prewarmInFlight.current = null
     })
-  }, [booting, firstRunPermissionsOpen, versionOperationBusy, onboardingOpen, runtime, settings])
+  }, [booting, appDisclaimerOpen, firstRunPermissionsOpen, versionOperationBusy, onboardingOpen, runtime, settings])
 
   useEffect(() => {
     let cancelled = false
@@ -5005,7 +5042,7 @@ export function App() {
   // 应用更新入口默认直连发布目录；原生仍保留缓存参数，供明确的缓存读取场景使用。
   const loadAppUpdate = useCallback((forceRefresh = true) => runtimeBridge.getAppUpdateState(forceRefresh), [])
   const setAppUpdateChannel = useCallback((channel: AppUpdateChannel) => runtimeBridge.setAppUpdateChannel(channel), [])
-  const appUpdateReminder = useAppUpdateReminder(language !== null && !booting && !onboardingOpen && !firstRunPermissionsOpen, loadAppUpdate)
+  const appUpdateReminder = useAppUpdateReminder(language !== null && !booting && !appDisclaimerOpen && !onboardingOpen && !firstRunPermissionsOpen, loadAppUpdate)
   const downloadAppUpdate = useCallback(() => runtimeBridge.downloadAppUpdate(), [])
   const installAppUpdate = useCallback(() => runtimeBridge.installAppUpdate(), [])
   const openAppUpdateInstallSettings = useCallback(() => runtimeBridge.openAppUpdateInstallSettings(), [])
@@ -5980,7 +6017,7 @@ export function App() {
       case 'files':
         return <FilesScreen busy={busy} filesRoot={filesRoot} lastMailboxExport={lastMailboxExport} lastMailboxImport={lastMailboxImport} mailbox={mailbox} mailboxDirectory={mailboxDirectory} mailboxDirectoryReadFailed={mailboxDirectoryReadFailed} mailboxReadFailed={mailboxReadFailed} storageAccess={storageAccess} storageDirectory={storageDirectory} storageDirectoryReadFailed={storageDirectoryReadFailed} storageDirs={storageDirs} storageDirsReadFailed={storageDirsReadFailed} onAddStorageDirectory={addStorageDirectory} onBack={() => backToView('settings')} onCreateFilesFolder={createFilesFolder} onExternalFileAction={externalFileAction} onExportMailbox={exportMailbox} onImportMailbox={importMailbox} onOpenAllFilesAccess={openAllFilesAccessSettings} onOpenFilesDirectory={openFilesDirectory} onRefreshMailbox={refreshMailbox} onRemoveStorageDirectory={removeStorageDirectory} onSelectFilesRoot={selectFilesRoot} />
       case 'settings':
-        return <SettingsHomeScreen busy={busy} launchBlocked={versionOperationBusy} diagnostic={diagnostic} keepAlive={keepAlive} runtime={runtime} shizuku={shizuku} onLaunch={() => launchHarness()} onOpenPage={openSettings} onOpenView={setActiveView} onOpenPermissions={() => setFirstRunPermissionsOpen(true)} />
+        return <SettingsHomeScreen busy={busy} launchBlocked={versionOperationBusy} diagnostic={diagnostic} keepAlive={keepAlive} runtime={runtime} shizuku={shizuku} onLaunch={() => launchHarness()} onOpenPage={openSettings} onOpenView={setActiveView} onOpenPermissions={() => setFirstRunPermissionsOpen(true)} onOpenDisclaimer={openDisclaimerViewer} />
       default: {
         const page = settingsPageOf(activeView)
         if (page === null) return null
@@ -5998,6 +6035,20 @@ export function App() {
       return <div className="boot-screen"><Brand /><Loader2 className="spin" size={23} /><span>{t("正在连接本机环境")}</span></div>
     }
     return <main className="language-screen"><LanguageSettings initial /></main>
+  }
+
+  if (appDisclaimerOpen) {
+    return (
+      <main className="disclaimer-gate-screen">
+        <AppBackground />
+        <AppDisclaimer
+          mode="gate"
+          declinedFallback={disclaimerDeclined}
+          onAccept={acceptAppDisclaimer}
+          onDecline={declineAppDisclaimer}
+        />
+      </main>
+    )
   }
 
   if (booting) {
@@ -6054,6 +6105,13 @@ export function App() {
             appUpdateReminder.dismiss()
             setActiveView('versions')
           }}
+        />
+      )}
+
+      {disclaimerViewerOpen && (
+        <AppDisclaimer
+          mode="read"
+          onClose={() => setDisclaimerViewerOpen(false)}
         />
       )}
 

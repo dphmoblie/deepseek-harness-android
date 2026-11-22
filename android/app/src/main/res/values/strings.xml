@@ -182,4 +182,30 @@
     <string name="virtual_screen_overlay_status_waiting">等待副屏画面</string>
     <!-- 切档成功后立刻显示这一条，下一次取帧会用真实读数覆盖它；%1$s 是档位名。 -->
     <string name="virtual_screen_overlay_mode_switched">已切到 %1$s，等待新的帧率读数</string>
+    <!-- 高危 / 极危 Root 命令的应用内警告与确认页文案。 -->
+    <string name="root_approval_channel_name">高危 Root 命令确认</string>
+    <string name="root_approval_channel_description">AI 请求执行高危或极危 Root 命令时提醒你回到应用确认</string>
+    <string name="root_approval_notification_critical_title">极危 Root 命令等待应用内确认</string>
+    <string name="root_approval_notification_critical_text">可能造成设备变砖或数据丢失，点按打开应用查看完整脚本并决定</string>
+    <string name="root_approval_notification_high_title">高风险 Root 命令等待应用内确认</string>
+    <string name="root_approval_notification_high_text">点按打开应用核对完整脚本并决定是否放行</string>
+    <string name="root_approval_critical_title">极危 Root 操作警告</string>
+    <string name="root_approval_high_title">高风险 Root 操作确认</string>
+    <string name="root_approval_critical_warning">此命令命中不可逆防变砖或数据销毁高危规则，执行后可能导致设备变砖、无法开机或数据永久丢失。请逐行核对下方完整脚本后再决定。</string>
+    <string name="root_approval_high_warning">此命令会影响整机电源、安全策略或系统核心分区。请核对下方完整脚本后再决定是否执行。</string>
+    <string name="root_approval_rules_heading">命中的高风险规则</string>
+    <string name="root_approval_matched_snippet">命中片段：%1$s</string>
+    <string name="root_approval_degraded_notice">沙箱降级提醒：当前设备未提供完整隔离（%1$s），此命令将直接在宿主 UID 0 环境下生效。</string>
+    <string name="root_approval_ai_reason_heading">AI 说明（不可信文本，请以实际脚本为准）</string>
+    <string name="root_approval_script_heading">待执行的完整 Root 脚本</string>
+    <string name="root_approval_bidi_stripped_notice">注意：已过滤脚本中的方向控制字符以便如实阅读。</string>
+    <string name="root_approval_uid0_note">确认后将由本应用以 UID 0（Root）直接执行上述脚本，且不经受限沙箱遮蔽。</string>
+    <string name="root_approval_critical_acknowledge">我已完整阅读上方脚本，知晓可能造成设备变砖或数据永久丢失，仍要执行</string>
+    <string name="root_approval_high_acknowledge">我已完整阅读上方脚本，确认在当前设备上以 Root 权限执行</string>
+    <string name="root_approval_reject">拒绝执行</string>
+    <string name="root_approval_critical_confirm">验证并强制执行</string>
+    <string name="root_approval_high_confirm">验证并执行</string>
+    <string name="root_approval_biometric_critical_subtitle">验证通过后将立即以 Root 执行该极危脚本</string>
+    <string name="root_approval_biometric_high_subtitle">验证通过后将立即以 Root 执行该高风险脚本</string>
+    <string name="root_approval_no_lockscreen_confirm">当前设备未设置锁屏密码或生物识别。请再次确认是否立即以 Root 权限执行上方脚本？</string>
 </resources>

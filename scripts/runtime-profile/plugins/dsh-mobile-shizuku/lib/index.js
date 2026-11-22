@@ -24,6 +24,10 @@ const MAX_FILE_BASE64_CHARS = 4 * Math.ceil(MAX_FILE_BYTES / 3) + 4
 const MAX_FILE_PATH_CHARS = 240
 const MAX_FILE_PARAM_CHARS = 180_000
 const REQUEST_TIMEOUT_MS = 75_000
+// 高危 / 极危根命令会等待用户在 Android 应用警告页核对并完成验证（原生默认 120 秒 + 命令 60 秒）。
+const HOST_APPROVAL_REQUEST_TIMEOUT_MS = 185_000
+const MAX_JUSTIFICATION_CHARS = 512
+const MAX_APPROVAL_SCRIPT_PREVIEW_CHARS = 1600
 const VIRTUAL_SESSION_PATTERN = /^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/u
 // 副屏手势与跳转的参数边界，与设备端 VirtualScreenPolicy 的常量保持一致。
 const MAX_COMPONENT_CHARS = 320
@@ -110,6 +114,14 @@ const SHELL_HINTS = {
   SHIZUKU_SERVICE_TIMEOUT: 'Shizuku 服务没有在限定时间内起来：不要反复重试；确认 Shizuku 仍在运行，优先改用根通道（mobile_device_shell）或无障碍工具。',
   SHIZUKU_SERVICE_FAILED: 'Shizuku 用户服务连接失败或已断开：不要反复重试；改用根通道（mobile_device_shell）或无障碍工具，或提示用户在 Shizuku 中重启服务。',
   SHIZUKU_SERVICE_INTERRUPTED: '连接 Shizuku 用户服务被中断：先查 mobile_device_capabilities 确认状态，不要盲目重复重试。',
+  ROOT_APPROVAL_REJECTED: '用户拒绝了本次高风险 Root 命令：请立即停止该操作并向用户说明，不要换写法或混淆命令重试。',
+  ROOT_APPROVAL_CANCELLED: '本次高风险 Root 命令的确认已取消：不要自动重发，先与用户确认是否仍需执行。',
+  ROOT_APPROVAL_TIMEOUT: '等待用户在应用警告页确认超时：不要自动重复弹出，请提醒用户回到 DeepSeek Harness 应用并按需重新发起。',
+  ROOT_APPROVAL_BUSY: '当前已有一条高风险 Root 命令在应用内等待确认：请先等待用户处理完当前确认，不要并发发起多条高风险命令。',
+  ROOT_APPROVAL_UNAVAILABLE: '当前没有可用的确认通道或无法打开应用警告页：请提醒用户先打开 DeepSeek Harness 应用前台界面后再试。',
+  ROOT_APPROVAL_EXPIRED: '本次审批挑战已过期：如需继续执行，请重新发起一次调用并由用户确认。',
+  ROOT_APPROVAL_INVALID: '本次高风险 Root 命令审批校验未通过：请确认脚本内容完整未改动后按正常流程重新发起。',
+  ROOT_SECURITY_VIOLATION: '该 Root 命令未通过安全确认校验：不要试图通过变量拼接或二次 Shell 绕过，请按正常流程重新发起并向用户说明原因。',
 }
 
 /** 受控码 → 固定恢复建议。只有登记过表的命令才有建议，其余命令仍旧只回码。 */
@@ -136,7 +148,7 @@ const PROMPT = [
   'Use coordinates from the latest observation; never guess coordinates or repeat a destructive action. Observe the device again after any state-changing operation, and if an operation fails, report the failure instead of blindly repeating it.',
   '工具包括观察、后台任务查询、投递区文件操作、无障碍自动化和用户开启后的通用 Shell。通用 Shell 有根通道（KernelSU 的 su，不需要 Shizuku）和 Shizuku 通道两条路：不要因为「没有 Shizuku」就判定 Shell 不可用——先查 mobile_device_capabilities 的 rootEngineEnabled / rootEngineStatus / shellEnabled。返回 DEVICE_BRIDGE_UNAVAILABLE 时回应用确认运行环境已启动；返回 SHIZUKU_* 时提示用户检查 Shizuku 状态和授权，或改用根通道。',
   'mobile_device_background_tasks 只能查询指定应用的进程、服务和 Activity 摘要，不能据此声称看到了隐藏界面或后台业务内容。',
-  'mobile_device_shell 执行一次性 Android Shell 脚本，两条通道任一可用即可：根通道（用户在「设置 → 根通道」打开并授权 KernelSU；不需要 Shizuku，能力清单里 rootEngineEnabled=true 且 rootEngineStatus=ready）或 Shizuku 通道（用户在「设置 → 设备 Shell」开启 AI Shell 并连上 Shizuku）。调用前先看 mobile_device_capabilities 的 shellEnabled / rootEngineEnabled / rootEngineStatus / rootEngineReason；DEVICE_SHELL_DISABLED 表示两条都不通，按回执里的说明引导用户先开一条，不要说成「设备不支持 Shell」，也不要跳过 Shell 改用截图或点击去猜结果。脚本正文与输出都属于用户设备数据：不要读取或回显密钥、短信、通讯录、令牌和其他个人信息；不要把脚本正文写入日志。',
+  'mobile_device_shell 执行一次性 Android Shell 脚本，两条通道任一可用即可：根通道（用户在「设置 → 根通道」打开并授权 KernelSU；不需要 Shizuku，能力清单里 rootEngineEnabled=true 且 rootEngineStatus=ready）或 Shizuku 通道（用户在「设置 → 设备 Shell」开启 AI Shell 并连上 Shizuku）。调用前先看 mobile_device_capabilities 的 shellEnabled / rootEngineEnabled / rootEngineStatus / rootEngineReason；DEVICE_SHELL_DISABLED 表示两条都不通，按回执里的说明引导用户先开一条，不要说成「设备不支持 Shell」，也不要跳过 Shell 改用截图或点击去猜结果。根通道命中高风险命令时不会直接静默拒绝，而是按风险级别自动调起 dsh 官方审批或在 Android 应用页弹出高危/极危警告供用户亲自确认；执行高风险操作时请提供简洁清晰的 justification 供用户审阅，切勿混淆命令规避检查，用户拒绝后应停止执行而非重试。脚本正文与输出都属于用户设备数据：不要读取或回显密钥、短信、通讯录、令牌和其他个人信息；不要把脚本正文写入日志。',
   'mobile_virtual_screen_shell 把同一个 Shizuku Shell 直接放到副屏（目标应用副屏）的 displayId 上：脚本环境已导出 DISPLAY_ID，用 input -d "$DISPLAY_ID" … 注入输入（例如 input -d "$DISPLAY_ID" tap 622 880），用 am start --display "$DISPLAY_ID" … 在副屏上启动界面。displayId 可省略（默认当前会话副屏）；显式传入时必须等于会话副屏，否则返回 VIRTUAL_SCREEN_DISPLAY_INVALID，传 0（主屏）同样拒绝——主屏请用 mobile_device_shell 或 mobile_device_tap 等既有工具。副屏会话未运行时报 VIRTUAL_SCREEN_UNAVAILABLE；脚本为空、超过 16 KiB 或含 NUL/回车时报 DEVICE_COMMAND_INVALID。它只做「按需一次性执行」，常规观察—操作循环仍用 mobile_virtual_screen_action。',
   '副屏生命周期动作按真实结果回答，不做假的成功：mobile_virtual_screen_action 的 start 在会话已运行时返回 state=already_active（不重建），会话不存在时返回 VIRTUAL_SCREEN_SESSION_DEAD；restart 用会话里保存的原规格重建同一块副屏并保住会话编号，规格丢失或会话不存在时返回 VIRTUAL_SCREEN_RESTART_UNSUPPORTED；reconnect 在 Shizuku 连接或会话掉线后重新绑定，副屏已被释放时返回 VIRTUAL_SCREEN_RECONNECT_UNSUPPORTED。这两个 UNSUPPORTED 都是在说「这一步现在做不到」，不是副屏不可用，请按返回的 reason 决定重新开始会话还是重连 Shizuku。',
   '副屏自动跟随策略在状态里回显为 autoFollow（off/pull_back/promote）：off 什么都不做，pull_back 在目标应用跳到别的应用时把它拉回副屏，promote 把副屏上当前前台的应用提升为会话目标。宿主健康循环约每 800 毫秒发一次 autoFollowTick，设备端自带 2 秒节流且幂等，目标已经是会话目标时不动作，因此同一个 tick 重复发送不会产生重复启动；不要在两次 tick 之间反复手动触发以免抢走节流窗口。状态里的 virtualForegroundPackage/virtualForegroundActivity 是副屏 resumed activity 的读数，可用于确认「副屏上现在到底是谁在前台」，拿不到时是空串而不是主屏前台。',
@@ -186,9 +198,105 @@ function anySignal(signals) {
   return controller.signal
 }
 
-async function callBridge(command, param, signal, maxChars = MAX_RESULT_CHARS, allowNonZero = false) {
+class RootApprovalRequiredError extends Error {
+  constructor(challenge) {
+    super('ROOT_APPROVAL_REQUIRED')
+    this.name = 'RootApprovalRequiredError'
+    this.code = 'ROOT_APPROVAL_REQUIRED'
+    this.challenge = challenge
+  }
+}
+
+function parseRootApprovalChallenge(rawText) {
+  if (typeof rawText !== 'string' || !rawText.trimStart().startsWith('{')) return null
+  try {
+    const parsed = JSON.parse(rawText)
+    if (!parsed || typeof parsed !== 'object' || parsed.schemaVersion !== 1) return null
+    if (typeof parsed.challengeId !== 'string' || parsed.challengeId.length === 0) return null
+    if (!['dsh_approval', 'host_confirm', 'app_warning'].includes(parsed.route)) return null
+    return {
+      tier: typeof parsed.tier === 'string' ? parsed.tier : 'elevated',
+      route: parsed.route,
+      requiresHostConfirm: parsed.requiresHostConfirm === true,
+      actions: Array.isArray(parsed.actions) ? parsed.actions.filter(item => typeof item === 'string') : [],
+      snippet: typeof parsed.snippet === 'string' ? parsed.snippet : '',
+      challengeId: parsed.challengeId,
+      guardProfile: typeof parsed.guardProfile === 'string' ? parsed.guardProfile : 'strict',
+      degraded: parsed.degraded === true,
+      degradations: Array.isArray(parsed.degradations) ? parsed.degradations.filter(item => typeof item === 'string') : [],
+    }
+  } catch {
+    return null
+  }
+}
+
+function sanitizeApprovalDisplay(text, maxChars) {
+  if (typeof text !== 'string') return ''
+  // 剔除 BiDi 方向覆盖字符，避免前端审批面板里的命令预览被视觉欺骗。
+  const cleaned = text.replace(/[\u202A-\u202E\u2066-\u2069\u200E\u200F\u061C]/gu, '')
+  if (cleaned.length <= maxChars) return cleaned
+  return `${cleaned.slice(0, maxChars)}\n... [已截断，完整脚本共 ${cleaned.length} 字符]`
+}
+
+function buildRootApprovalPrompt(challenge, script, justification) {
+  const actionsText = challenge.actions.length > 0 ? challenge.actions.join('、') : '高风险 Root 命令'
+  const preview = sanitizeApprovalDisplay(script, MAX_APPROVAL_SCRIPT_PREVIEW_CHARS)
+  const cleanReason = typeof justification === 'string' && justification.trim().length > 0
+    ? sanitizeApprovalDisplay(justification.trim(), MAX_JUSTIFICATION_CHARS)
+    : ''
+  const isCritical = challenge.route === 'app_warning'
+  const isHost = challenge.requiresHostConfirm
+
+  // 写入 dsh 会话审计日志的 reason 不包含脚本原文，仅保留风险分级与触发规则名。
+  const auditReason = `Root shell command requires approval (tier=${challenge.tier}, route=${challenge.route}, rules=${actionsText})`
+
+  const zhHeader = isCritical
+    ? `【极危 Root 命令】命中防变砖/数据销毁规则（${actionsText}）。允许后将打开应用极危警告页进行最终强确认。`
+    : isHost
+      ? `【高风险 Root 命令】命中整机级规则（${actionsText}）。允许后将打开应用页面进行最终确认。`
+      : `允许以 Root（UID 0）执行该高风险运维命令吗？（命中规则：${actionsText}）`
+  const enHeader = isCritical
+    ? `[Critical Root Command] Matched anti-brick/data-destruction rules (${actionsText}). Allowing opens the in-app critical warning page for final confirmation.`
+    : isHost
+      ? `[High-Risk Root Command] Matched system-level rules (${actionsText}). Allowing opens the in-app confirmation page.`
+      : `Allow executing this elevated Root (UID 0) command? (Rules: ${actionsText})`
+
+  const zhParts = [zhHeader]
+  const enParts = [enHeader]
+  if (challenge.degraded) {
+    const diag = challenge.degradations.join(', ')
+    zhParts.push(`注意：当前设备沙箱降级（${diag}），命令直接作用于宿主系统。`)
+    enParts.push(`Note: Sandbox is degraded (${diag}); command runs directly on host UID 0.`)
+  }
+  if (cleanReason !== '') {
+    zhParts.push(`AI 说明：${cleanReason}`)
+    enParts.push(`AI justification: ${cleanReason}`)
+  }
+  zhParts.push(`待执行脚本：\n${preview}`)
+  enParts.push(`Script to execute:\n${preview}`)
+
+  return {
+    reason: auditReason,
+    displayReason: {
+      zh: zhParts.join('\n'),
+      en: enParts.join('\n'),
+    },
+  }
+}
+
+function resolveSessionApprovalPolicy(ctx, exec) {
+  const approvalService = typeof ctx?.get === 'function' ? ctx.get('approval') : ctx?.approval
+  if (!approvalService) return { approvalService: undefined, policy: 'unavailable' }
+  const session = exec?.agent?.session
+  const policy = session && typeof approvalService.effectivePolicy === 'function'
+    ? approvalService.effectivePolicy(session)
+    : (approvalService.config?.policy ?? 'ask')
+  return { approvalService, policy }
+}
+
+async function callBridge(command, param, signal, maxChars = MAX_RESULT_CHARS, allowNonZero = false, timeoutMs = REQUEST_TIMEOUT_MS) {
   const { numericPort, token } = bridgeConfig()
-  const timeoutSignal = AbortSignal.timeout(REQUEST_TIMEOUT_MS)
+  const timeoutSignal = AbortSignal.timeout(timeoutMs)
   const requestSignal = signal ? anySignal([signal, timeoutSignal]) : timeoutSignal
   const response = await fetch(`http://127.0.0.1:${numericPort}/device-command`, {
     method: 'POST',
@@ -220,6 +328,10 @@ async function callBridge(command, param, signal, maxChars = MAX_RESULT_CHARS, a
   const completedShell = allowNonZero && Number.isInteger(result.exitCode) && result.exitCode >= 0 && result.exitCode <= 255 &&
     (result.errorCode == null || result.errorCode === 'DEVICE_COMMAND_FAILED')
   if ((!result.ok || result.exitCode !== 0) && !completedShell) {
+    if (command === 'shell' && result.errorCode === 'ROOT_APPROVAL_REQUIRED') {
+      const challenge = parseRootApprovalChallenge(result.text)
+      if (challenge !== null) throw new RootApprovalRequiredError(challenge)
+    }
     const code = typeof result.errorCode === 'string' && /^[A-Z0-9_]{1,64}$/u.test(result.errorCode)
       ? result.errorCode
       : 'DEVICE_COMMAND_FAILED'
@@ -228,7 +340,7 @@ async function callBridge(command, param, signal, maxChars = MAX_RESULT_CHARS, a
     // 旧实现在这里把 text 丢掉、只抛码，模型就没有任何下一步可用——失败不再是可行动的。
     // 只对 Shell 两类命令转发：其它命令（尤其自动化台账）的 text 可能夹带设备原文，
     // 那条通道从设计上就不许把设备内容回给模型。
-    const forwardsExplanation = command === 'shell' || command === 'virtualScreenShell'
+    const forwardsExplanation = command === 'shell' || command === 'shellApproved' || command === 'virtualScreenShell'
     const explanation = forwardsExplanation && typeof result.text === 'string'
       ? result.text.replace(/\s+/gu, ' ').trim().slice(0, 400)
       : ''
@@ -240,6 +352,79 @@ async function callBridge(command, param, signal, maxChars = MAX_RESULT_CHARS, a
     ...(allowNonZero ? { exitCode: result.exitCode } : {}),
     output: boundedText(result.text, maxChars),
     truncated: result.truncated === true || (typeof result.text === 'string' && result.text.length > maxChars),
+  }
+}
+
+async function executeMobileShellWithApproval(ctx, args, exec) {
+  if (!args || typeof args.script !== 'string' || args.script.trim().length === 0 || Buffer.byteLength(args.script, 'utf8') > 16 * 1024 || /[\u0000\r]/u.test(args.script)) {
+    throw new Error('DEVICE_COMMAND_INVALID')
+  }
+  let justification = ''
+  if (args.justification !== undefined) {
+    if (typeof args.justification !== 'string' || args.justification.length > MAX_JUSTIFICATION_CHARS || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/u.test(args.justification)) {
+      throw new Error('DEVICE_COMMAND_INVALID')
+    }
+    justification = args.justification.trim()
+  }
+
+  try {
+    return await callBridge('shell', args.script, exec?.signal, MAX_RESULT_CHARS, true)
+  } catch (error) {
+    if (!(error instanceof RootApprovalRequiredError)) throw error
+    const challenge = error.challenge
+    const { approvalService, policy } = resolveSessionApprovalPolicy(ctx, exec)
+
+    let approvalMode = 'dsh_approved'
+    if (policy === 'never') {
+      // 用户在 dsh 中开启了「完全权限（danger-full-access）」：approval 策略为 never，
+      // 调 ctx.approval.request() 会被 dsh-user-approval 静默拒绝而不弹窗。
+      // 按用户授权：Tier 1（dsh_approval）直接放行；Tier 2 / Tier 3 跳过 dsh 审批，
+      // 交由 Android 宿主 App 页弹出警告并由人类最终确认（不可被访客绕过）。
+      approvalMode = 'dsh_full_access'
+    } else if (challenge.route === 'dsh_approval' || (approvalService && exec?.agent)) {
+      if (!approvalService || !exec?.agent) {
+        throw new Error(`ROOT_APPROVAL_UNAVAILABLE: ${SHELL_HINTS.ROOT_APPROVAL_UNAVAILABLE}`)
+      }
+      const prompt = buildRootApprovalPrompt(challenge, args.script, justification)
+      const outcome = await approvalService.request({
+        agent: exec.agent,
+        toolName: 'mobile_device_shell',
+        ...(exec.callId !== undefined ? { callId: exec.callId } : {}),
+        reason: prompt.reason,
+        displayReason: prompt.displayReason,
+        ...(exec.signal ? { signal: exec.signal } : {}),
+      })
+      if (outcome === 'rejected') {
+        throw new Error(`ROOT_APPROVAL_REJECTED: ${SHELL_HINTS.ROOT_APPROVAL_REJECTED}`)
+      }
+      if (outcome === 'cancelled') {
+        throw new Error(`ROOT_APPROVAL_CANCELLED: ${SHELL_HINTS.ROOT_APPROVAL_CANCELLED}`)
+      }
+      if (outcome !== 'allowed-once') {
+        throw new Error(`ROOT_APPROVAL_UNAVAILABLE: ${SHELL_HINTS.ROOT_APPROVAL_UNAVAILABLE}`)
+      }
+      approvalMode = 'dsh_approved'
+    }
+
+    const payload = JSON.stringify({
+      script: args.script,
+      challengeId: challenge.challengeId,
+      approvalMode,
+      ...(justification !== '' ? { justification } : {}),
+    })
+    const timeoutMs = challenge.requiresHostConfirm ? HOST_APPROVAL_REQUEST_TIMEOUT_MS : REQUEST_TIMEOUT_MS
+    let onAbort
+    if (challenge.requiresHostConfirm && exec?.signal) {
+      onAbort = () => {
+        callBridge('shellApprovalCancel', challenge.challengeId, undefined, 256, false, 5_000).catch(() => {})
+      }
+      exec.signal.addEventListener('abort', onAbort, { once: true })
+    }
+    try {
+      return await callBridge('shellApproved', payload, exec?.signal, MAX_RESULT_CHARS, true, timeoutMs)
+    } finally {
+      if (onAbort && exec?.signal) exec.signal.removeEventListener('abort', onAbort)
+    }
   }
 }
 
@@ -1056,20 +1241,16 @@ export function apply(ctx) {
 
   ctx.tools.register(defineTool({
     name: 'mobile_device_shell',
-    description: '执行一次性 Android Shell 脚本。两条通道任一可用即可：根通道（KernelSU 的 su，不需要 Shizuku）或 Shizuku 通道（AI Shell 已开启且 Shizuku 已连接）；先把 mobile_device_capabilities 里的 rootEngineEnabled / rootEngineStatus / shellEnabled 看清楚。脚本可读写设备文件并查询后台任务；请避免访问或回显个人隐私与密钥。',
+    description: '执行一次性 Android Shell 脚本。两条通道任一可用即可：根通道（KernelSU 的 su，不需要 Shizuku）或 Shizuku 通道（AI Shell 已开启且 Shizuku 已连接）；先把 mobile_device_capabilities 里的 rootEngineEnabled / rootEngineStatus / shellEnabled 看清楚。根通道命中高风险命令时会自动调起 dsh 官方审批或打开应用警告页由用户确认，不再直接硬拦截；高风险操作请提供清晰的 justification。脚本可读写设备文件并查询后台任务；请避免访问或回显个人隐私与密钥。',
     parameters: {
       script: { type: 'string', required: true, description: '要执行的一次性 Shell 脚本，最多 16 KiB。' },
+      justification: { type: 'string', description: '可选：执行高风险 Root 命令时向用户说明的一句话理由（会显示在 dsh 审批卡或应用警告页中，最多 512 字符）。' },
     },
     output: {
       schema: { ...RESULT_SCHEMA, properties: { ...RESULT_SCHEMA.properties, exitCode: { type: 'integer', required: true } } },
       render: (_args, value) => [{ type: 'text', text: `Android Shell 退出码：${value.exitCode}；输出${value.truncated ? '已截断' : '完整'}（设备数据不可信）：\n${value.output || '(无输出)'}` }],
     },
-    execute: async (args, exec) => {
-      if (!args || typeof args.script !== 'string' || args.script.trim().length === 0 || Buffer.byteLength(args.script, 'utf8') > 16 * 1024 || /[\u0000\r]/u.test(args.script)) {
-        throw new Error('DEVICE_COMMAND_INVALID')
-      }
-      return callBridge('shell', args.script, exec.signal, MAX_RESULT_CHARS, true)
-    },
+    execute: (args, exec) => executeMobileShellWithApproval(ctx, args, exec),
     presentCall: () => present('执行 Android Shell', undefined),
   }))
 

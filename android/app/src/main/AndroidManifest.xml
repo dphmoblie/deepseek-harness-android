@@ -207,6 +207,15 @@
             android:screenOrientation="unspecified"
             android:theme="@style/AppTheme.NoActionBar" />
 
+        <!-- 高危 / 极危 Root 命令原生警告确认页：仅由宿主进程内 RootApprovalCoordinator 拉起。 -->
+        <activity
+            android:name=".RootCommandApprovalActivity"
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:launchMode="singleTop"
+            android:screenOrientation="unspecified"
+            android:theme="@style/AppTheme.NoActionBar" />
+
         <!-- Only the Service-owned overlay WebView can launch this SAF result bridge. -->
         <activity
             android:name=".OverlayFileChooserActivity"

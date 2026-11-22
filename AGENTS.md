@@ -142,35 +142,23 @@ Git 提交/发布规范见 [`.agents/rules/git-workflow.md`](.agents/rules/git-w
   `RuntimeOperationGateContractTest.kt` 与 `src/App.versions.test.tsx` 的
   「Harness 版本安装期间不能排队启动」用例。
 
-## 12. 根通道分档与电源操作不要合回一个布尔
+## 12. 根通道分级放宽、dsh 官方审批与 App 警告确认页不要退回硬拦截或单布尔
 
-2026-11-08 起，根通道是「模式 + 护栏档位」两层状态：`off` / `read_write` + `strict` / `maximum`。
-这不是过度设计，是真机反馈「AI 能自动重启关机，但 root 命令基本被拦」之后的修正：
+2026-11-22 起（承接 2026-11-08 的 `off`/`read_write` + `strict`/`maximum` 双层结构），根通道静态围栏由「直接硬拦截」演进为**四级风险分类（`RootCommandGuard.classify` 唯一真源）× 双层用户授权**：
 
-- `strict` 额外拦 `mount`/`dd`/`insmod`/`setprop`/写 `/proc/sys`；`maximum` 只拦不可逆动作。
-- **两个档位**都拦：bootloader/recovery/fastboot、`/dev/block` 读写、核心分区写入、
-  `rm -rf /data` 一类数据销毁、`reboot`/`svc power`/`sysrq`/`kill 1`、`/dev/mem`、`/proc/kcore`。
-  这些规则不能因为「最大档要全权」而删；删掉就等于把格机路径重新打开。
-- 危险命令按**命令位置 + 参数路径**匹配，不要退回「词出现在注释/echo 里就拒」：
-  `echo "run mount now"`、`echo reboot` 必须放行；`busybox reboot`、`/system/bin/reboot`、
-  `cp /data/foo /system/foo` 必须拦。`normalize()` 把换行变成 `;`，否则多行脚本第二行的
-  `reboot`/`rm -rf /data` 会漏；嵌套 `su -c`、`adb shell`/`exec-out` 也按命令位置拦。
-- 电源动作**只**在设置页：`MobileRuntimePlugin.requestDevicePowerAction` 先过系统身份确认
-  （API 30+ `BiometricPrompt`，26–29 `KeyguardManager`），再执行 `RootCommandRunner.runSystemAction`
-  的编译期常量 `reboot` / `reboot -p`。设备桥没有电源命令，AI 工具也不暴露；不要为了
-  「方便」把它加进 `DeviceBridgeServer` 或插件工具表。
-- `RootSecurityWrapper` 的 `setpriv` 要保留 `-sys_boot`；最大档放开 `mount` 后，直接 `reboot(2)`
-  仍要受这层裁剪约束（它不是硬保证，但别删）。
-- 实测设备（AAP-AN00 / Android 16 / KernelSU / `u:r.ksu:s0`）上沙箱是降级的：
-  `PROPAGATION_FAILED` + `BLOCK_MASK_SKIPPED` + `HARDENING_UNAVAILABLE`，`/data/system`、
-  `/data/app` 可写，`/dev/block` 可读，`/data/data/<pkg>` 读不到是 SELinux/框架。
-  UI 必须如实显示降级，不能把 `maximum` 说成「已隔离」。
-- 0.3.9 实测报告里 `ls /data/data`、`pm list packages`、`Android/data`、`attr/current`
-  被 `ROOT_SECURITY_VIOLATION` 拦，与仓库源码不一致（源码没有这些规则，单测允许
-  `ls -la /data/data`）。**不要把这几条隐私词表加回来**；`pm list` 可用 `cmd package` 绕过，
-  `/data/data` 的真实边界是 SELinux。先核对 APK 构建版本，再谈补规则。
-- 回归入口：`RootSecurityTest.kt` 的「最大档才放行 mount 与普通 setprop」「最大档仍拦数据销毁电源与块设备」
-  「RootCommandRunner 的原生电源动作不过护栏」；`RootEngineCard.test.tsx` 的三档/电源用例。
+- **Tier 0（`LOW`）**：常规只读诊断、`/data/local/tmp`、`/data/adb/modules/<id>` 与 `/dev/null` 重定向直接放行。
+- **Tier 1（`ELEVATED`）**：原 `STRICT_RULES`（`mount`/`dd`/`insmod`/`setprop`/写 `/proc/sys` 与非空 `/dev/*`）及动态脚本（`$(...)`/反引号/`sh -c`/`eval`/`source`）。
+  - `maximum` 档直接放行；
+  - `strict` 档走 **dsh 官方审批**（`ctx.approval.request()`，`displayReason` 展示命令预览，`reason` 仅记脱敏分级以保护会话日志）；
+  - 当 dsh 会话处于 `danger-full-access`（`approval.effectivePolicy === 'never'`）时**尊重 dsh 授权**直接凭 `challengeId` 放行，切勿盲目调用 `ctx.approval.request()`（dsh 对 `never` 会直接静默返回 `rejected`）。
+- **Tier 2（`HIGH`）**：电源（`reboot`/`poweroff`/`svc power`）、关 SELinux、停关键系统服务、核心分区写入、嵌套 `su -c`/`adb shell`。不再硬拦截：dsh 处于 `ask` 时先走官方审批，最终执行**强制经 Android 宿主 `RootApprovalCoordinator` 打开 `RootCommandApprovalActivity`（应用警告确认页）**。
+- **Tier 3（`CRITICAL`）**：bootloader/recovery/fastboot、`/dev/block` 读写、`rm -rf /data` 等数据销毁、`/dev/mem`、`/proc/kcore`。**不再硬拦截**，但**必须打开应用极危警告页**展示完整脚本、命中规则、强制勾选确认框与系统身份确认（生物识别/锁屏凭据；无锁屏设备降级二次弹窗）。
+- **不可被访客绕过**：PRoot 单 UID 访客不可自报批准绕过 Tier 2/3；`RootApprovalRegistry.consumeDshApproval` 仅允许兑换 Tier 1，且 `RootExecutionGrant` 构造器为 `internal`，只有 `RootApprovalCoordinator` 在原生确认页结单后才能为 Tier 2/3 签发凭证。
+- 危险命令仍按**命令位置 + 参数路径**匹配（`echo "run mount now"`、`echo reboot`、`2>/dev/null` 放行，`normalize()` 把换行变 `;` 防止多行漏判）。
+- 设置页仍保留快捷手动电源按钮（`MobileRuntimePlugin.requestDevicePowerAction` 经系统身份确认执行编译期常量 `reboot` / `reboot -p`）；AI 发起的电源脚本一律走 `shell` → `HOST_CONFIRM` → `RootCommandApprovalActivity`。
+- 实测设备上沙箱降级（`PROPAGATION_FAILED` + `BLOCK_MASK_SKIPPED` + `HARDENING_UNAVAILABLE`）必须如实显示，不能把 `maximum` 说成「已隔离」。
+- 不要把 0.3.9 报告里的 `ls /data/data` / `pm list packages` 等隐私词表加回护栏。
+- 回归入口：`RootSecurityTest.kt` 的四级分类、`RootApprovalRegistry`、`RootApprovalCoordinator`、`RootCommandRunner.runApproved` 与 `DeviceBridgeServer` 端到端用例；`scripts/mobile-device-tools.test.mjs` 的 dsh 审批与 `danger-full-access` 用例；`RootEngineCard.test.tsx`。
 
 ## 13. 认证预载必须随 APK 刷新到已安装运行时
 

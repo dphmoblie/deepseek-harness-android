@@ -18,6 +18,7 @@
 import { fireEvent, screen, waitFor, within } from '@testing-library/react'
 import { expect, vi } from 'vitest'
 import { resetLanguageSession } from '../i18n'
+import { APP_DISCLAIMER_STORAGE_KEY } from '../appDisclaimer'
 import { ALWAYS_ALLOWED_ACCESSIBILITY_PACKAGES } from '../platform/types'
 import type {
   AppOrientationMode,
@@ -44,6 +45,7 @@ export const bridge = {
   setAppLanguage: vi.fn(),
   /** 语言门禁的启动探测：默认「用户没选过」，需要「原生已选过就跳门禁」的用例自行改返回值。 */
   getAppLanguage: vi.fn(),
+  exitApp: vi.fn(),
   /**
    * 主题模式同步给原生（§5.4 状态栏配色）。
    *
@@ -380,6 +382,7 @@ export function beforeEachAppTest(): void {
   // 上一条用例选过的语言会让「首次启动应弹门禁」的用例失败。
   resetLanguageSession()
   window.localStorage.setItem('dsh-mobile-language-v1', 'zh-CN')
+  window.localStorage.setItem(APP_DISCLAIMER_STORAGE_KEY, '1')
   window.localStorage.setItem('dsh-mobile-onboarding-v1', '1')
   // 普通页面测试关闭自动提示；更新集成测试显式开启，避免启动弹窗掩盖被测页面。
   window.localStorage.setItem('dsh-app-update-reminder-enabled-v1', 'false')
@@ -387,6 +390,7 @@ export function beforeEachAppTest(): void {
   bridge.setAppLanguage.mockResolvedValue(undefined)
   // 默认「原生也没选过」：门禁用例自行改成 { configured: true, language: 'en' } 验证跳过逻辑。
   bridge.getAppLanguage.mockResolvedValue({ configured: false, language: 'zh-CN' })
+  bridge.exitApp.mockResolvedValue(undefined)
   bridge.setAppTheme.mockResolvedValue(undefined)
   bridge.getAppOrientation.mockResolvedValue('system')
   bridge.setAppOrientation.mockImplementation((mode: AppOrientationMode) => Promise.resolve(mode))

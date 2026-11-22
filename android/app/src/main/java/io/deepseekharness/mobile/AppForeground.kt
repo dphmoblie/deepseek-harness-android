@@ -1,6 +1,9 @@
 package io.deepseekharness.mobile
 
+import android.app.Activity
+import java.lang.ref.WeakReference
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicReference
 
 /**
  * 应用是否处于前台（登记册 §5.5：应用在前台时不该弹任务通知）。
@@ -19,6 +22,7 @@ import java.util.concurrent.atomic.AtomicInteger
  */
 internal object AppForeground {
     private val startedActivities = AtomicInteger(0)
+    private val resumedActivity = AtomicReference<WeakReference<Activity>?>(null)
 
     fun onActivityStarted() {
         startedActivities.incrementAndGet()
@@ -31,6 +35,24 @@ internal object AppForeground {
      */
     fun onActivityStopped() {
         startedActivities.updateAndGet { current -> if (current <= 0) 0 else current - 1 }
+    }
+
+    fun onActivityResumed(activity: Activity) {
+        resumedActivity.set(WeakReference(activity))
+    }
+
+    fun onActivityPaused(activity: Activity) {
+        val current = resumedActivity.get()
+        if (current?.get() === activity) {
+            resumedActivity.compareAndSet(current, null)
+        }
+    }
+
+    /** 当前正在前台交互的 Activity（弱引用，不阻止回收）；无可用前台页面时返回 null。 */
+    fun currentActivity(): Activity? {
+        val activity = resumedActivity.get()?.get() ?: return null
+        if (activity.isFinishing || activity.isDestroyed) return null
+        return activity
     }
 
     fun isForeground(): Boolean = startedActivities.get() > 0

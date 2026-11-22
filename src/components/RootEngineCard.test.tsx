@@ -96,7 +96,8 @@ describe('根通道卡片', () => {
 
     await waitFor(() => { expect(radio(/读写 · 最大/).checked).toBe(true) })
     expect(setRootEngineMode).toHaveBeenCalledWith('read_write', 'maximum')
-    expect(screen.getByText(/最大档：mount、dd（普通文件）、insmod、setprop（普通属性）放行/)).toBeTruthy()
+    expect(screen.getByText(/最大档：mount、dd（普通文件）、insmod、setprop（普通属性）与动态脚本放行/)).toBeTruthy()
+    expect(screen.getByText(/极危操作需打开应用警告页确认/)).toBeTruthy()
     expect(screen.getByRole('button', { name: /重启设备/ })).toBeEnabled()
     expect(screen.getByRole('button', { name: /关机/ })).toBeEnabled()
   })

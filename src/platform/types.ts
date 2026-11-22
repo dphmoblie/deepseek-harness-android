@@ -2280,6 +2280,12 @@ export interface RuntimeBridge {
   /** 丢弃一份待处理副本（用户显式删除）。 */
   discardPreserveItems: (id: string) => Promise<PreserveDiscardResult>
   /**
+   * 退出应用：用于首次免责条款门禁「不同意并退出」等明确要求关闭应用的场景。
+   *
+   * 原生侧结束并移除当前任务；浏览器预览环境尝试关闭窗口，无法关闭时由调用方保持门禁锁定。
+   */
+  exitApp: () => Promise<void>
+  /**
    * 列出原生侧已知的运行时可用版本（无参数，只读）。
    *
    * 条目缺 `manifestUrl`/`manifestSha256` 的版本只可展示、不可安装（见 [RuntimeReleaseEntry]）：

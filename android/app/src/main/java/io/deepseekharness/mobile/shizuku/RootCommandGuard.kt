@@ -4,33 +4,38 @@ import io.deepseekharness.mobile.runtime.RuntimeFailure
 import java.util.Locale
 
 /**
- * 根载荷静态安检（第一道协作网）。
+ * 根载荷静态风险分级器（唯一规则真源）。
  *
- * 与旧版「词表在任何位置命中就拒绝」的差异：
+ * 与早期「命中词表直接硬拦截」的演进差异：
  * 1. 危险动作按**命令位置**匹配（行首、`;`、`|`、`&&`、`||` 之后），并剥掉
- *    `/system/bin/`、`busybox`、`toybox` 这类前缀；`echo "run mount now"` 不再误杀。
- * 2. 两个档位：
- *    - [Profile.STRICT]：默认档。在 [RULES] 之上加挂 [STRICT_RULES]，`mount`/`dd`/
- *      `insmod`/`setprop` 等一律拒绝；适合没有 KernelSU App Profile 兜底的设备。
- *    - [Profile.MAXIMUM]：最大档。只保留 [RULES] 里的不可逆动作——刷机、块设备、
- *      核心分区写入、数据销毁、电源操作、物理内存；`mount`/`dd`（普通文件）/`setprop`
- *      （普通属性）/`insmod` 放行。这是本应用与用户共同承担风险的档位。
- * 3. 不可逆动作始终在 [RULES] 里，两个档位都拦：bootloader/recovery/fastboot、
- *    `/dev/block` 读写、核心分区写入、`rm -rf /data` 一类数据销毁、`reboot`/`poweroff`
- *    与 `/proc/sysrq-trigger`、`/dev/mem`、`/proc/kcore`。
+ *    `/system/bin/`、`busybox`、`toybox` 这类前缀；`echo "run mount now"`、`echo reboot`、
+ *    `ls /data 2>/dev/null` 等常规脚本不再误杀。
+ * 2. 规则按破坏半径分成四档（[RiskTier]），全部路由到审批/警告而非一刀切拒绝：
+ *    - [RiskTier.LOW]：低风险常规运维与诊断，直接放行；
+ *    - [RiskTier.ELEVATED]：可逆运维与动态 Shell（`mount`/`dd` 普通文件/`insmod`/`setprop`/
+ *      写 `/proc/sys` 与 `/dev` 设备节点/`$(...)`/`sh -c`/`eval`/`source`）。
+ *      `Profile.MAXIMUM` 直接放行；`Profile.STRICT` 交由 dsh 官方审批（dsh 处于
+ *      `danger-full-access` 时尊重 dsh 直接放行）；
+ *    - [RiskTier.HIGH]：整机级高危（电源、关 SELinux、停系统服务、写核心分区、改系统属性存储、
+ *      嵌套 `su -c`/`adb shell`）。需在 dsh 询问（若非 `never`）并经 Android 宿主 App 页确认；
+ *    - [RiskTier.CRITICAL]：不可逆变砖/数据销毁红线（刷机、`fastboot`、`/dev/block` 读写、
+ *      `rm -rf /data` 等数据销毁、`/dev/mem`/`/proc/kcore`）。**不再硬拦截**，但**必须打开
+ *      App 极危警告页**展示完整脚本并经用户强确认后才允许执行，访客侧不可自行绕过。
+ * 3. 多条规则同时命中时永远按**最高风险档**定级（`CRITICAL > HIGH > ELEVATED > LOW`），
+ *    防止用 `$(...)` 等中危写法掩盖刷机或删库命令。
  *
- * 【安全边界】正则预审只是第一道网，拦不住所有动态混淆，也拦不住二进制/解释器内部动作。
- * 真正的底线仍是命名空间隔离、核心分区只读、`/dev/block` 遮蔽，以及 KernelSU App Profile。
- * 本类不承诺自己是硬边界；它只负责把明显的、可静态识别的不可逆动作挡在执行之前。
+ * 【安全边界】静态文本分类无法识别二进制内部动作或复杂混淆；
+ * 真正不可被访客伪造的边界由宿主侧 `RootApprovalCoordinator`（App 警告确认页）、
+ * 命名空间隔离以及 KernelSU App Profile 共同承担。
  */
 object RootCommandGuard {
 
-    /** 静态审查档位。 */
+    /** 静态审查档位（与既有配置协议兼容）。 */
     enum class Profile(val wireValue: String) {
-        /** 默认：不可逆动作 + 严格档（mount/dd/insmod/setprop 全部拒绝）。 */
+        /** 严格档：中高风险运维走 dsh 官方审批（尊重 dsh 完全权限）；高危/极危走 App 确认与警告页。 */
         STRICT("strict"),
 
-        /** 最大档：只拦不可逆动作；mount/dd（普通文件）/setprop（普通属性）/insmod 放行。 */
+        /** 最大档：常规运维与动态脚本直通；整机级高危与极危仍走 App 确认与警告页。 */
         MAXIMUM("maximum"),
         ;
 
@@ -40,8 +45,52 @@ object RootCommandGuard {
         }
     }
 
+    /** 风险层级（由低到高）。 */
+    enum class RiskTier(val wireValue: String) {
+        LOW("low"),
+        ELEVATED("elevated"),
+        HIGH("high"),
+        CRITICAL("critical"),
+    }
+
+    /** 宿主判定的放行/询问路径。 */
+    enum class ApprovalRoute(val wireValue: String) {
+        /** 无需额外确认，直接执行。 */
+        ALLOW("allow"),
+
+        /** 走 dsh 官方审批（若 dsh 会话为 `danger-full-access` 则尊重 dsh 直接放行）。 */
+        DSH_APPROVAL("dsh_approval"),
+
+        /** dsh 询问（若非 `never`）+ Android 宿主 App 页确认（不可被访客绕过）。 */
+        HOST_CONFIRM("host_confirm"),
+
+        /** 不可逆极危红线：必须打开 App 极危警告页并强确认（不可被访客绕过）。 */
+        APP_WARNING("app_warning"),
+    }
+
+    /** 一次静态分类的完整结论。 */
+    data class Assessment(
+        val tier: RiskTier,
+        val route: ApprovalRoute,
+        /** 按严重度排序的命中规则名（给人看，不含脚本敏感参数之外的原文）。 */
+        val actions: List<String>,
+        /** 最高风险规则命中的短片段（最多 48 字符，供警告卡片定位）。 */
+        val snippet: String,
+        /** 是否需要放开 `setpriv` 能力裁剪（如挂载、内核模块、写 `/dev`/`/proc/sys`、电源等）。 */
+        val needsUnconfinedCaps: Boolean,
+        /** 是否需要跳过外层沙箱包装（仅当用户明确在 App 警告页确认了 HIGH / CRITICAL 时生效）。 */
+        val bypassSandboxWrapper: Boolean,
+    ) {
+        val requiresHostConfirm: Boolean
+            get() = route == ApprovalRoute.HOST_CONFIRM || route == ApprovalRoute.APP_WARNING
+    }
+
     /** 一条规则：`action` 给人看的动作名，`pattern` 作用于归一化文本。 */
-    private data class Rule(val action: String, val pattern: Regex)
+    private data class Rule(
+        val action: String,
+        val pattern: Regex,
+        val unconfinedCaps: Boolean = false,
+    )
 
     /** 核心分区：这些路径改可写等于绕过只读重挂。 */
     private const val CORE_PARTITIONS = "(system|vendor|product|system_ext|odm|apex|system_root)"
@@ -58,91 +107,43 @@ object RootCommandGuard {
     private fun command(name: String): String = COMMAND_START + COMMAND_PREFIX + name + """\b"""
 
     /**
-     * 不可逆动作：两个档位都拦。
+     * Tier 3 · 不可逆变砖 / 数据销毁红线：不硬拦截，但必须打开 App 极危警告页并由用户强确认。
      *
-     * 这里刻意保留「词出现在注释/echo 里也会命中」的少数规则（fastboot、mkfs、块设备等）：
-     * 那些词在正常脚本里几乎不会作为普通文本出现，误杀代价远小于漏拦代价。
+     * 少数极高危词（fastboot、mkfs、块设备等）保留全位置匹配：正常脚本几乎不会作为普通文本出现。
      */
-    private val RULES: List<Rule> = listOf(
-        // Command substitution, IFS expansion, and a second shell/eval can
-        // synthesize a dangerous command after this text check.  A root payload
-        // is already executed by our fixed shell, so there is no safe reason to
-        // permit another interpreter or an indirect command name here.
-        Rule("动态 Shell 展开", Regex("""(`|\$\(|\$\{?ifs\b)""", RegexOption.IGNORE_CASE)),
-        Rule(
-            "二次 Shell 解释",
-            // normalize() turns newlines into ';' and folds other whitespace, so both are command boundaries here.
-            Regex("""\b(eval|exec|source)\b|(?:^|[;&|\s])\.\s+|\b(sh|bash|mksh)\s+-c\b"""),
-        ),
+    private val CRITICAL_RULES: List<Rule> = listOf(
         Rule(
             "重启到刷机模式",
             Regex("""\breboot\b[^|;&]{0,40}\b(bootloader|recovery|edl|fastboot|sideload)\b"""),
+            unconfinedCaps = true,
         ),
-        Rule("调用刷写工具", Regex("""\b(fastboot|fastbootd|flash_erase|flash_image|blkdiscard)\b""")),
-        Rule("adb 侧载刷机", Regex(command("adb") + """\s+sideload\b""")),
+        Rule("调用刷写工具", Regex("""\b(fastboot|fastbootd|flash_erase|flash_image|blkdiscard)\b"""), unconfinedCaps = true),
+        Rule("adb 侧载刷机", Regex(command("adb") + """\s+sideload\b"""), unconfinedCaps = true),
+        Rule("第三方刷机工具", Regex("""\b(mtkclient|edl|odin|heimdall)\b"""), unconfinedCaps = true),
+        Rule("擦除分区数据", Regex("""\bwipe\s+(data|cache|system)\b"""), unconfinedCaps = true),
+        Rule("用 fastboot 擦除", Regex("""\bfastboot\b[^|;&]{0,20}\s-w\b"""), unconfinedCaps = true),
         Rule(
-            "通过 adb 重启",
-            Regex(command("adb") + """[^|;&]*\b(?:reboot|poweroff|shutdown|(?:svc|cmd)\s+power)\b"""),
+            "改分区表或格式化",
+            Regex("""\b(parted|sfdisk|sgdisk|fdisk|mke2fs|mkfs(\.[a-z0-9]+)?|tune2fs|make_ext4fs)\b"""),
+            unconfinedCaps = true,
         ),
-        Rule("嵌套 su 执行", Regex(command("su") + """[^|;&]*\s-c\b""")),
-        Rule("通过 adb 执行 Shell", Regex(command("adb") + """[^|;&]*\s(?:shell|exec-out|exec-in)\b""")),
-        Rule("第三方刷机工具", Regex("""\b(mtkclient|edl|odin|heimdall)\b""")),
-        Rule("擦除分区数据", Regex("""\bwipe\s+(data|cache|system)\b""")),
-        Rule("用 fastboot 擦除", Regex("""\bfastboot\b[^|;&]{0,20}\s-w\b""")),
-        Rule("改分区表或格式化", Regex("""\b(parted|sfdisk|sgdisk|fdisk|mke2fs|mkfs(\.[a-z0-9]+)?|tune2fs|make_ext4fs)\b""")),
-        Rule("块设备低级操作", Regex("""\b(blockdev|mknod)\b""")),
+        Rule("块设备低级操作", Regex("""\b(blockdev|mknod)\b"""), unconfinedCaps = true),
         Rule(
             "直写物理块设备",
             // `/dev//block`、`/dev/../dev/block` 这类多斜杠或绕路写法一并命中。
             Regex("""(>|of\s*=|tee\s+)[^|;&]*/(dev|by-name)/{1,}(block|disk|mmcblk|nvme|sd[a-z]|ufs)"""),
+            unconfinedCaps = true,
         ),
-        Rule("卸载块设备遮蔽", Regex("""\bumount\b[^|;&]*/dev/+block""")),
+        Rule("卸载块设备遮蔽", Regex("""\bumount\b[^|;&]*/dev/+block"""), unconfinedCaps = true),
         Rule(
             "读写块设备",
             Regex(
                 command("(?:cat|dd|cp|mv|install|base64|strings|xxd|hexdump|debugfs|e2fsck|fsck|resize2fs|lpmake)") +
                     """[^|;&]*\s/dev/(?:block|disk|mmcblk|nvme|sd[a-z]|ufs)\b""",
             ),
+            unconfinedCaps = true,
         ),
-        Rule(
-            "把核心分区改回可写",
-            Regex(
-                """\bmount\b[^|;&]*\brw\b[^|;&]*/$CORE_PARTITIONS\b""" +
-                    """|\bmount\b[^|;&]*/$CORE_PARTITIONS\b[^|;&]*\brw\b""",
-            ),
-        ),
-        Rule("关闭 SELinux 强制模式", Regex("""\bsetenforce\s+(0|permissive)\b""")),
-        Rule("写 SELinux 开关文件", Regex(""">\s*[^|;&]*/sys/fs/selinux/enforce""")),
-        Rule("用内核参数关 SELinux", Regex("""\b(androidboot\.)?selinux\s*=\s*permissive\b""")),
-        // Android 属性服务位于宿主系统命名空间之外，mount namespace 不能隔离它。
-        // 最大档只拦电源/服务控制属性；普通属性由用户自行承担风险。
-        Rule("修改电源/服务属性", Regex("""\b(setprop|resetprop)\b[^|;&]*\b(sys\.powerctl|ctl\.)""")),
-        Rule(
-            "直接写 Android 属性存储",
-            Regex(
-                """(>|tee\s+|of\s*=|\b(?:cp|mv|install)\b[^|;&]*\s)[^|;&]*(/data/property/|/dev/__properties__/?)""",
-            ),
-        ),
-
-        // ---- 电源：软拦（最大档也拦直接命令；设置页的手动按钮走独立原生通道） ----
-        Rule("重启或关机", Regex(command("(?:reboot|poweroff|shutdown|halt)"))),
-        Rule("通过系统服务电源操作", Regex(command("(?:svc|cmd)") + """\s+power\b""")),
-        Rule(
-            "发送重启广播",
-            Regex(command("am") + """[^|;&]*\b(?:reboot|android\.intent\.action\.reboot)\b"""),
-        ),
-        Rule("杀死 init", Regex(command("kill") + """[^|;&]*\s(?:-[\w-]+\s+)*1(?:\s|$|[;|&)])""")),
-        Rule("写 sysrq 触发器", Regex("""(?:>|>>|tee\s+)[^|;&]*/proc/sysrq-trigger""")),
-        Rule("写电源状态", Regex("""(?:>|>>|tee\s+)[^|;&]*/sys/power/""")),
-        Rule(
-            "停止关键系统服务",
-            Regex(
-                command("(?:stop|start)") +
-                    """\s+(?:zygote|zygote_secondary|system_server|surfaceflinger|servicemanager)\b""",
-            ),
-        ),
-
-        // ---- 数据销毁：只保护数据根与系统关键目录；/data/local/tmp 与模块目录仍可操作 ----
+        // ---- 数据销毁：保护数据根与系统关键目录；/data/local/tmp 与模块目录仍可常规操作 ----
         Rule("删除数据根", Regex(command("rm") + """[^|;&]*\s/data/?\s*(?:$|[;|&)])""")),
         Rule("删除数据通配", Regex(command("rm") + """[^|;&]*\s/data/\*""")),
         Rule(
@@ -174,11 +175,27 @@ object RootCommandGuard {
                     """[^|;&]*(?:\s|=)/(?:data/(?:system|misc|vendor|apex|property|app|dalvik-cache|adb(?!\s*/modules/)))(?:\s|/|$|[;|&)])""",
             ),
         ),
+        // ---- 物理内存 ----
+        Rule("物理内存", Regex("""(/dev/mem|/dev/kmem|/proc/kcore)\b"""), unconfinedCaps = true),
+    )
 
-        // ---- 核心分区写入：不依赖分区是否已被 remount rw ----
+    /**
+     * Tier 2 · 整机级高危：电源、SELinux、系统核心分区写入、关键服务控制、嵌套特权外壳。
+     * 需经 dsh 官方询问（若会话策略为 `ask`）+ Android 宿主 App 页确认后方可执行。
+     */
+    private val HIGH_RULES: List<Rule> = listOf(
+        Rule(
+            "把核心分区改回可写",
+            Regex(
+                """\bmount\b[^|;&]*\brw\b[^|;&]*/$CORE_PARTITIONS\b""" +
+                    """|\bmount\b[^|;&]*/$CORE_PARTITIONS\b[^|;&]*\brw\b""",
+            ),
+            unconfinedCaps = true,
+        ),
         Rule(
             "写核心分区",
             Regex("""(?:>|>>)\s*[^|;&]*/(?:system|vendor|product|system_ext|odm|apex|system_root)(?:/|\s|$|[;|&)])"""),
+            unconfinedCaps = true,
         ),
         Rule(
             "写核心分区",
@@ -186,6 +203,7 @@ object RootCommandGuard {
                 command("(?:tee|truncate|sed)") +
                     """[^|;&]*\s/(?:system|vendor|product|system_ext|odm|apex|system_root)(?:/|\s|$|[;|&)])""",
             ),
+            unconfinedCaps = true,
         ),
         Rule(
             "写核心分区",
@@ -193,62 +211,151 @@ object RootCommandGuard {
                 command("(?:cp|mv|install)") +
                     """[^|;&]*\s/(?:system|vendor|product|system_ext|odm|apex|system_root)(?:/[^\s;|&]*)?\s*(?:$|[;|&)])""",
             ),
+            unconfinedCaps = true,
         ),
-
-        // ---- 物理内存：读也不允许 ----
-        Rule("物理内存", Regex("""(/dev/mem|/dev/kmem|/proc/kcore)\b""")),
+        Rule("关闭 SELinux 强制模式", Regex("""\bsetenforce\s+(0|permissive)\b"""), unconfinedCaps = true),
+        Rule("写 SELinux 开关文件", Regex(""">\s*[^|;&]*/sys/fs/selinux/enforce"""), unconfinedCaps = true),
+        Rule("用内核参数关 SELinux", Regex("""\b(androidboot\.)?selinux\s*=\s*permissive\b"""), unconfinedCaps = true),
+        Rule("修改电源/服务属性", Regex("""\b(setprop|resetprop)\b[^|;&]*\b(sys\.powerctl|ctl\.)"""), unconfinedCaps = true),
+        Rule(
+            "直接写 Android 属性存储",
+            Regex(
+                """(>|tee\s+|of\s*=|\b(?:cp|mv|install)\b[^|;&]*\s)[^|;&]*(/data/property/|/dev/__properties__/?)""",
+            ),
+            unconfinedCaps = true,
+        ),
+        Rule("重启或关机", Regex(command("(?:reboot|poweroff|shutdown|halt)")), unconfinedCaps = true),
+        Rule("通过系统服务电源操作", Regex(command("(?:svc|cmd)") + """\s+power\b"""), unconfinedCaps = true),
+        Rule(
+            "发送重启广播",
+            Regex(command("am") + """[^|;&]*\b(?:reboot|android\.intent\.action\.reboot)\b"""),
+            unconfinedCaps = true,
+        ),
+        Rule(
+            "通过 adb 重启",
+            Regex(command("adb") + """[^|;&]*\b(?:reboot|poweroff|shutdown|(?:svc|cmd)\s+power)\b"""),
+            unconfinedCaps = true,
+        ),
+        Rule("杀死 init", Regex(command("kill") + """[^|;&]*\s(?:-[\w-]+\s+)*1(?:\s|$|[;|&)])"""), unconfinedCaps = true),
+        Rule("写 sysrq 触发器", Regex("""(?:>|>>|tee\s+)[^|;&]*/proc/sysrq-trigger"""), unconfinedCaps = true),
+        Rule("写电源状态", Regex("""(?:>|>>|tee\s+)[^|;&]*/sys/power/"""), unconfinedCaps = true),
+        Rule(
+            "停止关键系统服务",
+            Regex(
+                command("(?:stop|start)") +
+                    """\s+(?:zygote|zygote_secondary|system_server|surfaceflinger|servicemanager)\b""",
+            ),
+            unconfinedCaps = true,
+        ),
+        Rule("嵌套 su 执行", Regex(command("su") + """[^|;&]*\s-c\b"""), unconfinedCaps = true),
+        Rule("通过 adb 执行 Shell", Regex(command("adb") + """[^|;&]*\s(?:shell|exec-out|exec-in)\b"""), unconfinedCaps = true),
     )
 
     /**
-     * 严格档规则（`Profile.STRICT`）：当前仓库的默认执行档。
+     * Tier 1 · 中高危可逆运维 & 动态 Shell 展开：
+     * - `Profile.MAXIMUM` 下直接放行；
+     * - `Profile.STRICT` 下不再硬拦截，而是交由 dsh 官方审批（若 dsh 为 `danger-full-access` 则尊重 dsh 放行）。
      *
-     * 这些动作本身并不必然有害——`mount` 是常规运维、`chmod` 是修权限。它们被列进来是因为
-     * 在**没有私有命名空间**的前提下，一次 `mount` 就落到宿主上，而 [RootSecurityWrapper]
-     * 的遮蔽与只读重挂恰恰是防止这件事的那一层。那一层不在时，只能在这里拦。
+     * `/dev/null`、`2>/dev/null`、`/dev/zero`、`/dev/std*` 等标准空设备/流重定向不视为危险写设备。
      */
-    private val STRICT_RULES: List<Rule> = listOf(
-        Rule("严格档：挂载或卸载（无私有命名空间时直接落到宿主）", Regex("""\b(mount|umount)\b""")),
-        Rule("严格档：镜像或设备直写工具", Regex("""(\bdd\b|\blosetup\b|\bdmsetup\b|\bof\s*=)""")),
-        Rule("严格档：写 /dev 下的设备节点", Regex("""(>|tee\s+)[^|;&]*/dev/""")),
+    private val ELEVATED_RULES: List<Rule> = listOf(
+        Rule("动态 Shell 展开", Regex("""(`|\$\(|\$\{?ifs\b)""", RegexOption.IGNORE_CASE)),
         Rule(
-            "严格档：改系统目录权限或属主",
+            "二次 Shell 解释",
+            Regex("""\b(eval|exec|source)\b|(?:^|[;&|\s])\.\s+|\b(sh|bash|mksh)\s+-c\b"""),
+        ),
+        Rule("挂载或卸载", Regex(command("(?:mount|umount)")), unconfinedCaps = true),
+        Rule("镜像或设备直写工具", Regex(command("(?:dd|losetup|dmsetup)") + """|\bof\s*="""), unconfinedCaps = true),
+        Rule(
+            "写 /dev 下的设备节点",
+            Regex("""(>|tee\s+)[^|;&]*/dev/(?!(?:null|zero|stdout|stderr|stdin|fd/\d+)(?:\s|$|[;|&)]))"""),
+            unconfinedCaps = true,
+        ),
+        Rule(
+            "改系统目录权限或属主",
             Regex("""\b(chmod|chown|chgrp|setfacl)\b[^|;&]*/(system|vendor|product|system_ext|odm|apex|dev|proc|sys)\b"""),
         ),
-        Rule("严格档：加载或卸载内核模块", Regex("""\b(insmod|rmmod|modprobe)\b""")),
+        Rule("加载或卸载内核模块", Regex(command("(?:insmod|rmmod|modprobe)")), unconfinedCaps = true),
         Rule(
-            "严格档：写内核参数或 sysfs 关键子树",
+            "写内核参数或 sysfs 关键子树",
             Regex("""(>|tee\s+)[^|;&]*/(proc/sys/|sys/(kernel|fs|module|class|devices|firmware)/)"""),
+            unconfinedCaps = true,
         ),
-        Rule("严格档：修改 Android 系统属性", Regex("""\b(setprop|resetprop)\b""")),
+        Rule("修改 Android 系统属性", Regex(command("(?:setprop|resetprop)"))),
     )
 
     /**
-     * 校验待执行的 Shell 脚本；命中任何规则即抛 [RuntimeFailure]，拒绝送进底层通道。
+     * 对待执行的 Root 脚本做分级评估（唯一规则真源）。
      *
-     * @param profile 沙箱已降级（无挂载命名空间）时用 [Profile.STRICT]；
-     *                用户显式选择最大档时用 [Profile.MAXIMUM]。
+     * 多条规则同时命中时按最高风险档定级（`CRITICAL > HIGH > ELEVATED > LOW`）。
+     */
+    fun classify(script: String, profile: Profile = Profile.STRICT): Assessment {
+        val normalized = normalize(script)
+        val criticalMatches = matchRules(normalized, CRITICAL_RULES)
+        val highMatches = matchRules(normalized, HIGH_RULES)
+        val elevatedMatches = matchRules(normalized, ELEVATED_RULES)
+
+        val (tier, primaryMatches) = when {
+            criticalMatches.isNotEmpty() -> RiskTier.CRITICAL to criticalMatches
+            highMatches.isNotEmpty() -> RiskTier.HIGH to highMatches
+            elevatedMatches.isNotEmpty() -> RiskTier.ELEVATED to elevatedMatches
+            else -> RiskTier.LOW to emptyList()
+        }
+
+        val route = when (tier) {
+            RiskTier.LOW -> ApprovalRoute.ALLOW
+            RiskTier.ELEVATED -> if (profile == Profile.MAXIMUM) ApprovalRoute.ALLOW else ApprovalRoute.DSH_APPROVAL
+            RiskTier.HIGH -> ApprovalRoute.HOST_CONFIRM
+            RiskTier.CRITICAL -> ApprovalRoute.APP_WARNING
+        }
+
+        val allOrdered = criticalMatches + highMatches + elevatedMatches
+        val actions = allOrdered.map { it.first.action }.distinct().take(MAX_REPORTED_ACTIONS)
+        val snippet = primaryMatches.firstOrNull()?.second?.take(MAX_SNIPPET_CHARS).orEmpty()
+        val needsUnconfinedCaps = tier == RiskTier.HIGH ||
+            tier == RiskTier.CRITICAL ||
+            allOrdered.any { it.first.unconfinedCaps }
+        val bypassSandboxWrapper = tier == RiskTier.HIGH || tier == RiskTier.CRITICAL
+
+        return Assessment(
+            tier = tier,
+            route = route,
+            actions = actions,
+            snippet = snippet,
+            needsUnconfinedCaps = needsUnconfinedCaps,
+            bypassSandboxWrapper = bypassSandboxWrapper,
+        )
+    }
+
+    /**
+     * 校验未经过审批流程的直接执行脚本；任何需要审批/确认的档位一律 fail-closed 抛 [RuntimeFailure]。
+     *
+     * 已通过 dsh 审批或宿主确认页的请求走 [RootCommandRunner.runApproved]（持宿主签发的 [RootExecutionGrant]）。
      */
     fun verifySafe(script: String, profile: Profile = Profile.STRICT) {
-        val normalized = normalize(script)
-        for (rule in rulesFor(profile)) {
-            val match = rule.pattern.find(normalized) ?: continue
-            throw RuntimeFailure(
-                "ROOT_SECURITY_VIOLATION",
-                "根命令被安全护栏拦截：${rule.action}（命中片段: ${match.value.take(48)}）",
-            )
-        }
+        val assessment = classify(script, profile)
+        if (assessment.route == ApprovalRoute.ALLOW) return
+        val action = assessment.actions.firstOrNull() ?: "高风险根命令"
+        throw RuntimeFailure(
+            "ROOT_SECURITY_VIOLATION",
+            "根命令被安全护栏拦截或需确认：$action（命中片段: ${assessment.snippet}）",
+        )
     }
 
-    /** 逐条列出命中的动作名，供诊断与测试断言使用（不抛异常）。 */
+    /** 逐条列出在当前 [profile] 下需要确认/拦截的动作名，供诊断与测试断言使用（不抛异常）。 */
     fun violations(script: String, profile: Profile = Profile.STRICT): List<String> {
-        val normalized = normalize(script)
-        return rulesFor(profile)
-            .filter { it.pattern.containsMatchIn(normalized) }
-            .map { it.action }
+        val assessment = classify(script, profile)
+        return if (assessment.route == ApprovalRoute.ALLOW) emptyList() else assessment.actions
     }
 
-    private fun rulesFor(profile: Profile): List<Rule> =
-        if (profile == Profile.STRICT) RULES + STRICT_RULES else RULES
+    private fun matchRules(normalized: String, rules: List<Rule>): List<Pair<Rule, String>> {
+        val hits = ArrayList<Pair<Rule, String>>()
+        for (rule in rules) {
+            val match = rule.pattern.find(normalized) ?: continue
+            hits.add(rule to match.value)
+        }
+        return hits
+    }
 
     /**
      * 归一化：丢掉反斜杠（`\/dev` → `/dev`，`re\boot` → `reboot`）、去掉单双引号、折叠空白、转小写。
@@ -271,5 +378,7 @@ object RootCommandGuard {
         return out.toString().replace(WHITESPACE, " ").lowercase(Locale.ROOT)
     }
 
+    private const val MAX_SNIPPET_CHARS = 48
+    private const val MAX_REPORTED_ACTIONS = 6
     private val WHITESPACE = Regex("""\s+""")
 }

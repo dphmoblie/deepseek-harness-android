@@ -159,4 +159,30 @@
     <string name="virtual_screen_overlay_status_waiting">Waiting for a virtual screen image</string>
     <!-- Shown right after a mode switch; the next frame pull replaces it with real readings. %1$s is the mode name. -->
     <string name="virtual_screen_overlay_mode_switched">Switched to %1$s; waiting for a fresh frame-rate reading</string>
+    <!-- In-app warning and confirmation screen for high/critical Root commands. -->
+    <string name="root_approval_channel_name">High-risk Root command confirmation</string>
+    <string name="root_approval_channel_description">Alerts you to return to the app when AI requests a high-risk or critical Root command</string>
+    <string name="root_approval_notification_critical_title">Critical Root command awaits in-app confirmation</string>
+    <string name="root_approval_notification_critical_text">May brick the device or erase data. Tap to open the app, review the full script, and decide.</string>
+    <string name="root_approval_notification_high_title">High-risk Root command awaits in-app confirmation</string>
+    <string name="root_approval_notification_high_text">Tap to open the app, review the full script, and decide whether to allow it.</string>
+    <string name="root_approval_critical_title">Critical Root Operation Warning</string>
+    <string name="root_approval_high_title">High-Risk Root Operation Confirmation</string>
+    <string name="root_approval_critical_warning">This command matches irreversible anti-brick or data-destruction rules. Running it may brick your device, prevent booting, or permanently erase data. Review the entire script carefully before deciding.</string>
+    <string name="root_approval_high_warning">This command affects device power, security policy, or core system partitions. Review the full script below before deciding.</string>
+    <string name="root_approval_rules_heading">Triggered risk rules</string>
+    <string name="root_approval_matched_snippet">Matched snippet: %1$s</string>
+    <string name="root_approval_degraded_notice">Sandbox degraded: this device lacks full isolation (%1$s). The command will take effect directly on the host as UID 0.</string>
+    <string name="root_approval_ai_reason_heading">AI explanation (untrusted text — verify the actual script)</string>
+    <string name="root_approval_script_heading">Full Root script to execute</string>
+    <string name="root_approval_bidi_stripped_notice">Note: bidirectional control characters were stripped for safe display.</string>
+    <string name="root_approval_uid0_note">Once confirmed, this app will execute the script above directly as UID 0 (Root) without sandbox masking.</string>
+    <string name="root_approval_critical_acknowledge">I have read the full script above, understand it may brick this device or permanently erase data, and still want to run it</string>
+    <string name="root_approval_high_acknowledge">I have read the full script above and confirm running it with Root privileges on this device</string>
+    <string name="root_approval_reject">Reject</string>
+    <string name="root_approval_critical_confirm">Verify &amp; Execute Anyway</string>
+    <string name="root_approval_high_confirm">Verify &amp; Execute</string>
+    <string name="root_approval_biometric_critical_subtitle">After verification, the critical Root script will run immediately</string>
+    <string name="root_approval_biometric_high_subtitle">After verification, the high-risk Root script will run immediately</string>
+    <string name="root_approval_no_lockscreen_confirm">No screen lock or biometric is set on this device. Are you sure you want to execute the script above as Root right now?</string>
 </resources>

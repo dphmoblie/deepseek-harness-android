@@ -1,6 +1,8 @@
 package io.deepseekharness.mobile.shizuku
 
+import io.deepseekharness.mobile.DeviceBridgeServer
 import io.deepseekharness.mobile.runtime.RuntimeFailure
+import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -12,8 +14,14 @@ import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.InputStream
 import java.io.OutputStream
+import java.net.HttpURLConnection
+import java.net.URL
+import java.nio.charset.StandardCharsets
 import java.util.Base64
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicReference
 
 class RootSecurityTest {
 
@@ -196,7 +204,7 @@ class RootSecurityTest {
             "mount -t tmpfs tmpfs /mnt/scratch",
             "umount /dev/block/bootdevice/by-name/userdata",
             "dd if=/data/local/tmp/x.img of=/data/local/tmp/y.img",
-            "echo x > /dev/null",
+            "echo x > /dev/kmsg",
             "chmod 666 /dev/block/sda",
             "insmod /data/local/tmp/module.ko",
             "echo 1 > /proc/sys/kernel/perf_event_paranoid",
@@ -810,6 +818,404 @@ class RootSecurityTest {
         } finally {
             RootSandboxProbe.runner = previous
             RootSandboxProbe.clearCache()
+        }
+    }
+
+    // ---------------------------------------------------------------- 分级与审批放宽
+
+    @Test
+    fun `RootCommandGuard 四级风险分类与多规则取最高档`() {
+        // Tier 0: 普通运维与 /dev/null 重定向直接放行
+        for (safe in listOf("ls -la /data/data 2>/dev/null", "command -v su >/dev/null 2>&1", "echo reboot")) {
+            val low = RootCommandGuard.classify(safe, RootCommandGuard.Profile.STRICT)
+            assertEquals("常规命令应为 LOW: $safe", RootCommandGuard.RiskTier.LOW, low.tier)
+            assertEquals(RootCommandGuard.ApprovalRoute.ALLOW, low.route)
+        }
+
+        // Tier 1: 严格档走 dsh 官方审批，最大档直接放行
+        for (elevated in listOf(
+            "mount -o remount,rw /data",
+            "setprop dsh.probe 1",
+            "pid=$(pidof com.example.app); echo \$pid",
+            "sh -c 'ls /data/local/tmp'",
+            "echo x > /dev/kmsg",
+        )) {
+            val strict = RootCommandGuard.classify(elevated, RootCommandGuard.Profile.STRICT)
+            assertEquals("应为 ELEVATED: $elevated", RootCommandGuard.RiskTier.ELEVATED, strict.tier)
+            assertEquals(RootCommandGuard.ApprovalRoute.DSH_APPROVAL, strict.route)
+            assertFalse(strict.requiresHostConfirm)
+
+            val maximum = RootCommandGuard.classify(elevated, RootCommandGuard.Profile.MAXIMUM)
+            assertEquals(RootCommandGuard.RiskTier.ELEVATED, maximum.tier)
+            assertEquals("最大档应直接放行 Tier 1: $elevated", RootCommandGuard.ApprovalRoute.ALLOW, maximum.route)
+        }
+
+        // Tier 2: 整机高危无论严格档还是最大档均走 HOST_CONFIRM（不硬拦截，需 App 页确认）
+        for (high in listOf("reboot", "setenforce 0", "echo 127.0.0.1 a > /system/etc/hosts", "su -c id")) {
+            for (profile in RootCommandGuard.Profile.entries) {
+                val res = RootCommandGuard.classify(high, profile)
+                assertEquals("应为 HIGH ($profile): $high", RootCommandGuard.RiskTier.HIGH, res.tier)
+                assertEquals(RootCommandGuard.ApprovalRoute.HOST_CONFIRM, res.route)
+                assertTrue(res.requiresHostConfirm)
+                assertTrue(res.bypassSandboxWrapper)
+            }
+        }
+
+        // Tier 3: 不可逆变砖/删库红线不硬拦截，但必须打开 App 极危警告页
+        for (critical in listOf(
+            "reboot bootloader",
+            "fastboot flash boot boot.img",
+            "dd if=/dev/zero of=/dev/block/sda",
+            "rm -rf /data",
+            "cat /dev/mem",
+        )) {
+            for (profile in RootCommandGuard.Profile.entries) {
+                val res = RootCommandGuard.classify(critical, profile)
+                assertEquals("应为 CRITICAL ($profile): $critical", RootCommandGuard.RiskTier.CRITICAL, res.tier)
+                assertEquals(RootCommandGuard.ApprovalRoute.APP_WARNING, res.route)
+                assertTrue(res.requiresHostConfirm)
+                assertTrue(res.bypassSandboxWrapper)
+            }
+        }
+
+        // 多规则混合：高风险不会被低风险掩盖
+        val mixed = RootCommandGuard.classify("x=$(id); rm -rf /data", RootCommandGuard.Profile.MAXIMUM)
+        assertEquals(RootCommandGuard.RiskTier.CRITICAL, mixed.tier)
+        assertEquals(RootCommandGuard.ApprovalRoute.APP_WARNING, mixed.route)
+    }
+
+    @Test
+    fun `RootApprovalRegistry 挑战绑定摘要一次性消费且拒绝越权兑换高危命令`() {
+        RootApprovalRegistry.clear()
+        try {
+            val script = "mount -o remount,rw /data"
+            val assessment = RootCommandGuard.classify(script, RootCommandGuard.Profile.STRICT)
+            val id = RootApprovalRegistry.issueChallenge(script, assessment, nowMs = 1_000L)
+
+            // 篡改脚本内容：拒绝
+            try {
+                RootApprovalRegistry.consumeDshApproval(id, "mount -o remount,rw /cache", assessment, RootApprovalRegistry.MODE_DSH_APPROVED, nowMs = 2_000L)
+                fail("篡改脚本摘要应拒绝")
+            } catch (e: RuntimeFailure) {
+                assertEquals("ROOT_APPROVAL_INVALID", e.code)
+            }
+            // 挑战已被原子消费，重放拒绝
+            try {
+                RootApprovalRegistry.consumeDshApproval(id, script, assessment, RootApprovalRegistry.MODE_DSH_APPROVED, nowMs = 2_000L)
+                fail("已消费挑战不得重放")
+            } catch (e: RuntimeFailure) {
+                assertEquals("ROOT_APPROVAL_INVALID", e.code)
+            }
+
+            // 过期拒绝
+            val expiredId = RootApprovalRegistry.issueChallenge(script, assessment, nowMs = 1_000L)
+            try {
+                RootApprovalRegistry.consumeDshApproval(
+                    expiredId, script, assessment, RootApprovalRegistry.MODE_DSH_FULL_ACCESS,
+                    nowMs = 1_000L + RootApprovalRegistry.CHALLENGE_TTL_MS + 1,
+                )
+                fail("过期挑战应拒绝")
+            } catch (e: RuntimeFailure) {
+                assertEquals("ROOT_APPROVAL_EXPIRED", e.code)
+            }
+
+            // 正常兑换 dsh_full_access（尊重 dsh 完全权限）
+            val validId = RootApprovalRegistry.issueChallenge(script, assessment, nowMs = 1_000L)
+            val grant = RootApprovalRegistry.consumeDshApproval(
+                validId, script, assessment, RootApprovalRegistry.MODE_DSH_FULL_ACCESS, nowMs = 2_000L,
+            )
+            assertEquals(RootApprovalSource.DSH_FULL_ACCESS, grant.source)
+
+            // HIGH / CRITICAL 绝不允许用 consumeDshApproval 绕过 App 警告确认页
+            val criticalScript = "rm -rf /data"
+            val criticalAssessment = RootCommandGuard.classify(criticalScript, RootCommandGuard.Profile.MAXIMUM)
+            val critId = RootApprovalRegistry.issueChallenge(criticalScript, criticalAssessment, nowMs = 1_000L)
+            try {
+                RootApprovalRegistry.consumeDshApproval(
+                    critId, criticalScript, criticalAssessment, RootApprovalRegistry.MODE_DSH_FULL_ACCESS, nowMs = 2_000L,
+                )
+                fail("极危命令不得仅凭访客审批兑换")
+            } catch (e: RuntimeFailure) {
+                assertEquals("ROOT_APPROVAL_INVALID", e.code)
+            }
+        } finally {
+            RootApprovalRegistry.clear()
+        }
+    }
+
+    @Test
+    fun `RootApprovalCoordinator 支持同意拒绝取消超时并发互斥与显示防欺骗`() {
+        val prevPresenter = RootApprovalCoordinator.presenter
+        val prevDismiss = RootApprovalCoordinator.dismissNotificationHook
+        RootApprovalCoordinator.dismissNotificationHook = {}
+        try {
+            // BiDi 字符过滤
+            val (cleaned, stripped) = RootApprovalCoordinator.sanitizeScriptForDisplay("echo \u202Eevil")
+            assertTrue(stripped)
+            assertEquals("echo evil", cleaned)
+
+            // 1. 极危命令通过 App 警告页确认 -> APP_WARNING_CONFIRMED
+            val critScript = "dd if=/dev/zero of=/dev/block/sda"
+            val critAssessment = RootCommandGuard.classify(critScript, RootCommandGuard.Profile.MAXIMUM)
+            RootApprovalCoordinator.presenter = { _, req ->
+                assertEquals(critScript, req.script)
+                assertEquals("恢复测试分区", req.justification)
+                RootApprovalCoordinator.resolve(req.requestId, RootApprovalCoordinator.Outcome.APPROVED)
+                true
+            }
+            val grant = RootApprovalCoordinator.requestApproval(
+                context = null,
+                requestId = "req-1",
+                script = critScript,
+                assessment = critAssessment,
+                justification = "恢复测试分区",
+                timeoutMs = 2_000L,
+            )
+            assertEquals(RootApprovalSource.APP_WARNING_CONFIRMED, grant.source)
+
+            // 2. 拒绝 -> ROOT_APPROVAL_REJECTED
+            RootApprovalCoordinator.presenter = { _, req ->
+                RootApprovalCoordinator.resolve(req.requestId, RootApprovalCoordinator.Outcome.REJECTED)
+                true
+            }
+            try {
+                RootApprovalCoordinator.requestApproval(null, "req-2", critScript, critAssessment, timeoutMs = 2_000L)
+                fail("拒绝应抛 ROOT_APPROVAL_REJECTED")
+            } catch (e: RuntimeFailure) {
+                assertEquals("ROOT_APPROVAL_REJECTED", e.code)
+            }
+
+            // 3. 无法打开确认页 -> ROOT_APPROVAL_UNAVAILABLE
+            RootApprovalCoordinator.presenter = { _, _ -> false }
+            try {
+                RootApprovalCoordinator.requestApproval(null, "req-3", critScript, critAssessment, timeoutMs = 2_000L)
+                fail("拉起失败应抛 ROOT_APPROVAL_UNAVAILABLE")
+            } catch (e: RuntimeFailure) {
+                assertEquals("ROOT_APPROVAL_UNAVAILABLE", e.code)
+            }
+
+            // 4. 超时 -> ROOT_APPROVAL_TIMEOUT
+            RootApprovalCoordinator.presenter = { _, _ -> true }
+            try {
+                RootApprovalCoordinator.requestApproval(null, "req-4", critScript, critAssessment, timeoutMs = 80L)
+                fail("超时应抛 ROOT_APPROVAL_TIMEOUT")
+            } catch (e: RuntimeFailure) {
+                assertEquals("ROOT_APPROVAL_TIMEOUT", e.code)
+            }
+
+            // 5. 并发第二条立刻报 ROOT_APPROVAL_BUSY，不占满线程池
+            val presentedLatch = CountDownLatch(1)
+            val activeReqId = AtomicReference<String?>()
+            RootApprovalCoordinator.presenter = { _, req ->
+                activeReqId.set(req.requestId)
+                presentedLatch.countDown()
+                true
+            }
+            val pool = Executors.newSingleThreadExecutor()
+            try {
+                val first = pool.submit<Any> {
+                    try {
+                        RootApprovalCoordinator.requestApproval(null, "req-busy-1", critScript, critAssessment, timeoutMs = 5_000L)
+                    } catch (e: RuntimeFailure) {
+                        e.code
+                    }
+                }
+                assertTrue(presentedLatch.await(2, TimeUnit.SECONDS))
+                try {
+                    RootApprovalCoordinator.requestApproval(null, "req-busy-2", critScript, critAssessment, timeoutMs = 2_000L)
+                    fail("并发第二条应报 ROOT_APPROVAL_BUSY")
+                } catch (e: RuntimeFailure) {
+                    assertEquals("ROOT_APPROVAL_BUSY", e.code)
+                }
+                RootApprovalCoordinator.cancel(activeReqId.get())
+                assertEquals("ROOT_APPROVAL_CANCELLED", first.get(2, TimeUnit.SECONDS))
+            } finally {
+                pool.shutdownNow()
+            }
+        } finally {
+            RootApprovalCoordinator.cancelAll()
+            RootApprovalCoordinator.presenter = prevPresenter
+            RootApprovalCoordinator.dismissNotificationHook = prevDismiss
+        }
+    }
+
+    @Test
+    fun `RootCommandRunner runApproved 对高危直通且校验凭证摘要防篡改`() {
+        val previous = RootCommandRunner.processLauncher
+        val prevPresenter = RootApprovalCoordinator.presenter
+        val prevDismiss = RootApprovalCoordinator.dismissNotificationHook
+        RootApprovalCoordinator.dismissNotificationHook = {}
+        val launchedScripts = mutableListOf<String>()
+        RootCommandRunner.processLauncher = { argv ->
+            launchedScripts += argv[2]
+            FakeProcess("ok\n", 0)
+        }
+        try {
+            // Tier 1 mount 放开 setpriv 能力裁剪
+            val mountScript = "mount -o remount,rw /data"
+            val mountAssessment = RootCommandGuard.classify(mountScript, RootCommandGuard.Profile.STRICT)
+            val mountId = RootApprovalRegistry.issueChallenge(mountScript, mountAssessment)
+            val mountGrant = RootApprovalRegistry.consumeDshApproval(mountId, mountScript, mountAssessment, RootApprovalRegistry.MODE_DSH_APPROVED)
+            val mountRes = RootCommandRunner.runApproved(mountScript, mountGrant)
+            assertTrue(mountRes.ok)
+            assertFalse("已确认的 mount 不应再套 setpriv 裁剪", decodeInner(launchedScripts.last()).contains("setpriv"))
+
+            // Tier 3 经 App 警告页确认后直连执行（不加 /dev/block 遮蔽与 setpriv）
+            val critScript = "dd if=/dev/zero of=/dev/block/sda"
+            val critAssessment = RootCommandGuard.classify(critScript, RootCommandGuard.Profile.MAXIMUM)
+            RootApprovalCoordinator.presenter = { _, req ->
+                RootApprovalCoordinator.resolve(req.requestId, RootApprovalCoordinator.Outcome.APPROVED)
+                true
+            }
+            val critGrant = RootApprovalCoordinator.requestApproval(null, "req-run-1", critScript, critAssessment)
+            val critRes = RootCommandRunner.runApproved(critScript, critGrant)
+            assertTrue(critRes.ok)
+            assertFalse("App 警告确认后的极危命令不应被外层 unshare/block-mask 拦截", launchedScripts.last().contains("unshare"))
+
+            // 拿旧凭证跑别的脚本必须拒绝
+            try {
+                RootCommandRunner.runApproved("rm -rf /data", critGrant)
+                fail("脚本摘要不匹配必须拒绝")
+            } catch (e: RuntimeFailure) {
+                assertEquals("ROOT_APPROVAL_INVALID", e.code)
+            }
+        } finally {
+            RootCommandRunner.processLauncher = previous
+            RootApprovalCoordinator.presenter = prevPresenter
+            RootApprovalCoordinator.dismissNotificationHook = prevDismiss
+            RootApprovalRegistry.clear()
+        }
+    }
+
+    @Test
+    fun `DeviceBridgeServer 根通道端到端：低风险直通、中危 dsh 审批、高危极危必须走 App 警告页`() {
+        val prevLauncher = RootCommandRunner.processLauncher
+        val prevPresenter = RootApprovalCoordinator.presenter
+        val prevDismiss = RootApprovalCoordinator.dismissNotificationHook
+        RootApprovalCoordinator.dismissNotificationHook = {}
+        RootApprovalRegistry.clear()
+        val launched = mutableListOf<List<String>>()
+        RootCommandRunner.processLauncher = { argv ->
+            launched += argv
+            FakeProcess("ran-ok\n", 0)
+        }
+        val token = "0123456789abcdef0123456789abcdef0123456789a"
+        val strictRootStatus = RootEngineAccess.Status(
+            enabled = true,
+            mode = RootEngineAccess.Mode.READ_WRITE,
+            guardProfile = RootCommandGuard.Profile.STRICT,
+            kernelSuStatus = KernelSuProbe.STATUS_READY,
+            reason = KernelSuProbe.REASON_READY,
+            degraded = true,
+            degradations = listOf(RootSecurityWrapper.DIAG_NAMESPACE_UNAVAILABLE),
+            suVersion = "3.1.0:KernelSU",
+        )
+        val bridge = DeviceBridgeServer(
+            shizuku = null,
+            runner = DeviceCommandRunner { _, _ -> },
+            token = token,
+            port = 0,
+            shellEnabled = { false },
+            rootStatusProvider = { strictRootStatus },
+        )
+        bridge.start()
+        try {
+            fun post(command: String, param: String): JSONObject {
+                val conn = URL("http://127.0.0.1:${bridge.localPort}/device-command").openConnection() as HttpURLConnection
+                conn.requestMethod = "POST"
+                conn.setRequestProperty("Content-Type", "application/json")
+                conn.setRequestProperty("Authorization", "Bearer $token")
+                conn.doOutput = true
+                val payload = JSONObject().put("command", command).put("param", param).toString().toByteArray(StandardCharsets.UTF_8)
+                conn.outputStream.use { it.write(payload) }
+                val body = conn.inputStream.bufferedReader(StandardCharsets.UTF_8).readText()
+                return JSONObject(body)
+            }
+
+            // 1. Tier 0 直接执行
+            val lowRes = post("shell", "id -u")
+            assertTrue(lowRes.getBoolean("ok"))
+            assertEquals(1, launched.size)
+
+            // 2. Tier 1 (STRICT) -> 返回 ROOT_APPROVAL_REQUIRED，不拉 su
+            val elevatedScript = "mount -o remount,rw /data"
+            val tier1Challenge = post("shell", elevatedScript)
+            assertFalse(tier1Challenge.getBoolean("ok"))
+            assertEquals("ROOT_APPROVAL_REQUIRED", tier1Challenge.getString("errorCode"))
+            assertEquals(1, launched.size)
+            val challengeJson = JSONObject(tier1Challenge.getString("text"))
+            assertEquals("elevated", challengeJson.getString("tier"))
+            assertEquals("dsh_approval", challengeJson.getString("route"))
+            assertFalse(challengeJson.getBoolean("requiresHostConfirm"))
+            assertTrue(challengeJson.getBoolean("degraded"))
+
+            // 2b. 凭 challengeId 经 dsh_full_access 放行执行
+            val tier1Exec = post(
+                "shellApproved",
+                JSONObject()
+                    .put("script", elevatedScript)
+                    .put("challengeId", challengeJson.getString("challengeId"))
+                    .put("approvalMode", "dsh_full_access")
+                    .toString(),
+            )
+            assertTrue(tier1Exec.getBoolean("ok"))
+            assertEquals(2, launched.size)
+
+            // 3. Tier 3 (CRITICAL) -> 不硬拦截，返回 app_warning；执行时必须经宿主警告页确认
+            val critScript = "rm -rf /data"
+            val tier3Challenge = post("shell", critScript)
+            assertFalse(tier3Challenge.getBoolean("ok"))
+            assertEquals("ROOT_APPROVAL_REQUIRED", tier3Challenge.getString("errorCode"))
+            assertEquals(2, launched.size)
+            val critJson = JSONObject(tier3Challenge.getString("text"))
+            assertEquals("critical", critJson.getString("tier"))
+            assertEquals("app_warning", critJson.getString("route"))
+            assertTrue(critJson.getBoolean("requiresHostConfirm"))
+
+            // 3b. 宿主警告页拒绝 -> 不执行 su
+            var presenterCalls = 0
+            RootApprovalCoordinator.presenter = { _, req ->
+                presenterCalls += 1
+                assertEquals(RootCommandGuard.ApprovalRoute.APP_WARNING, req.assessment.route)
+                RootApprovalCoordinator.resolve(req.requestId, RootApprovalCoordinator.Outcome.REJECTED)
+                true
+            }
+            val critRejected = post(
+                "shellApproved",
+                JSONObject()
+                    .put("script", critScript)
+                    .put("challengeId", critJson.getString("challengeId"))
+                    .put("approvalMode", "dsh_full_access")
+                    .put("justification", "测试清理")
+                    .toString(),
+            )
+            assertFalse(critRejected.getBoolean("ok"))
+            assertEquals("ROOT_APPROVAL_REJECTED", critRejected.getString("errorCode"))
+            assertEquals(1, presenterCalls)
+            assertEquals(2, launched.size)
+
+            // 3c. 宿主警告页同意 -> 执行 su
+            RootApprovalCoordinator.presenter = { _, req ->
+                presenterCalls += 1
+                RootApprovalCoordinator.resolve(req.requestId, RootApprovalCoordinator.Outcome.APPROVED)
+                true
+            }
+            val critApproved = post(
+                "shellApproved",
+                JSONObject()
+                    .put("script", critScript)
+                    .put("approvalMode", "dsh_full_access")
+                    .toString(),
+            )
+            assertTrue(critApproved.getBoolean("ok"))
+            assertEquals(2, presenterCalls)
+            assertEquals(3, launched.size)
+        } finally {
+            bridge.stop()
+            RootCommandRunner.processLauncher = prevLauncher
+            RootApprovalCoordinator.presenter = prevPresenter
+            RootApprovalCoordinator.dismissNotificationHook = prevDismiss
+            RootApprovalRegistry.clear()
         }
     }
 

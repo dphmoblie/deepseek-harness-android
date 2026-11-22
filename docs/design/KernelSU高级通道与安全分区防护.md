@@ -491,3 +491,12 @@ Root 会话创建/修改的文件默认属主为 root。若写入本应用私有
 - `android/app/src/test/java/io/deepseekharness/mobile/shizuku/RootSecurityTest.kt`：`最大档才放行 mount 与普通 setprop`、`最大档仍拦数据销毁电源与块设备`、`RootCommandRunner 的原生电源动作不过护栏`。
 - `src/components/RootEngineCard.test.tsx`：三档切换、最大档说明、电源按钮、身份确认取消。
 - `src/platform/validation.test.ts`：`mode`/`guardProfile` 与 `enabled`/`usable` 的交叉校验。
+
+### 9.7 第七轮：放宽围栏、接入 dsh 官方审批与 App 警告确认页（2026-11-22）
+
+按用户决策，高风险 Root 命令不再一刀切硬拦截，而是按风险分层与用户实际授予的权限落地：
+
+1. **单一规则真源（四级分类）**：`RootCommandGuard.classify(script, profile)` 将规则分为 `LOW`、`ELEVATED`、`HIGH`、`CRITICAL` 四档，多规则命中一律取最高档；`/dev/null` 等空设备重定向不再误判。
+2. **Tier 1（`ELEVATED`）走 dsh 官方审批并尊重 dsh 权限**：`maximum` 档直接放行；`strict` 档由设备桥返回 `ROOT_APPROVAL_REQUIRED`（含一次性 `sha256(script)` 绑定 `challengeId`），插件调用 `@deepseek-ai/dsh-user-approval`（`ctx.approval.request()`，`displayReason` 展示命令预览并剔除 BiDi 欺骗字符，`reason` 仅记脱敏分级不落脚本原文）；当 dsh 处于 `danger-full-access`（`effectivePolicy === 'never'`）时尊重 dsh 直接以 `dsh_full_access` 兑换放行，避免被 `never` 策略静默拒绝。
+3. **Tier 2（`HIGH`）与 Tier 3（`CRITICAL`）不硬拦截，但必须打开 App 警告确认页**：由宿主 `RootApprovalCoordinator`（单槽互斥、防线程池耗尽）拉起未导出的 `RootCommandApprovalActivity`（前台直开；后台发高优先级通知并在 `MainActivity`/`HarnessActivity` 回到前台时自动拉起），展示红色极危/琥珀高危横幅、完整脚本、命中规则、降级状态、强制勾选风险确认框及系统生物识别/锁屏凭据（无锁屏设备降级二次弹窗）。访客进程无法自行兑换 Tier 2/3 凭证。
+4. **执行适配与审计**：宿主确认后的 `HIGH`/`CRITICAL` 走 `RootCommandRunner.runApproved` 的 Base64 安全直连（不因 `-sys_boot` 或 `/dev/block` 遮蔽导致用户明确批准的操作静默失败）；所有审批与拒绝结果记入 `AuditEvent.ROOT_COMMAND_APPROVAL`（只记分级/结果码，绝不落脚本正文）。

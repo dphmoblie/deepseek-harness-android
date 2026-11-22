@@ -138,6 +138,8 @@ interface NativeRuntimePlugin {
   setAppLanguage(options: { language: Language }): Promise<void>
   /** 读回原生保存的应用语言；`configured` 区分「选过」与「回落值」。 */
   getAppLanguage(): Promise<{ language: string, configured: boolean }>
+  /** 退出应用（结束并移除当前任务），用于首次免责条款不同意退出。 */
+  exitApp(): Promise<void>
   /** 同步主题模式给原生，由原生把它落到状态栏（登记册 5.4）。 */
   setAppTheme(options: { mode: AppThemeMode }): Promise<void>
   /** 同步主题给 DSH 页面；原生侧只接受固定字段。 */
@@ -349,6 +351,7 @@ function createNativeBridge(): RuntimeBridge {
       language: isLanguage(value.language) ? value.language : 'zh-CN',
       configured: value.configured === true,
     })),
+    exitApp: () => NativeRuntime.exitApp(),
     setAppTheme: mode => {
       // 与原生侧的校验保持同一组取值：非法值在过桥之前就拒绝，不让原生去猜。
       if (mode !== 'system' && mode !== 'light' && mode !== 'dark') {

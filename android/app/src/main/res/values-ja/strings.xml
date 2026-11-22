@@ -182,4 +182,30 @@
     <string name="virtual_screen_overlay_status_waiting">サブ画面の画像を待機中</string>
     <!-- フレームレート設定切り替え直後に表示し、次のフレーム取得で実際の読み取り値に置き換わる。%1$s はフレームレート設定名。 -->
     <string name="virtual_screen_overlay_mode_switched">%1$s に切り替えました。新しいフレームレートの読み取りを待機中</string>
+    <!-- 高リスク・極めて危険な Root コマンドのアプリ内警告・確認画面 -->
+    <string name="root_approval_channel_name">高リスク Root コマンド確認</string>
+    <string name="root_approval_channel_description">AI が高リスクまたは極めて危険な Root コマンドの実行を要求したときに通知します</string>
+    <string name="root_approval_notification_critical_title">極めて危険な Root コマンドの確認待ち</string>
+    <string name="root_approval_notification_critical_text">端末の文鎮化やデータ消失の恐れがあります。タップしてアプリで全文を確認してください</string>
+    <string name="root_approval_notification_high_title">高リスク Root コマンドの確認待ち</string>
+    <string name="root_approval_notification_high_text">タップしてアプリを開き、スクリプト全文を確認して許可・拒否を選んでください</string>
+    <string name="root_approval_critical_title">極めて危険な Root 操作の警告</string>
+    <string name="root_approval_high_title">高リスク Root 操作の確認</string>
+    <string name="root_approval_critical_warning">このコマンドは不可逆な文鎮化・データ破壊ルールに該当します。実行すると端末が起動不能になったりデータが永久に失われたりする恐れがあります。下の全文を必ず確認してください。</string>
+    <string name="root_approval_high_warning">このコマンドは電源・セキュリティポリシー・システムコアパーティションに影響します。下のスクリプト全文を確認のうえ判断してください。</string>
+    <string name="root_approval_rules_heading">該当した高リスクルール</string>
+    <string name="root_approval_matched_snippet">一致箇所：%1$s</string>
+    <string name="root_approval_degraded_notice">サンドボックス縮退中：この端末は完全な隔離を提供できません（%1$s）。コマンドはホストの UID 0 で直接実行されます。</string>
+    <string name="root_approval_ai_reason_heading">AI の説明（信頼できないテキストです。実際のスクリプトを優先してください）</string>
+    <string name="root_approval_script_heading">実行予定の Root スクリプト全文</string>
+    <string name="root_approval_bidi_stripped_notice">注意：表示のため双方向制御文字を除去しました。</string>
+    <string name="root_approval_uid0_note">確認後、このアプリがサンドボックス遮蔽なしで上記スクリプトを UID 0（Root）として直接実行します。</string>
+    <string name="root_approval_critical_acknowledge">上記スクリプト全文を確認し、文鎮化やデータ永久消失のリスクを理解したうえで実行します</string>
+    <string name="root_approval_high_acknowledge">上記スクリプト全文を確認し、この端末で Root 権限により実行することを承認します</string>
+    <string name="root_approval_reject">拒否</string>
+    <string name="root_approval_critical_confirm">認証して強制実行</string>
+    <string name="root_approval_high_confirm">認証して実行</string>
+    <string name="root_approval_biometric_critical_subtitle">認証完了後、この極めて危険な Root スクリプトを直ちに実行します</string>
+    <string name="root_approval_biometric_high_subtitle">認証完了後、この高リスク Root スクリプトを直ちに実行します</string>
+    <string name="root_approval_no_lockscreen_confirm">この端末には画面ロックや生体認証が設定されていません。上記スクリプトを直ちに Root 権限で実行しますか？</string>
 </resources>

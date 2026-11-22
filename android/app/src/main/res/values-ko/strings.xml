@@ -183,4 +183,30 @@
     <string name="virtual_screen_overlay_status_waiting">보조 화면 화면 대기 중</string>
     <!-- 단계 전환 직후 바로 표시되며, 다음 프레임 읽기가 실제 수치로 덮어씀. %1$s는 단계 이름. -->
     <string name="virtual_screen_overlay_mode_switched">%1$s로 전환됨, 새 프레임 속도 측정 대기 중</string>
+    <!-- 고위험 / 치명적 Root 명령 앱 내 경고 및 확인 화면 -->
+    <string name="root_approval_channel_name">고위험 Root 명령 확인</string>
+    <string name="root_approval_channel_description">AI가 고위험 또는 치명적 Root 명령 실행을 요청할 때 앱으로 돌아와 확인하도록 알립니다</string>
+    <string name="root_approval_notification_critical_title">치명적 Root 명령 앱 내 확인 대기 중</string>
+    <string name="root_approval_notification_critical_text">기기 벽돌화 또는 데이터 손실 위험이 있습니다. 탭하여 앱에서 전체 스크립트를 확인하세요.</string>
+    <string name="root_approval_notification_high_title">고위험 Root 명령 앱 내 확인 대기 중</string>
+    <string name="root_approval_notification_high_text">탭하여 앱을 열고 전체 스크립트를 검토한 뒤 실행 여부를 결정하세요.</string>
+    <string name="root_approval_critical_title">치명적 Root 작업 경고</string>
+    <string name="root_approval_high_title">고위험 Root 작업 확인</string>
+    <string name="root_approval_critical_warning">이 명령은 복구 불가능한 벽돌화 또는 데이터 파괴 규칙에 해당합니다. 실행 시 기기가 부팅되지 않거나 데이터가 영구 삭제될 수 있습니다. 아래 전체 스크립트를 반드시 확인하세요.</string>
+    <string name="root_approval_high_warning">이 명령은 기기 전원, 보안 정책 또는 핵심 시스템 파티션에 영향을 줍니다. 아래 전체 스크립트를 확인한 뒤 결정하세요.</string>
+    <string name="root_approval_rules_heading">감지된 고위험 규칙</string>
+    <string name="root_approval_matched_snippet">감지된 조각: %1$s</string>
+    <string name="root_approval_degraded_notice">샌드박스 축소 알림: 이 기기는 완전한 격리를 제공하지 못합니다(%1$s). 명령이 호스트 UID 0 환경에 직접 적용됩니다.</string>
+    <string name="root_approval_ai_reason_heading">AI 설명(신뢰할 수 없는 텍스트 — 실제 스크립트를 기준으로 확인하세요)</string>
+    <string name="root_approval_script_heading">실행할 전체 Root 스크립트</string>
+    <string name="root_approval_bidi_stripped_notice">주의: 안전한 표시를 위해 양방향 제어 문자를 제거했습니다.</string>
+    <string name="root_approval_uid0_note">확인 후 이 앱이 샌드박스 차단 없이 위 스크립트를 UID 0(Root) 권한으로 직접 실행합니다.</string>
+    <string name="root_approval_critical_acknowledge">위 전체 스크립트를 확인했으며, 기기 벽돌화 또는 영구 데이터 손실 위험을 인지하고 실행합니다</string>
+    <string name="root_approval_high_acknowledge">위 전체 스크립트를 확인했으며, 이 기기에서 Root 권한으로 실행하는 데 동의합니다</string>
+    <string name="root_approval_reject">실행 거부</string>
+    <string name="root_approval_critical_confirm">인증 후 강제 실행</string>
+    <string name="root_approval_high_confirm">인증 후 실행</string>
+    <string name="root_approval_biometric_critical_subtitle">인증이 완료되면 이 치명적 Root 스크립트를 즉시 실행합니다</string>
+    <string name="root_approval_biometric_high_subtitle">인증이 완료되면 이 고위험 Root 스크립트를 즉시 실행합니다</string>
+    <string name="root_approval_no_lockscreen_confirm">이 기기에 화면 잠금 또는 생체 인증이 설정되어 있지 않습니다. 위 스크립트를 지금 Root 권한으로 실행하시겠습니까?</string>
 </resources>

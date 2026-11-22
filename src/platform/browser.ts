@@ -206,6 +206,15 @@ export function createBrowserBridge(): RuntimeBridge {
     // 浏览器预览没有原生偏好：语言的唯一来源就是 localStorage，因此这里如实回答「没选过」，
     // 让语言门禁照常出现在首次打开时（而不是被一条假的原生事实跳过）。
     getAppLanguage: () => Promise.resolve({ language: 'zh-CN' as const, configured: false }),
+    // 浏览器通常不允许脚本关闭非脚本打开的标签页：尽力调用 window.close()，其余由门禁锁定兜底。
+    exitApp: () => {
+      try {
+        window.close()
+      } catch {
+        // 受限环境下忽略异常，由界面保持门禁锁定并提示手动关闭。
+      }
+      return Promise.resolve()
+    },
     // 浏览器预览没有窗口装饰可染色：如实按「已接受」返回，不做假的成功提示。
     // DOM 侧的主题落地由 src/theme.ts 自己完成，不经过这条桥。
     setAppTheme: mode => mode === 'system' || mode === 'light' || mode === 'dark'

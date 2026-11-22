@@ -6,7 +6,15 @@ import io.deepseekharness.mobile.shizuku.DeviceCommand
 import io.deepseekharness.mobile.shizuku.DeviceFilePolicy
 import io.deepseekharness.mobile.shizuku.DeviceCommandRunner
 import io.deepseekharness.mobile.shizuku.LocalDeviceFileStore
+import io.deepseekharness.mobile.shizuku.RootApprovalCoordinator
+import io.deepseekharness.mobile.shizuku.RootApprovalRegistry
+import io.deepseekharness.mobile.shizuku.RootCommandGuard
+import io.deepseekharness.mobile.shizuku.RootEngineAccess
+import io.deepseekharness.mobile.shizuku.RootExecutionGrant
 import io.deepseekharness.mobile.shizuku.ShizukuRuntime
+import io.deepseekharness.mobile.runtime.audit.AuditEvent
+import io.deepseekharness.mobile.runtime.audit.AuditResult
+import io.deepseekharness.mobile.runtime.audit.PrivateAuditLog
 import io.deepseekharness.mobile.accessibility.DeepSeekAccessibilityService
 import io.deepseekharness.mobile.accessibility.AccessibilityAutomationStore
 import io.deepseekharness.mobile.capability.DeviceCapabilityFacts
@@ -56,11 +64,12 @@ import java.security.MessageDigest
  * 否则 guest 注入的端口与 Bearer token 会立即失效。
  */
 class DeviceBridgeServer(
-    private val shizuku: ShizukuRuntime,
+    private val shizuku: ShizukuRuntime?,
     private val runner: DeviceCommandRunner,
     private val token: String,
     port: Int = 0,
     private val shellEnabled: () -> Boolean = { false },
+    private val rootStatusProvider: (() -> RootEngineAccess.Status?)? = null,
 ) : RuntimeScopedResource {
     private val server = ServerSocket(port, 12, InetAddress.getByName("127.0.0.1"))
     // 扩大有界线程池并用 shizukuSlots 单独限流阻塞型 Shizuku 调用：即使 2 条 Shizuku 调用同时卡在
@@ -90,14 +99,26 @@ class DeviceBridgeServer(
      * 调用点只有下面那一处。
      */
     /**
-     * 根通道开关（用户在应用设置里显式打开）。
+     * 根通道当前状态快照（用户在应用设置里显式打开）。
      *
-     * 读不到 Context 时按**关**处理：这与 [DeviceCapabilityFacts] 的默认值同一方向，
+     * 读不到 Context 且未注入测试提供方时按**关**处理：这与 [DeviceCapabilityFacts] 的默认值同一方向，
      * 也意味着「读不到设置」永远不会被当成「用户开着根通道」。
      */
-    private fun rootEngineUsable(): Boolean = applicationContextOrNull()
-        ?.let { io.deepseekharness.mobile.shizuku.RootEngineAccess.usable(it) }
-        ?: false
+    private fun currentRootStatus(): RootEngineAccess.Status? =
+        rootStatusProvider?.invoke()
+            ?: applicationContextOrNull()?.let { context ->
+                RootEngineAccess.status(
+                    context,
+                    packageChecker = RootEngineAccess.packageChecker(context),
+                )
+            }
+
+    private fun rootEngineUsable(): Boolean = currentRootStatus()?.usable == true
+
+    private fun recordRootApprovalAudit(result: AuditResult, detail: String) {
+        val context = applicationContextOrNull() ?: return
+        runCatching { PrivateAuditLog(context).record(AuditEvent.ROOT_COMMAND_APPROVAL, result, detail) }
+    }
 
     private fun applicationContextOrNull(): Context? = try {
         val current = Class.forName("android.app.ActivityThread")
@@ -110,6 +131,8 @@ class DeviceBridgeServer(
 
     override fun stop() {
         running.set(false)
+        RootApprovalCoordinator.cancelAll()
+        RootApprovalRegistry.clear()
         try {
             server.close()
         } catch (_: Throwable) {
@@ -234,7 +257,8 @@ class DeviceBridgeServer(
                         if (param.isNotEmpty()) throw RuntimeFailure("DEVICE_COMMAND_INVALID", "设备能力查询不接受参数")
                         val context = applicationContextOrNull()
                             ?: throw RuntimeFailure("DEVICE_CAPABILITIES_UNAVAILABLE", "暂时无法读取设备能力")
-                        val shizukuState = shizuku.state()
+                        val shizukuState = shizuku?.state()
+                            ?: io.deepseekharness.mobile.shizuku.ShizukuState(false, false, "undetermined", false, "", "")
                         val root = io.deepseekharness.mobile.shizuku.RootEngineAccess.status(
                             context,
                             packageChecker = io.deepseekharness.mobile.shizuku.RootEngineAccess.packageChecker(context),
@@ -359,6 +383,25 @@ class DeviceBridgeServer(
                         ))
                         return
                     }
+                    if (commandName == "shellApprovalCancel") {
+                        val targetId = param.trim().take(64)
+                        RootApprovalCoordinator.cancel(targetId.ifEmpty { null })
+                        respondResult(
+                            output,
+                            io.deepseekharness.mobile.shizuku.DeviceCommandResult(
+                                ok = true,
+                                exitCode = 0,
+                                text = "",
+                                truncated = false,
+                                errorCode = null,
+                            ),
+                        )
+                        return
+                    }
+                    if (commandName == "shellApproved") {
+                        respondResult(output, handleApprovedShell(param))
+                        return
+                    }
                     val command = DeviceCommand.fromName(commandName)
                         ?: throw RuntimeFailure("DEVICE_COMMAND_INVALID", "设备命令不支持")
                     // 投递区文件通道在宿主已具备共享存储权限时直接由本地安全执行，不再强依赖 Shizuku；
@@ -373,17 +416,40 @@ class DeviceBridgeServer(
                     // 根通道（用户在设置里显式打开）时，SHELL 命令由应用进程自己起 `su -c`，
                     // 既不建 Shizuku 会话，也不受「AI Shell」这个 Shizuku 通道开关约束——
                     // 那条会话的父进程是 UID 2000 的 shell，根命令的归属会变得不确定。
+                    val rootStatus = if (command == DeviceCommand.SHELL) currentRootStatus() else null
                     val rootEngine = DeviceCommand.requireShellRoute(
-                        command, command == DeviceCommand.SHELL && rootEngineUsable(), shellEnabled(),
+                        command, command == DeviceCommand.SHELL && rootStatus?.usable == true, shellEnabled(),
                     )
-                    val rootGuardProfile = if (rootEngine) {
-                        applicationContextOrNull()
-                            ?.let { io.deepseekharness.mobile.shizuku.RootEngineAccess.guardProfile(it) }
-                            ?: io.deepseekharness.mobile.shizuku.RootCommandGuard.Profile.STRICT
-                    } else {
-                        io.deepseekharness.mobile.shizuku.RootCommandGuard.Profile.STRICT
+                    if (rootEngine) {
+                        val rootGuardProfile = rootStatus?.guardProfile ?: RootCommandGuard.Profile.STRICT
+                        validateShellScript(param)
+                        val assessment = RootCommandGuard.classify(param, rootGuardProfile)
+                        if (assessment.route == RootCommandGuard.ApprovalRoute.ALLOW) {
+                            val grant = RootApprovalRegistry.grantDirect(param, assessment)
+                            respondResult(output, runOneShot(command, param, true, rootGuardProfile, grant))
+                        } else {
+                            val challengeId = RootApprovalRegistry.issueChallenge(param, assessment)
+                            val payload = buildApprovalChallengeJson(
+                                assessment = assessment,
+                                challengeId = challengeId,
+                                guardProfile = rootGuardProfile,
+                                degraded = rootStatus?.degraded == true,
+                                degradations = rootStatus?.degradations.orEmpty(),
+                            )
+                            respondResult(
+                                output,
+                                io.deepseekharness.mobile.shizuku.DeviceCommandResult(
+                                    ok = false,
+                                    exitCode = 1,
+                                    text = payload,
+                                    truncated = false,
+                                    errorCode = "ROOT_APPROVAL_REQUIRED",
+                                ),
+                            )
+                        }
+                        return
                     }
-                    respondResult(output, runOneShot(command, param, rootEngine, rootGuardProfile))
+                    respondResult(output, runOneShot(command, param))
                 } catch (error: Throwable) {
                     val failure = error as? RuntimeFailure
                     val code = failure?.code ?: "BRIDGE_FAILED"
@@ -410,6 +476,108 @@ class DeviceBridgeServer(
     }
 
     /**
+     * 执行经过审批/确认流程的根脚本（`shellApproved`）。
+     *
+     * 宿主永远独立重新分类脚本，绝不信任访客自报的风险级别：
+     *  - `ALLOW`：直接放行；
+     *  - `DSH_APPROVAL`（Tier 1）：核销绑定 `sha256(script)` 的一次性挑战（支持 dsh 官方审批与 dsh 完全权限）；
+     *  - `HOST_CONFIRM`（Tier 2）与 `APP_WARNING`（Tier 3）：**强制经 [RootApprovalCoordinator] 打开 App 页警告与确认**，
+     *    只有人类在原生页面完成确认后才签发 [RootExecutionGrant]。
+     */
+    private fun handleApprovedShell(param: String): io.deepseekharness.mobile.shizuku.DeviceCommandResult {
+        val request = try {
+            JSONObject(param)
+        } catch (error: Throwable) {
+            throw RuntimeFailure("DEVICE_COMMAND_INVALID", "审批执行参数不是合法 JSON", error)
+        }
+        val script = request.opt("script") as? String
+            ?: throw RuntimeFailure("DEVICE_COMMAND_INVALID", "Shell 脚本缺失")
+        validateShellScript(script)
+        val challengeId = request.opt("challengeId") as? String
+        val approvalMode = request.opt("approvalMode") as? String
+        val justification = (request.opt("justification") as? String).orEmpty()
+
+        val rootStatus = currentRootStatus()
+        val rootEngine = DeviceCommand.requireShellRoute(
+            DeviceCommand.SHELL,
+            rootStatus?.usable == true,
+            shellEnabled(),
+        )
+        if (!rootEngine) {
+            return runOneShot(DeviceCommand.SHELL, script)
+        }
+        val guardProfile = rootStatus?.guardProfile ?: RootCommandGuard.Profile.STRICT
+        val assessment = RootCommandGuard.classify(script, guardProfile)
+        val grant = try {
+            when (assessment.route) {
+                RootCommandGuard.ApprovalRoute.ALLOW ->
+                    RootApprovalRegistry.grantDirect(script, assessment)
+                RootCommandGuard.ApprovalRoute.DSH_APPROVAL ->
+                    RootApprovalRegistry.consumeDshApproval(challengeId, script, assessment, approvalMode).also {
+                        recordRootApprovalAudit(AuditResult.SUCCEEDED, it.source.auditDetail)
+                    }
+                RootCommandGuard.ApprovalRoute.HOST_CONFIRM,
+                RootCommandGuard.ApprovalRoute.APP_WARNING,
+                -> {
+                    val requestId = RootApprovalRegistry.consumeChallengeIfMatching(challengeId, script)
+                    RootApprovalCoordinator.requestApproval(
+                        context = applicationContextOrNull(),
+                        requestId = requestId,
+                        script = script,
+                        assessment = assessment,
+                        justification = justification,
+                        degraded = rootStatus?.degraded == true,
+                        degradations = rootStatus?.degradations.orEmpty(),
+                    ).also {
+                        recordRootApprovalAudit(AuditResult.SUCCEEDED, it.source.auditDetail)
+                    }
+                }
+            }
+        } catch (failure: RuntimeFailure) {
+            val auditResult = when (failure.code) {
+                "ROOT_APPROVAL_REJECTED" -> AuditResult.DENIED
+                "ROOT_APPROVAL_CANCELLED" -> AuditResult.CANCELLED
+                else -> AuditResult.FAILED
+            }
+            recordRootApprovalAudit(auditResult, failure.code)
+            throw failure
+        }
+        return runOneShot(DeviceCommand.SHELL, script, true, guardProfile, grant)
+    }
+
+    private fun validateShellScript(script: String) {
+        if (script.isBlank() || script.toByteArray(StandardCharsets.UTF_8).size > MAX_SHELL_SCRIPT_BYTES ||
+            script.any { it == '\u0000' || it == '\r' }
+        ) {
+            throw RuntimeFailure("DEVICE_COMMAND_INVALID", "Shell 脚本为空、过长或包含非法控制字符")
+        }
+    }
+
+    private fun buildApprovalChallengeJson(
+        assessment: RootCommandGuard.Assessment,
+        challengeId: String,
+        guardProfile: RootCommandGuard.Profile,
+        degraded: Boolean,
+        degradations: List<String>,
+    ): String {
+        val actionsJson = org.json.JSONArray().also { arr -> assessment.actions.forEach(arr::put) }
+        val degradationsJson = org.json.JSONArray().also { arr -> degradations.forEach(arr::put) }
+        return JSONObject()
+            .put("schemaVersion", 1)
+            .put("channel", "root")
+            .put("tier", assessment.tier.wireValue)
+            .put("route", assessment.route.wireValue)
+            .put("requiresHostConfirm", assessment.requiresHostConfirm)
+            .put("actions", actionsJson)
+            .put("snippet", assessment.snippet)
+            .put("challengeId", challengeId)
+            .put("guardProfile", guardProfile.wireValue)
+            .put("degraded", degraded)
+            .put("degradations", degradationsJson)
+            .toString()
+    }
+
+    /**
      * 一次性设备 Shell 会话：创建 → 执行一条命令 → 关闭。
      *
      * 会话退出（Shell 死亡 / Shizuku 断开）后不会再有输出：在途的设备命令立刻按协议错误收口，
@@ -419,8 +587,8 @@ class DeviceBridgeServer(
         command: DeviceCommand,
         param: String,
         rootEngine: Boolean = false,
-        rootGuardProfile: io.deepseekharness.mobile.shizuku.RootCommandGuard.Profile =
-            io.deepseekharness.mobile.shizuku.RootCommandGuard.Profile.STRICT,
+        rootGuardProfile: RootCommandGuard.Profile = RootCommandGuard.Profile.STRICT,
+        rootExecutionGrant: RootExecutionGrant? = null,
     ): io.deepseekharness.mobile.shizuku.DeviceCommandResult {
         // 根通道不建 Shizuku 会话：会话 ID 对这个分支没有意义（`execute` 会先于任何会话操作返回）。
         if (rootEngine) {
@@ -431,6 +599,7 @@ class DeviceBridgeServer(
                 COMMAND_TIMEOUT_MS,
                 useRootEngine = true,
                 rootGuardProfile = rootGuardProfile,
+                rootExecutionGrant = rootExecutionGrant,
             )
         }
         val acquired = try {
@@ -443,7 +612,9 @@ class DeviceBridgeServer(
             throw RuntimeFailure("DEVICE_COMMAND_BUSY", "Shizuku 设备通道正忙，请稍后重试或改用根通道")
         }
         try {
-            val sessionId = shizuku.create(
+            val shizukuRuntime = shizuku
+                ?: throw RuntimeFailure("SHIZUKU_UNAVAILABLE", "Shizuku 设备通道尚未初始化")
+            val sessionId = shizukuRuntime.create(
                 DEFAULT_COLUMNS,
                 DEFAULT_ROWS,
                 suppressPublicOutput = true,
@@ -455,7 +626,7 @@ class DeviceBridgeServer(
                 return runner.execute(sessionId, command, param, COMMAND_TIMEOUT_MS)
             } finally {
                 try {
-                    shizuku.close(sessionId)
+                    shizukuRuntime.close(sessionId)
                 } catch (_: Throwable) {
                 }
             }
@@ -542,6 +713,7 @@ class DeviceBridgeServer(
         private const val DEFAULT_ROWS = 24
         /** 文件上传包含 Base64；仍保持一个受控上限，避免把桥变成无限内存入口。 */
         private const val MAX_REQUEST_BODY_BYTES = 200_000
+        private const val MAX_SHELL_SCRIPT_BYTES = 16 * 1024
 
         /** 受控失败说明的正文上限：只用来解释「下一步做什么」，不是日志出口。 */
         private const val MAX_FAILURE_EXPLANATION_CHARS = 400

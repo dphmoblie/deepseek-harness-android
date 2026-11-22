@@ -1,6 +1,9 @@
 package io.deepseekharness.mobile.shizuku
 
+import io.deepseekharness.mobile.runtime.RuntimeFailure
 import java.io.InputStream
+import java.nio.charset.StandardCharsets
+import java.util.Base64
 import java.util.concurrent.TimeUnit
 
 /**
@@ -64,7 +67,47 @@ object RootCommandRunner {
     ): RootCommandResult {
         RootCommandGuard.verifySafe(script, guardProfile)
         val wrapped = RootSecurityWrapper.wrapWithProtection(script, hardened)
+        return executeWrapped(wrapped, timeoutMs)
+    }
 
+    /**
+     * 执行已取得宿主签发凭证 [grant] 的根脚本。
+     *
+     * 二次核验 `sha256(script)` 与凭证一致：
+     *  - `LOW` / `ELEVATED`（经 dsh 审批或最大档放行）：继续套用 [RootSecurityWrapper]，
+     *    仅当本次已确认的命令本身需要挂载/内核模块/设备节点能力时关闭 `setpriv` 裁剪；
+     *  - `HIGH` / `CRITICAL`（已通过 Android 宿主 App 确认/极危警告页）：走无外层命名空间与
+     *    块设备遮蔽的 Base64 安全直连，确保用户明确确认后的操作（如重启、关 SELinux、写核心分区或
+     *    维护操作）不会被沙箱或 `-sys_boot` 静默拦成失败。
+     */
+    internal fun runApproved(
+        script: String,
+        grant: RootExecutionGrant,
+        timeoutMs: Long = DEFAULT_TIMEOUT_MS,
+    ): RootCommandResult {
+        if (RootApprovalRegistry.sha256(script) != grant.scriptSha256) {
+            throw RuntimeFailure("ROOT_APPROVAL_INVALID", "脚本内容与已批准凭证不一致，拒绝执行")
+        }
+        val wrapped = if (grant.assessment.bypassSandboxWrapper) {
+            wrapDirectBase64(script)
+        } else {
+            RootSecurityWrapper.wrapWithProtection(script, hardened = !grant.assessment.needsUnconfinedCaps)
+        }
+        return executeWrapped(wrapped, timeoutMs)
+    }
+
+    private fun wrapDirectBase64(rawScript: String): String {
+        val b64 = Base64.getEncoder().encodeToString(rawScript.toByteArray(StandardCharsets.UTF_8))
+        return buildString {
+            append("dsh_dec=\"base64\"; command -v toybox >/dev/null 2>&1 && dsh_dec=\"toybox base64 -d\"; ")
+            append("dsh_p=\$(printf '%s' '$b64' | \$dsh_dec 2>/dev/null) || ")
+            append("{ echo \"${RootSecurityWrapper.DIAG_PREFIX}${RootSecurityWrapper.DIAG_DECODE_FAILED}\" >&2; exit ${RootSecurityWrapper.EXIT_DECODE_FAILED}; }; ")
+            append("[ -n \"\$dsh_p\" ] || { echo \"${RootSecurityWrapper.DIAG_PREFIX}${RootSecurityWrapper.DIAG_DECODE_FAILED}\" >&2; exit ${RootSecurityWrapper.EXIT_DECODE_FAILED}; }; ")
+            append("printf '%s' \"\$dsh_p\" | /system/bin/sh -s; exit \$?")
+        }
+    }
+
+    private fun executeWrapped(wrapped: String, timeoutMs: Long): RootCommandResult {
         val process = try {
             processLauncher(listOf("su", "-c", wrapped))
         } catch (_: Exception) {

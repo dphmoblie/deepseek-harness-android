@@ -549,7 +549,7 @@ describe('App conversation gate', () => {
 describe('应用语言', () => {
   beforeEach(beforeEachAppTest)
 
-  it('首次选择语言前不自动打开 Harness，选择英语后显示英文引导', async () => {
+  it('首次选择语言前不自动打开 Harness，选择英语后显示英文免责条款与英文引导', async () => {
     window.localStorage.clear()
     render(<App />)
     expect(await screen.findByRole('heading', { name: '选择语言 / Choose your language' })).toBeVisible()
@@ -558,11 +558,15 @@ describe('应用语言', () => {
     expect(bridge.openHarness).not.toHaveBeenCalled()
     fireEvent.change(screen.getByLabelText('语言 / Language'), { target: { value: 'en' } })
     fireEvent.click(screen.getByRole('button', { name: '继续 / Continue' }))
-    expect(await screen.findByRole('dialog', { name: 'Free software' })).toBeVisible()
+    const disclaimer = await screen.findByRole('dialog', { name: 'Disclaimer' })
+    expect(disclaimer).toBeVisible()
     expect(bridge.setAppLanguage).toHaveBeenCalledWith('en')
     expect(window.localStorage.getItem('dsh-mobile-language-v1')).toBe('en')
     expect(document.documentElement.lang).toBe('en')
     expect(bridge.openHarness).not.toHaveBeenCalled()
+    fireEvent.click(within(disclaimer).getByRole('checkbox'))
+    fireEvent.click(within(disclaimer).getByRole('button', { name: 'Agree and continue' }))
+    expect(await screen.findByRole('dialog', { name: 'Free software' })).toBeVisible()
     fireEvent.click(screen.getByRole('button', { name: 'Skip setup' }))
     // 引导结束后停在对话门禁页，仍然不会自动打开 Harness。
     expect(await screen.findByRole('button', { name: 'Open chat' })).toBeInTheDocument()
@@ -604,8 +608,8 @@ describe('应用语言', () => {
     window.localStorage.clear()
     bridge.getAppLanguage.mockResolvedValue({ configured: true, language: 'en' })
     render(<App />)
-    // 界面直接是英文（引导页标题），门禁一次都没出现，语言也回填进了 localStorage。
-    expect(await screen.findByRole('dialog', { name: 'Free software' })).toBeVisible()
+    // 界面直接是英文（首次免责条款门禁标题），语言门禁一次都没出现，语言也回填进了 localStorage。
+    expect(await screen.findByRole('dialog', { name: 'Disclaimer' })).toBeVisible()
     expect(screen.queryByRole('heading', { name: '选择语言 / Choose your language' })).toBeNull()
     expect(window.localStorage.getItem('dsh-mobile-language-v1')).toBe('en')
   })
@@ -617,9 +621,9 @@ describe('应用语言', () => {
    * 用户明明存过韩文，冷启动却先弹一次简体中文的语言门禁。
    */
   it.each([
-    { language: 'zh-TW' as const, heading: '免費宣告' },
-    { language: 'ja' as const, heading: '無料について' },
-    { language: 'ko' as const, heading: '무료 제공 안내' },
+    { language: 'zh-TW' as const, heading: '免責條款' },
+    { language: 'ja' as const, heading: '免責事項' },
+    { language: 'ko' as const, heading: '면책 조항' },
   ])('原生已保存 $language 时直接按该语言进入', async ({ language, heading }) => {
     window.localStorage.clear()
     bridge.getAppLanguage.mockResolvedValue({ configured: true, language })
@@ -637,9 +641,9 @@ describe('应用语言', () => {
     const setItem = vi.spyOn(window.Storage.prototype, 'setItem').mockImplementation(() => { throw new Error('存储不可用') })
     try {
       fireEvent.click(skip)
-      // 本次必须放行——否则用户被永久卡在门禁里（提示语在门禁消失后无处可显示，
-      // 所以这里验的是「进去了」，而不是那条提示）。
-      expect(await screen.findByRole('dialog', { name: '免费声明' })).toBeVisible()
+      // 本次必须放行——否则用户被永久卡在语言门禁里（提示语在门禁消失后无处可显示，
+      // 所以这里验的是「进去了」，直接进入免责条款门禁）。
+      expect(await screen.findByRole('dialog', { name: '免责条款' })).toBeVisible()
       expect(screen.queryByRole('heading', { name: '选择语言 / Choose your language' })).toBeNull()
     } finally {
       setItem.mockRestore()

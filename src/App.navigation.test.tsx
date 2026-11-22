@@ -21,6 +21,7 @@ import type { DiagnosticLogState, KeepAliveState, MailboxState, RuntimeSettings,
 const bridge = vi.hoisted(() => ({
   setAppLanguage: vi.fn(),
   getAppLanguage: vi.fn(),
+  exitApp: vi.fn(),
   getState: vi.fn(),
   getSettings: vi.fn(),
   saveSettings: vi.fn(),
@@ -186,6 +187,7 @@ async function pressForward(): Promise<void> {
 beforeEach(() => {
   window.localStorage.clear()
   window.localStorage.setItem('dsh-mobile-language-v1', 'zh-CN')
+  window.localStorage.setItem('dsh-mobile-app-disclaimer-v1', '1')
   window.localStorage.setItem('dsh-mobile-onboarding-v1', '1')
   // jsdom 的会话历史在整个测试文件内共享：把当前记录复位成干净的根地址，
   // 保证每个用例的首屏都是主视图，也不会读到上一个用例留下的片段。
@@ -193,6 +195,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   bridge.setAppLanguage.mockResolvedValue(undefined)
   bridge.getAppLanguage.mockResolvedValue({ configured: false, language: 'zh-CN' })
+  bridge.exitApp.mockResolvedValue(undefined)
   bridge.getState.mockResolvedValue({ ...readyState })
   bridge.getSettings.mockResolvedValue({ ...settings })
   bridge.getShizukuState.mockResolvedValue({ ...shizuku })

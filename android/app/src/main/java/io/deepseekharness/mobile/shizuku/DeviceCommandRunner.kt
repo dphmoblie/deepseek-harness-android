@@ -150,8 +150,11 @@ class DeviceCommandRunner(
         timeoutMs: Long,
         useRootEngine: Boolean = false,
         rootGuardProfile: RootCommandGuard.Profile = RootCommandGuard.Profile.STRICT,
+        rootExecutionGrant: RootExecutionGrant? = null,
     ): DeviceCommandResult {
-        if (useRootEngine && command == DeviceCommand.SHELL) return executeOnRootEngine(param, timeoutMs, rootGuardProfile)
+        if (useRootEngine && command == DeviceCommand.SHELL) {
+            return executeOnRootEngine(param, timeoutMs, rootGuardProfile, rootExecutionGrant)
+        }
         val pending = Pending(UUID.randomUUID().toString(), command)
         if (inflight.putIfAbsent(sessionId, pending) != null) {
             throw RuntimeFailure("DEVICE_COMMAND_BUSY", "设备 Shell 会话正忙")
@@ -198,6 +201,7 @@ class DeviceCommandRunner(
         param: String,
         timeoutMs: Long,
         guardProfile: RootCommandGuard.Profile,
+        rootExecutionGrant: RootExecutionGrant? = null,
     ): DeviceCommandResult {
         if (param.isBlank() || param.toByteArray(Charsets.UTF_8).size > MAX_SHELL_SCRIPT_CHARS ||
             param.any { it == '\u0000' || it == '\r' }
@@ -208,7 +212,11 @@ class DeviceCommandRunner(
         // cached capability snapshot is only for the settings/status screen;
         // probing here would add a second su process and still could not relax
         // the fail-closed guard when unshare changes between the two launches.
-        val result = RootCommandRunner.run(param, timeoutMs, guardProfile = guardProfile)
+        val result = if (rootExecutionGrant != null) {
+            RootCommandRunner.runApproved(param, rootExecutionGrant, timeoutMs)
+        } else {
+            RootCommandRunner.run(param, timeoutMs, guardProfile = guardProfile)
+        }
         val degradations = result.diagnostics.filter { it.substringBefore(':') in RootSecurityWrapper.DEGRADATION_CODES }
         val body = buildString {
             append(result.output)
@@ -216,7 +224,11 @@ class DeviceCommandRunner(
                 if (isNotEmpty()) append('\n')
                 append("[根通道降级执行] 沙箱没能提供完整隔离：")
                 append(degradations.joinToString("、"))
-                append("。本次命令未能证明拥有完整挂载命名空间隔离，静态护栏已按严格档收紧。")
+                if (guardProfile == RootCommandGuard.Profile.STRICT && rootExecutionGrant == null) {
+                    append("。本次命令未能证明拥有完整挂载命名空间隔离，静态护栏已按严格档收紧。")
+                } else {
+                    append("。本次命令在未完整隔离的根通道下执行。")
+                }
             }
         }
         val errorCode = result.errorCode ?: if (result.ok) null else "DEVICE_COMMAND_FAILED"

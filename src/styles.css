@@ -2562,6 +2562,92 @@ button:disabled {
   font-variant-numeric: tabular-nums;
 }
 
+/*
+ * 应用级免责条款弹窗：首启强门禁与设置页回看共用。长条款只在正文区域内滚动，
+ * 标题、同意勾选框与「不同意并退出 / 同意并继续」操作栏始终固定可见。
+ */
+.disclaimer-gate-screen {
+  min-height: 100vh;
+  min-height: 100dvh;
+}
+
+.app-disclaimer-dialog {
+  width: min(100%, 560px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.app-disclaimer-dialog > .dialog-info-icon,
+.app-disclaimer-dialog > h2,
+.app-disclaimer-dialog > .disclaimer-confirm,
+.app-disclaimer-dialog > .app-disclaimer-exit-note,
+.app-disclaimer-dialog > .dialog-actions {
+  flex: none;
+}
+
+.app-disclaimer-body {
+  flex: 0 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-right: 4px;
+  color: var(--muted);
+  font-size: 0.8125rem;
+  line-height: 1.55;
+}
+
+.app-disclaimer-body > p {
+  margin: 0;
+}
+
+.app-disclaimer-body ol {
+  display: grid;
+  gap: 8px;
+  margin: 10px 0 0;
+  padding-left: 18px;
+}
+
+.app-disclaimer-body li strong {
+  color: var(--ink);
+  font-weight: var(--weight-semibold);
+}
+
+.app-disclaimer-version {
+  margin-top: 12px;
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.app-disclaimer-dialog .disclaimer-confirm {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 14px;
+  color: var(--ink);
+  font-size: 0.8125rem;
+  line-height: 1.5;
+  cursor: pointer;
+}
+
+.app-disclaimer-dialog .disclaimer-confirm input {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  margin: 1px 0 0;
+}
+
+.app-disclaimer-exit-note {
+  margin: 12px 0 0;
+  padding: 9px 11px;
+  border: 1px solid var(--red-line, var(--line-strong));
+  border-radius: var(--radius-inner);
+  background: var(--red-soft, var(--surface-sunken));
+  color: var(--red, var(--ink));
+  font-size: 0.8rem;
+  line-height: 1.5;
+}
+
 .toast {
   position: fixed;
   right: 14px;
