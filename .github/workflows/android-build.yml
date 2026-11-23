@@ -14,6 +14,11 @@ on:
         options:
           - preview
           - stable
+      webview_smoke:
+        description: '同时在 Android 10（API 29）模拟器上跑旧 WebView 兼容冒烟（约 15 分钟）'
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -63,6 +68,18 @@ jobs:
 
       - name: Build web bundle (tsc + vite)
         run: pnpm run build
+
+      # 「新版本 / 新内容先在安卓 10 口径上过一遍 dsh 的函数」的静态部分：
+      # 官方前端产物与应用外壳里用到的浏览器 API、以及产物的语法下限，逐条比
+      # Chromium 74（Android 10 出厂 WebView，缺口清单见 scripts/webview-compat-contract.mjs）。
+      # 语法层 polyfill 救不了，所以另跑一遍降级脚本，再按同一口径复扫降级后的产物。
+      - name: 旧 WebView 兼容（Chromium 74 基线）
+        run: |
+          set -euo pipefail
+          pnpm --dir harness-web run build
+          node scripts/webview-compat-scan.mjs --baseline android10-stock --strict
+          node scripts/downlevel-harness-frontend.mjs --quiet
+          node scripts/webview-compat-scan.mjs --baseline android10-stock --strict dist-legacy
 
       - name: Lint
         run: pnpm run lint
@@ -1144,3 +1161,91 @@ jobs:
             --gitleaks /tmp/gitleaks \
             --base "${{ github.event.pull_request.base.sha || github.event.before }}" \
             --head "${{ github.sha }}"
+
+  # 安卓 10（API 29）真机口径的兼容冒烟：把官方前端产物加载进**系统 WebView**（该镜像自带
+  # Chromium 74），断言没有 SyntaxError / is not a function，且 HarnessPolyfill 补的 API 都在。
+  # 用例见 android/app/src/androidTest/java/io/deepseekharness/mobile/LegacyWebViewCompatTest.kt。
+  #
+  # 只在手动触发且勾选 webview_smoke 时跑：模拟器冷启动 + NDK + 仪器测试约 15 分钟，
+  # 挂在每次推送里不划算；每次推送的静态口径检查在 checks 作业里（约 5 秒）。
+  webview-android10:
+    name: Legacy WebView smoke (Android 10 / API 29)
+    if: github.event_name == 'workflow_dispatch' && inputs.webview_smoke
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          submodules: recursive
+
+      - name: Set up Node.js 24.14.0
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '24.14.0'
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+
+      - name: Cache pnpm store
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ~/.local/share/pnpm/store
+          key: pnpm-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('pnpm-lock.yaml', 'scripts/runtime-profile/pnpm-lock.yaml') }}
+          restore-keys: |
+            pnpm-${{ runner.os }}-${{ runner.arch }}-
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # 仪器测试的夹具：build.gradle 的 syncHarnessWebFixture 把这份 dist 同步进 androidTest 资源。
+      - name: Build adapted Harness frontend (instrumented fixture)
+        run: pnpm --dir harness-web run build
+
+      - name: Set up JDK (pinned by README)
+        uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4.7.1
+        with:
+          distribution: temurin
+          java-version: '23.0.1'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3.2.2
+        with:
+          packages: 'platform-tools'
+
+      - name: Install SDK components
+        run: |
+          set -euo pipefail
+          yes | sdkmanager --licenses > /dev/null || true
+          sdkmanager "platforms;android-35" "build-tools;35.0.0" "cmake;3.22.1" "ndk;27.1.12297006"
+
+      # API 29 镜像自带的 WebView 是 Chromium 74——正是安卓 10 出厂机的内核版本。
+      - name: Enable KVM group perms
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Run legacy WebView compatibility test on Android 10
+        uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2
+        with:
+          api-level: 29
+          target: google_apis
+          arch: x86_64
+          profile: pixel_2
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
+          script: |
+            set -euo pipefail
+            ./gradlew :app:connectedDebugAndroidTest \
+              -Pandroid.testInstrumentationRunnerArguments.class=io.deepseekharness.mobile.LegacyWebViewCompatTest
+
+      - name: Upload instrumented test reports
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65e6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: webview-android10-reports
+          path: |
+            android/app/build/reports/androidTests
+            android/app/build/outputs/androidTest-results
+          if-no-files-found: ignore

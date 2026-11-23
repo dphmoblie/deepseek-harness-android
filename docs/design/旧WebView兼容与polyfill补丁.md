@@ -97,8 +97,8 @@ Harness 前端跑在**系统 WebView** 里，不是应用内置的 Node。两者
 
 ```sh
 node scripts/downlevel-harness-frontend.mjs --check     # 只报告
-node scripts/downlevel-harness-frontend.mjs             # → harness-web/dist-legacy（chrome74）
-node scripts/webview-compat-scan.mjs --baseline android10-stock harness-web/dist-legacy
+node scripts/downlevel-harness-frontend.mjs             # → dist-legacy（chrome74）
+node scripts/webview-compat-scan.mjs --baseline android10-stock dist-legacy
 ```
 
 - 用 `vite` 的 `transformWithEsbuild` 逐文件 lowering，保持 ESM 与相对 specifier 不变，
@@ -129,8 +129,31 @@ node scripts/webview-compat-scan.mjs --baseline android10-stock harness-web/dist
    **现在已不成立**：API 层已补到 Chromium 74，外壳语法目标也降到 74。真正的边界只剩
    「官方产物的语法层」（Chromium 94，需降级）。发下一个版本时要在新发布说明里改写这条，
    并把「Android 10 出厂 WebView」与 `minSdk`（26）的关系说清——两者不是一回事。
+4. **`webview-android10` 作业需要首次真跑校准**。它本机跑不起来（没有 KVM / 模拟器），
+   代码只验证到「仪器用例能编译 + 夹具能同步、能加载」。第一次 `workflow_dispatch` 时
+   要盯三处：模拟器是否分到 KVM、`connectedDebugAndroidTest` 是否真的只跑这一个类、
+   失败截图/日志是否上传。校准通过后再考虑把它提升成发版流水线的硬依赖。
 
 ## 5. 门禁与回归
+
+### 5.1 CI 里的两层（`.github/workflows/android-build.yml`）
+
+| 层 | 挂在哪个作业 | 跑什么 | 代价 | 能挡住什么 |
+| --- | --- | --- | --- | --- |
+| 静态口径 | `checks`（每次 push / PR） | `pnpm --dir harness-web run build` → 扫描器 `--strict` → 降级脚本 → 再扫降级产物 | 约 5 秒 | 上游新版本开始调用新 API、或产物语法下限抬高（新内容合进来就红，等不到发版） |
+| 真机口径 | `webview-android10`（`workflow_dispatch` 且勾选 `webview_smoke`） | API 29 模拟器（镜像自带 Chromium 74）跑 `LegacyWebViewCompatTest`：把官方产物加载进系统 WebView，断言没有 `SyntaxError` / `is not a function`、`#root` 真的渲染、注入脚本承诺的 API 都在 | 约 15 分钟 | 静态扫描看不见的东西：注入时机（document-start 是否可用）、模块脚本在该内核上的实际解析、WebView 特有的实现差异 |
+
+静态那层是**默认门禁**，真机那层是**发版前的确认**（模拟器冷启动 + NDK 太重，不该挂在每次推送里）。
+两层都不是「跑通一次就完事」：上游每升一次 `@deepseek-ai/dsh-web-frontend`，静态层会重新数一遍调用点，
+契约表里没有对应守卫的条目会让 `--strict` 退出 1。
+
+仪器测试的夹具由 `android/app/build.gradle` 的 `syncHarnessWebFixture` 任务同步（`harness-web/dist`
+→ `build/generated/androidTestAssets/harnessWeb/harness`），用 `WebViewAssetLoader` 以
+`https://appassets.androidplatform.net/assets/harness/index.html` 加载：模块脚本需要可信源，
+`file://` 下 `import` 与 `crypto` 都不成立。产物没构建时用例 `assume` 跳过并打印原因，
+不会把「没夹具」算成「兼容性通过」。
+
+### 5.2 本机命令
 
 ```sh
 node --test scripts/webview-compat.test.mjs     # 契约表 + 扫描器 + 降级脚本
@@ -138,6 +161,7 @@ node --test scripts/webview-polyfill.test.mjs   # 注入脚本在 vm 里的语�
 node scripts/webview-compat-scan.mjs --baseline android10-stock --strict   # 未覆盖缺口 → 退出 1
 node node_modules/vitest/vitest.mjs run src/legacyGlobals.test.ts
 cd android && ./gradlew :app:testDebugUnitTest --tests "*HarnessPolyfillTest*"
+cd android && ./gradlew :app:compileDebugAndroidTestKotlin   # 仪器用例能否编译
 ```
 
 `--strict` 只对「本该补却没补」的项失败。`polyfillable: false` 的条目（WeakRef、

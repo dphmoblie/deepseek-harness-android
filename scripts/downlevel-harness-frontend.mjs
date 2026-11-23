@@ -9,16 +9,18 @@
  * 语法层只能靠转换产物解决，API 层才归 polyfill。
  *
  * 三条边界：
- * 1. **绝不改原件**。`--from` 只读；产物写进 `--to`（默认 `harness-web/dist-legacy`）。
+ * 1. **绝不改原件**。`--from` 只读；产物写进 `--to`（默认仓库根的 `dist-legacy/`）。
  *    `harness-web/scripts/build-official-frontend.mjs` 的"逐字节保留官方产物"契约因此
  *    依然成立：被降级的是另一份派生目录。
- * 2. **文件名不变**。`index.html` 里的 `assets/index-<hash>.js` 是内容哈希命名，转换后
+ * 2. **产物不写进 `harness-web/` 子模块**：子模块的 `.gitignore` 不归本仓库管，写进去只会让
+ *    `git status` 出现 `M harness-web`。派生目录因此落在仓库根，与本仓库的 `dist/` 并列。
+ * 3. **文件名不变**。`index.html` 里的 `assets/index-<hash>.js` 是内容哈希命名，转换后
  *    哈希与内容不再匹配——这是可接受的：文件名只用于寻址，项目里没有基于哈希的完整性校验。
- * 3. **不改语义**。只做 esbuild 的语法 lowering（`?.`、`??`、`??=`、class 私有成员、
+ * 4. **不改语义**。只做 esbuild 的语法 lowering（`?.`、`??`、`??=`、class 私有成员、
  *    static block 等），不做压缩、不注入运行时。
  *
  * 用法：
- *   node scripts/downlevel-harness-frontend.mjs                     # → harness-web/dist-legacy
+ *   node scripts/downlevel-harness-frontend.mjs                     # → dist-legacy
  *   node scripts/downlevel-harness-frontend.mjs --from <dir> --to <dir>
  *   node scripts/downlevel-harness-frontend.mjs --target chrome74
  *   node scripts/downlevel-harness-frontend.mjs --check             # 只报告会转换多少，不落盘
@@ -35,7 +37,7 @@ import { syntaxFloor } from './webview-compat-contract.mjs'
 
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const DEFAULT_FROM = join(projectRoot, 'harness-web/dist')
-const DEFAULT_TO = join(projectRoot, 'harness-web/dist-legacy')
+const DEFAULT_TO = join(projectRoot, 'dist-legacy')
 const DEFAULT_TARGET = 'chrome74'
 
 const HELP = `官方前端语法降级（派生产物）
@@ -43,7 +45,7 @@ const HELP = `官方前端语法降级（派生产物）
 
 选项：
   --from <目录>     源产物，默认 harness-web/dist（只读）
-  --to <目录>       输出目录，默认 harness-web/dist-legacy
+  --to <目录>       输出目录，默认 dist-legacy（仓库根，已 gitignore）
   --target <目标>   esbuild 目标，默认 ${DEFAULT_TARGET}（Android 10 出厂 WebView）
   --check           只统计不写盘
   --quiet           只输出结论行`

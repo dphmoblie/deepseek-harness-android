@@ -141,6 +141,24 @@ def generateDevicePluginAssets = tasks.register('generateDevicePluginAssets', Sy
     }
 }
 
+/*
+ * 旧内核兼容用例（`LegacyWebViewCompatTest`）要在**真实系统 WebView** 里加载官方前端产物：
+ * 由子模块 `harness-web` 构建出的 `dist/` 同步进 androidTest 资源，再用 `WebViewAssetLoader`
+ * 以 https 源加载（模块脚本需要 https/localhost 这类可信源）。
+ *
+ * 产物不存在时任务跳过、用例 assume 失败并说明原因——不能把「没夹具」当成「兼容性通过」。
+ */
+def harnessWebDist = new File(appSourceRoot, 'harness-web/dist')
+def generatedHarnessWebFixtureAssetsDirectory =
+    layout.buildDirectory.dir('generated/androidTestAssets/harnessWeb')
+def syncHarnessWebFixture = tasks.register('syncHarnessWebFixture', Sync) {
+    into(generatedHarnessWebFixtureAssetsDirectory)
+    onlyIf { harnessWebDist.isDirectory() }
+    from(harnessWebDist) {
+        into('harness')
+    }
+}
+
 android {
     namespace 'io.deepseekharness.mobile'
     compileSdk 35
@@ -192,6 +210,10 @@ android {
             assets.srcDir(generatedAuthPreloadAssetsDirectory)
             assets.srcDir(generatedTurnSignalAssetsDirectory)
             assets.srcDir(generatedDevicePluginAssetsDirectory)
+        }
+        androidTest {
+            // 见文件上方 syncHarnessWebFixture：只给仪器测试用，不进 APK。
+            assets.srcDir(generatedHarnessWebFixtureAssetsDirectory)
         }
     }
 
@@ -308,6 +330,13 @@ dependencies {
     androidTestImplementation 'androidx.test.espresso:espresso-core:3.6.1'
 }
 
+/*
+ * 仪器测试要读 androidTest 资源里的官方前端产物：把 Sync 任务挂到资源合并之前，
+ * 否则 Gradle 会以「隐式依赖」报错（生成目录被当作源目录使用）。
+ */
+tasks.matching { it.name == 'mergeDebugAndroidTestAssets' }.configureEach {
+    dependsOn(syncHarnessWebFixture)
+}
 if (file('capacitor.build.gradle').exists()) {
     apply from: 'capacitor.build.gradle'
 }
