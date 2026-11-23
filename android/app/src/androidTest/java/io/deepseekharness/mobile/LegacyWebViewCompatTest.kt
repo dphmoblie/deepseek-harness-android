@@ -92,6 +92,13 @@ class LegacyWebViewCompatTest {
         try {
             assertTrue("页面 20 秒内没有加载完成", finished.await(20, TimeUnit.SECONDS))
             val userAgent = evaluate(webView.get()) { "navigator.userAgent" }
+            /*
+             * 与生产同一条兜底路径：Chromium 74 没有 DOCUMENT_START_SCRIPT（那是 WebView 83+
+             * 的能力），`installDocumentStart` 在它上面是空操作，HarnessActivity 靠
+             * `onMainFrameLoaded` 里的 `HarnessPolyfill.apply` 补交互期才调的 API。
+             * 用例必须复现这条路径，否则在 74 上会因为「装不上 document-start」而误判失败。
+             */
+            HarnessPolyfill.apply(webView.get() ?: error("WebView 已被销毁"))
             val rootChildren = waitForRootChildren(webView.get())
             val probes = evaluate(webView.get()) {
                 """
