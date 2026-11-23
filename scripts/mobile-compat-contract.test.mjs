@@ -75,7 +75,32 @@ test('app consumes the maintained mobile Harness adapter as a pinned submodule',
   const checkoutCount = workflow.match(/uses:\s*actions\/checkout@(?:v4|[0-9a-f]{40})/gu)?.length ?? 0
   const recursiveCount = workflow.match(/submodules:\s*recursive/gu)?.length ?? 0
   assert.ok(checkoutCount >= 4, 'all jobs should check out the app repository')
-  assert.equal(recursiveCount, 4, 'each app workflow job must recursively check out Harness')
+  /*
+   * 「需要子模块的作业必须递归检出」写成**规则**而不是数字。
+   *
+   * 原先这里是 `assert.equal(recursiveCount, 4)`：新增 `webview-android10`（旧内核冒烟作业）
+   * 之后计数变成 5，注释说的「每个作业」其实没被校验，只校验了一个会随作业数漂移的常量。
+   * 现在按作业体判断：只要这个作业会 `pnpm install` 或提到 `harness-web`，就必须带
+   * `submodules: recursive`——漏写会直接表现为「子模块为空、适配层构建静默降级」。
+   */
+  const jobsSection = workflow.slice(workflow.indexOf('\njobs:'))
+  const jobHeaders = [...jobsSection.matchAll(/^ {2}([a-z0-9-]+):$/gmu)]
+  const jobs = jobHeaders.map((match, index) => ({
+    name: match[1],
+    body: jobsSection.slice(
+      match.index,
+      index + 1 < jobHeaders.length ? jobHeaders[index + 1].index : jobsSection.length,
+    ),
+  }))
+  const needsAdapter = jobs.filter(job => /pnpm install|harness-web/u.test(job.body))
+  assert.ok(needsAdapter.length >= 4, '消耗 Harness 适配层的作业不见了，这条守护要跟着更新')
+  for (const job of needsAdapter) {
+    assert.match(
+      job.body,
+      /submodules:\s*recursive/u,
+      `作业 ${job.name} 会装依赖或构建前端，必须递归检出 harness-web`,
+    )
+  }
   assert.ok(recursiveCount < checkoutCount, 'the external Operit2 checkout is intentionally separate')
   assert.match(workflow, /pnpm --dir harness-web build/u)
 
