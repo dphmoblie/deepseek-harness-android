@@ -147,6 +147,15 @@ node scripts/webview-compat-scan.mjs --baseline android10-stock dist-legacy
 两层都不是「跑通一次就完事」：上游每升一次 `@deepseek-ai/dsh-web-frontend`，静态层会重新数一遍调用点，
 契约表里没有对应守卫的条目会让 `--strict` 退出 1。
 
+冒烟只跑兼容，不产出任何发布物：`build`（APK）与 `build-rootfs`（ARM64 运行时）在
+`inputs.webview_smoke == true` 时被作业级 `if` 跳过，`publish-release` 也追加了同一条守卫。
+没有这层守卫时，「只想在安卓 10 上过一遍」会顺带跑 20 多分钟的产物构建并**发出一个预览版**。
+
+```sh
+# 触发一次安卓 10 冒烟（只跑 checks / gates / webview-android10）
+gh workflow run android-build.yml -f webview_smoke=true
+```
+
 仪器测试的夹具由 `android/app/build.gradle` 的 `syncHarnessWebFixture` 任务同步（`harness-web/dist`
 → `build/generated/androidTestAssets/harnessWeb/harness`），用 `WebViewAssetLoader` 以
 `https://appassets.androidplatform.net/assets/harness/index.html` 加载：模块脚本需要可信源，
