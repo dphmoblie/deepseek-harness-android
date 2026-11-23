@@ -107,6 +107,9 @@ jobs:
 
   build:
     needs: [checks, build-runners, build-rootfs]
+    # 兼容冒烟（workflow_dispatch + webview_smoke）只关心旧内核跑不跑得起来，
+    # 不必为它重建 rootfs 与 APK；推送 / PR / 正常发布流程不受影响。
+    if: inputs.webview_smoke != true
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -367,6 +370,7 @@ jobs:
 
   build-rootfs:
     name: Build embedded runtime bundle (Ubuntu 24.04 ARM64 + Node 24.19 + dsh)
+    if: inputs.webview_smoke != true
     runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -855,7 +859,7 @@ jobs:
     permissions:
       contents: write
     # 推送分支只做构建与验证；发布必须手动 workflow_dispatch 并选择 release_type
-    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && github.event.inputs.release_type != ''
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && github.event.inputs.release_type != '' && inputs.webview_smoke != true
     runs-on: ubuntu-24.04
     steps:
       # 需要完整历史与标签：Release 说明里的「变更内容」由上一个发布标签到本次提交的
