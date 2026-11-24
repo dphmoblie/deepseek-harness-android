@@ -494,3 +494,52 @@ test('归档状态来自 workspace 注册表：命中才标，读不到就不标
   assert.equal(absent.sessions.length, 2)
   assert.ok(absent.sessions.every((session) => !('archived' in session)))
 })
+
+/**
+ * 归档会话单独占名额：只按「最近更新」截前 N 条时，旧归档会话会被在用的会话整批挤掉，
+ * 界面上的「已归档」于是永远是空的。这里用小样本（5 条未归档名额 + 20 条归档名额）钉住分配：
+ * 32 个会话文件的读取量在时间预算内稳定，不依赖机器负载。
+ */
+test('归档会话单独占 20 条名额，不会被在用的会话挤掉', async () => {
+  const root = createRoot()
+  const stateDirectory = join(root, 'storages')
+  mkdirSync(stateDirectory, { recursive: true })
+  const stateFile = join(stateDirectory, 'workspace.json')
+  const archivedIds = []
+  for (let index = 0; index < 7; index += 1) {
+    addSession(root, {
+      directory: `session-live-${String(index).padStart(2, '0')}`,
+      updatedAt: BASE_TIME + 10_000 + index,
+      lines: [title(`在用的会话 ${index}`)],
+    })
+  }
+  for (let index = 0; index < 25; index += 1) {
+    const id = `session-old-${String(index).padStart(2, '0')}`
+    addSession(root, {
+      directory: id,
+      updatedAt: BASE_TIME + index,
+      lines: [title(`归档的会话 ${index}`)],
+    })
+    archivedIds.push(id)
+  }
+  writeFileSync(stateFile, JSON.stringify({
+    unit: { name: 'workspace', version: 2 },
+    global: { archivedSessionIds: archivedIds },
+    tables: {},
+  }))
+
+  const report = await buildCatalog(5, root, null, stateFile)
+  const archived = report.sessions.filter((session) => session.archived === true)
+  const live = report.sessions.filter((session) => session.archived !== true)
+
+  assert.equal(report.sessions.length, 25, '总数 = 5 条未归档名额 + 20 条归档名额')
+  assert.equal(live.length, 5)
+  assert.equal(archived.length, 20)
+  assert.equal(report.truncated, true)
+  // 归档取**最近更新**的 20 条：old-24 … old-05，最旧的几条被截掉。
+  assert.ok(archived.some((session) => session.id === 'session-old-24'))
+  assert.ok(!archived.some((session) => session.id === 'session-old-00'))
+  // 合并回最近更新顺序：归档会话虽然更旧，也仍然按时间插在该在的位置上。
+  const times = report.sessions.map((session) => session.updatedAt)
+  assert.deepEqual(times, [...times].sort((left, right) => right - left))
+})

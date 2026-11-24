@@ -2300,8 +2300,8 @@ function isCatalogSessionId(value: unknown): value is string {
 }
 /** 会话标识长度上限：与原生侧 `SessionCatalogPayload.MAX_IDENTIFIER_CHARS` 同值。 */
 const MAX_SESSION_ID_CHARS = 200
-/** 会话条数上限：访客脚本与原生侧都按 50 截断，超出的载荷视为不可信。 */
-const MAX_RUNTIME_SESSIONS = 50
+/** 会话条数上限：访客脚本与原生侧都按「50 条未归档 + 20 条已归档 = 80」回传，超出视为不可信。 */
+const MAX_RUNTIME_SESSIONS = 80
 /** 标题长度上限（UTF-16 字符数，与原生侧 `MAX_TITLE_CHARS` 同口径）：宿主侧标题最长 80 字节，200 字符只是防御性天花板。 */
 const MAX_SESSION_TITLE_CHARS = 200
 /** 更新时间上限（毫秒，2100-01-01）：明显越界的取值视为不可信。 */

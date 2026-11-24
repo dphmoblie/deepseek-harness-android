@@ -2276,10 +2276,11 @@ describe('会话列表元数据校验', () => {
   })
 
   it('条数上限、数组形态与截断标记', () => {
-    const many = Array.from({ length: 51 }, (_, index) => session({ id: `session-${index}` }))
+    // 80 = 50 条未归档 + 20 条已归档：一次读取最多回传这么多条。
+    const many = Array.from({ length: 81 }, (_, index) => session({ id: `session-${index}` }))
 
     expect(() => validateRuntimeSessionListResult(ready({ sessions: many }))).toThrow('会话列表格式无效')
-    expect(validateRuntimeSessionListResult(ready({ sessions: many.slice(0, 50) })).status).toBe('ready')
+    expect(validateRuntimeSessionListResult(ready({ sessions: many.slice(0, 80) })).status).toBe('ready')
     for (const [label, sessions] of [['字符串', 'none'], ['对象', {}], ['null', null], ['undefined', undefined]] as const) {
       expect(() => validateRuntimeSessionListResult(ready({ sessions })), label).toThrow('会话列表格式无效')
     }

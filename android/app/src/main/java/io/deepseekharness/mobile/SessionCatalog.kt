@@ -26,8 +26,14 @@ import org.json.JSONObject
  * 纯逻辑、不碰 Android API，因此可以在本机 JVM 单测里直接覆盖。
  */
 internal object SessionCatalogPayload {
-    /** 回传条数上限：与访客脚本的 `MAX_LIMIT` 一致。 */
-    const val MAX_SESSIONS = 50
+    /**
+     * 回传条数上限：**80 = 50 条未归档 + 20 条已归档**（与访客脚本的
+     * `MAX_LIMIT + MAX_ARCHIVED` 同值）。
+     *
+     * 不沿用 50：只按「最近更新」取 50 条时，旧归档会话会被在用的会话整批挤出载荷，
+     * 界面上的「已归档」档于是永远是空的——那不是「没有归档会话」，是没读到。
+     */
+    const val MAX_SESSIONS = 80
 
     /** 标题上限（UTF-16 字符数）：宿主侧最长 80 字节，留足余量即可判定为不可信。 */
     const val MAX_TITLE_CHARS = 200
@@ -216,7 +222,7 @@ class SessionCatalog(context: Context, private val store: RuntimeStore) {
             prepareScript()
             // 上限 50 条、总预算 3 秒（脚本内）＋硬超时 6 秒（这里）；有界输出，取最后一行 JSON。
             val result = ProcessProbe.run(
-                resolver.launch(listOf(NODE_BINARY, SCRIPT_PATH, MAX_SESSIONS.toString())),
+                resolver.launch(listOf(NODE_BINARY, SCRIPT_PATH, MAX_UNARCHIVED.toString())),
                 store.currentRoot,
                 TIMEOUT_SECONDS,
                 outputLimit = OUTPUT_LIMIT,
@@ -261,7 +267,8 @@ class SessionCatalog(context: Context, private val store: RuntimeStore) {
         const val NODE_BINARY = "/opt/node/bin/node"
         const val SCRIPT_NAME = "session-catalog.cjs"
         const val SCRIPT_PATH = "/root/.dsh-mobile/$SCRIPT_NAME"
-        const val MAX_SESSIONS = SessionCatalogPayload.MAX_SESSIONS
+        /** 传给访客脚本的是**未归档**名额（50）；归档的 20 条由脚本自己补上。 */
+        const val MAX_UNARCHIVED = 50
 
         /** 硬超时（秒）：脚本内预算 3 秒，这里留一倍余量给 proot 启动与 zstd 解压。 */
         const val TIMEOUT_SECONDS = 6L

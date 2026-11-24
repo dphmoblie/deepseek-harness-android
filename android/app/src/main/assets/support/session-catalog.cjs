@@ -32,7 +32,8 @@
  * 把未知状态说成已归档（外壳据此分「未归档 / 已归档」两个分区）。
  *
  * 用法：`node session-catalog.cjs [limit] [rootDir] [workspaceStatePath]`
- *   - `limit`   返回条数上限，默认 50，最大 50；
+ *   - `limit`   **未归档**会话的条数上限，默认 50，最大 50；归档会话另有 20 条名额
+ *               （总上限 80），因此旧归档会话不会被在用的会话整批挤掉；
  *   - `rootDir` **仅供本机测试**（默认 `/root/.dsh/sessions`）；应用从不传它。
  *   - `workspaceStatePath` **仅供本机测试**（默认 `rootDir/../storages/workspace.json`）。
  *
@@ -50,8 +51,19 @@ const { Readable } = require('node:stream')
 
 /** 访客内会话根目录：`$DSH_HOME/sessions`，其中 `$DSH_HOME = /root/.dsh`。 */
 const DEFAULT_ROOT = '/root/.dsh/sessions'
+/**
+ * 未归档会话的条数上限（默认值）。
+ *
+ * 归档会话**单独留名额**（见 [MAX_ARCHIVED]）：只按「最近更新」取前 N 条时，旧归档会话会被
+ * 在用的会话整批挤出列表，界面上「已归档」永远是空的——那不是「没有归档会话」，是没读到。
+ * 两侧一起读，界面才有真实的两个档位。
+ */
 const DEFAULT_LIMIT = 50
 const MAX_LIMIT = 50
+/** 归档会话的条数上限：同样按最近更新取，只是不占未归档的名额。 */
+const MAX_ARCHIVED = 20
+/** 一次最多回传多少条会话（50 条未归档 + 20 条已归档）；宿主侧的上限与之同值。 */
+const MAX_SESSIONS_TOTAL = MAX_LIMIT + MAX_ARCHIVED
 /** 本次扫描的总时间预算（毫秒）：用尽时带上已读到的部分返回，并由 `truncated` 说明没读全。 */
 const TIME_BUDGET_MS = 3000
 /**
@@ -522,7 +534,15 @@ function parseEvent(line) {
   }
 }
 
-/** 主流程：列目录 → 按最近更新排序取前 N 条 → 逐条读标题与分组元数据。`hooks` 仅供单测观察（见 `readSession`）。 */
+/** 最近更新在前；同一时间按 id 升序，保证同一次读取的排序稳定（便于比对与单测）。 */
+function byRecency(left, right) {
+  return (right.updatedAt - left.updatedAt) || (left.id < right.id ? -1 : left.id > right.id ? 1 : 0)
+}
+
+/**
+ * 主流程：列目录 → 按最近更新排序 → **未归档取 `limit` 条、归档取 [MAX_ARCHIVED] 条** →
+ * 合并回最近更新顺序 → 逐条读标题与分组元数据。`hooks` 仅供单测观察（见 `readSession`）。
+ */
 async function buildCatalog(limit, root, hooks = null, workspaceStatePath = defaultWorkspaceStatePath(root)) {
   const started = Date.now()
   const deadline = started + TIME_BUDGET_MS
@@ -534,8 +554,12 @@ async function buildCatalog(limit, root, hooks = null, workspaceStatePath = defa
     // 有目录却一个都读不了：这是「读不到」，不是「没有会话」。
     throw controlledError('SESSION_CATALOG_UNREADABLE')
   }
-  candidates.sort((left, right) => (right.updatedAt - left.updatedAt) || (left.id < right.id ? -1 : left.id > right.id ? 1 : 0))
-  const selected = candidates.slice(0, limit)
+  candidates.sort(byRecency)
+  // 归档会话单独留名额：只按「最近更新」截前 N 条时，旧归档会话会被在用的会话整批挤掉，
+  // 界面上的「已归档」因此永远是空的。两侧各取各的，再合回最近更新顺序。
+  const unarchived = candidates.filter((candidate) => !archivedIds.has(candidate.id))
+  const archived = candidates.filter((candidate) => archivedIds.has(candidate.id))
+  const selected = [...unarchived.slice(0, limit), ...archived.slice(0, MAX_ARCHIVED)].sort(byRecency)
   // 有项目目录无法读取时，返回的候选列表只是可见子集，必须显式告诉调用方存在遗漏。
   let truncated = candidates.length > selected.length || unreadable > 0
   const sessions = []
@@ -618,4 +642,4 @@ if (require.main === module) {
   })
 }
 
-module.exports = { MAX_SCAN_BYTES, MAX_COMPRESSED_BYTES, buildCatalog, cleanTitleText, decodeSegment, fallbackSessionTitle, normalizeSessionTitle, parseArguments, readArchivedSessionIds, truncateTitleUtf8 }
+module.exports = { MAX_SCAN_BYTES, MAX_COMPRESSED_BYTES, MAX_ARCHIVED, MAX_SESSIONS_TOTAL, buildCatalog, cleanTitleText, decodeSegment, fallbackSessionTitle, normalizeSessionTitle, parseArguments, readArchivedSessionIds, truncateTitleUtf8 }

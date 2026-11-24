@@ -61,13 +61,14 @@ class SessionCatalogTest {
     }
 
     @Test
-    fun capsSessionsAtFiftyAndFlagsTruncation() {
-        val entries = (1..60).map { entry("session-$it", "标题 $it", it.toLong()) }
+    fun capsSessionsAtEightyAndFlagsTruncation() {
+        // 80 = 50 条未归档 + 20 条已归档（访客脚本按两侧各取，宿主只做上限兜底）。
+        val entries = (1..90).map { entry("session-$it", "标题 $it", it.toLong()) }
         val result = SessionCatalogPayload.fromProbe(true, false, payload(*entries.toTypedArray()).toString())
         val sessions = result.getJSONArray("sessions")
-        assertEquals(50, sessions.length())
+        assertEquals(80, sessions.length())
         assertEquals("session-1", sessions.getJSONObject(0).getString("id"))
-        assertEquals("session-50", sessions.getJSONObject(49).getString("id"))
+        assertEquals("session-80", sessions.getJSONObject(79).getString("id"))
         assertTrue(result.getBoolean("truncated"))
     }
 
