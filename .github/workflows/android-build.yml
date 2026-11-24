@@ -93,6 +93,11 @@ jobs:
       - name: Install Shizuku plugin contract dependencies
         run: pnpm --dir scripts/runtime-profile install --frozen-lockfile --ignore-scripts
 
+      - name: Smoke-test bundled plugins in real Cordis v4 container
+        # 使用真实 @deepseek-ai/cordis 代理验证内置设备插件激活与可选服务注入，
+        # 在 PR/推送早期即拦截类似 Issue #31 的 `without inject` 崩溃，不必等到打包阶段。
+        run: node scripts/ci-dsh-runtime-smoke.mjs --mode cordis-plugins --dsh-root scripts/runtime-profile
+
       - name: Audit shipped production dependencies
         run: |
           set -euo pipefail
@@ -283,7 +288,7 @@ jobs:
       - name: Build unsigned debug APK + lint + unit tests + instrumented test APK (PR)
         if: github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && github.ref != 'refs/heads/main')
         working-directory: android
-        run: ./gradlew assembleDebug lintDebug testDebugUnitTest assembleDebugAndroidTest --no-daemon
+        run: ./gradlew assembleDebug lintDebug lintRelease testDebugUnitTest assembleDebugAndroidTest --no-daemon
 
       - name: 校验 APK 团队签名（证书指纹与团队密钥库一致）
         if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
@@ -471,6 +476,22 @@ jobs:
           test -f node_modules/dshmarket/cordis.patch.yml
           node --input-type=module -e "const m = await import('dshmarket'); if (typeof m.apply !== 'function') throw new Error('dshmarket entry exports no apply()');"
           node -p "'bundled plugin market: dshmarket ' + require('dshmarket/package.json').version"
+
+      - name: Smoke-test real dsh web boot, plugin activation, auth preload, and node-pty on ARM64
+        # 端到端真机同构冒烟：按与 rootfs 相同的 profile 布局和命令行参数顺序拉起 dsh web，
+        # 断言零插件激活失败、零 without inject / 缺模块 / 补丁未命中告警、401→200 鉴权链路与
+        # ARM64 原生 node-pty 模块全部正常；失败直接阻断打包上传。
+        run: |
+          set -euo pipefail
+          node scripts/ci-dsh-runtime-smoke.mjs \
+            --mode cordis-plugins \
+            --dsh-root /tmp/dsh-root
+          node scripts/ci-dsh-runtime-smoke.mjs \
+            --mode dsh-boot \
+            --dsh-root /tmp/dsh-root \
+            --mobile-profile scripts/mobile-profile.example.json \
+            --auth-preload scripts/mobile-auth-preload.cjs \
+            --verify-pty-native
 
       - name: Cache pinned rootfs inputs
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
