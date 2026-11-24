@@ -5,6 +5,7 @@ import android.system.Os
 import android.system.OsConstants
 import java.io.File
 import java.io.IOException
+import java.nio.file.AccessDeniedException
 import java.nio.file.DirectoryIteratorException
 import java.nio.file.DirectoryStream
 import java.nio.file.Files
@@ -14,6 +15,8 @@ import java.nio.file.Path
 import java.nio.file.SecureDirectoryStream
 import java.nio.file.attribute.BasicFileAttributeView
 import java.nio.file.attribute.BasicFileAttributes
+import java.nio.file.attribute.PosixFileAttributeView
+import java.nio.file.attribute.PosixFilePermission
 
 object RuntimeFiles {
     fun existsNoFollow(file: File): Boolean = try {
@@ -103,6 +106,9 @@ object RuntimeFiles {
             throw RuntimeFailure("FILESYSTEM_ERROR", "无法检查运行时文件", error)
         }
         if (attributes.isDirectory && !attributes.isSymbolicLink) {
+            // rootfs 里可能含只读目录（0555/0500 等）；非 root 应用 UID 删除其子项前必须先补齐
+            // 该真实目录自身的属主 rwx 权限，否则卸载/更新残留会持续报 ACCESS_DENIED 无法回收。
+            ensureOwnerDirectoryAccessFallback(path)
             try {
                 Files.newDirectoryStream(path).use { directory ->
                     for (entry in directory) deleteEntryFallback(entry, depth + 1, budget)
@@ -119,6 +125,18 @@ object RuntimeFiles {
             Files.delete(path)
         } catch (_: NoSuchFileException) {
             return
+        } catch (error: AccessDeniedException) {
+            if (!attributes.isSymbolicLink && runCatching { path.toFile().setWritable(true, true) }.getOrDefault(false)) {
+                try {
+                    Files.delete(path)
+                    return
+                } catch (_: NoSuchFileException) {
+                    return
+                } catch (retryError: IOException) {
+                    throw RuntimeFailure("FILESYSTEM_ERROR", "无法安全清理运行时文件", retryError)
+                }
+            }
+            throw RuntimeFailure("FILESYSTEM_ERROR", "无法安全清理运行时文件", error)
         } catch (error: IOException) {
             throw RuntimeFailure("FILESYSTEM_ERROR", "无法安全清理运行时文件", error)
         }
@@ -169,6 +187,7 @@ object RuntimeFiles {
         }
         val attributes = readAttributesNoFollow(parent, name) ?: return
         if (attributes.isDirectory && !attributes.isSymbolicLink) {
+            ensureOwnerDirectoryAccess(parent, name)
             val directory = openDirectoryNoFollow(parent, name) ?: return
             directory.use {
                 for (entry in directory) {
@@ -191,6 +210,55 @@ object RuntimeFiles {
             } catch (_: NoSuchFileException) {
                 return
             }
+        }
+    }
+
+    private fun ensureOwnerDirectoryAccess(parent: SecureDirectoryStream<Path>, name: Path) {
+        try {
+            val posix = parent.getFileAttributeView(
+                name,
+                PosixFileAttributeView::class.java,
+                LinkOption.NOFOLLOW_LINKS,
+            ) ?: return
+            val perms = posix.readAttributes().permissions().toMutableSet()
+            if (perms.addAll(OWNER_DIR_PERMISSIONS)) {
+                posix.setPermissions(perms)
+            }
+        } catch (_: Throwable) {
+            // 尽力补齐属主 rwx；不支持 POSIX 或无权修改时交由后续打开/删除路径抛出真实错误。
+        }
+    }
+
+    private fun ensureOwnerDirectoryAccessFallback(path: Path) {
+        try {
+            val posix = Files.getFileAttributeView(
+                path,
+                PosixFileAttributeView::class.java,
+                LinkOption.NOFOLLOW_LINKS,
+            )
+            if (posix != null) {
+                val perms = posix.readAttributes().permissions().toMutableSet()
+                if (perms.addAll(OWNER_DIR_PERMISSIONS)) {
+                    posix.setPermissions(perms)
+                }
+                return
+            }
+        } catch (_: Throwable) {
+            // 忽略 POSIX 视图异常，退回标准 File 权限补齐。
+        }
+        try {
+            Os.chmod(path.toString(), 0x1c0)
+            return
+        } catch (_: Throwable) {
+            // 非 Android JVM 或 chmod 失败时再退回标准 File 权限补齐。
+        }
+        try {
+            val file = path.toFile()
+            file.setReadable(true, true)
+            file.setWritable(true, true)
+            file.setExecutable(true, true)
+        } catch (_: Throwable) {
+            // 尽力补齐属主权限；真正不可删除时仍由后续 Files.delete 抛出明确异常。
         }
     }
 
@@ -233,6 +301,11 @@ object RuntimeFiles {
         false
     }
 
+    private val OWNER_DIR_PERMISSIONS = setOf(
+        PosixFilePermission.OWNER_READ,
+        PosixFilePermission.OWNER_WRITE,
+        PosixFilePermission.OWNER_EXECUTE,
+    )
     private const val CONTENT_COMPARE_BUFFER = 64 * 1024
     private const val MAX_DELETE_DEPTH = 256
     private const val MAX_DELETE_ENTRIES = 250_000

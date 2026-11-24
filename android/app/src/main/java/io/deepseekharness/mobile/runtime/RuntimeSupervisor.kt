@@ -730,12 +730,10 @@ class RuntimeSupervisor(
             val launchUrl = output.harnessLaunchUrl()
             if (launchUrl != null && hasExpectedAuthChallenge(port)) {
                 // 复核窗口的语义见 HarnessStartupTimingPolicy：确认「没马上挂」，不是等启动。
+                // 进程仍存活且已打印启动 URL 并通过回环 401 鉴权时，不得按输出关键词把可选插件的
+                // 非致命告警（例如第三方插件缺模块或 cordis-plugin-loader 堆栈）误判成启动崩溃。
                 pauseWhileStarting(HarnessStartupTimingPolicy.STABILITY_MS)
                 if (!process.isAlive) throwHarnessExit(output)
-                val knownFailure = RuntimeDiagnostics.harnessFailure(output.snapshot())
-                if (knownFailure.code != "HARNESS_EXITED") {
-                    throw RuntimeFailure(knownFailure.code, knownFailure.message)
-                }
                 val confirmedUrl = output.harnessLaunchUrl()
                 if (confirmedUrl != null && hasExpectedAuthChallenge(port)) return confirmedUrl
             }

@@ -75,6 +75,28 @@ class RuntimeDiagnosticsTest {
     }
 
     @Test
+    fun `does not misclassify cordis plugin loader stack traces as PRoot execution failures`() {
+        val cordisPluginWarning = """
+            dsh: warning: 1 entry did not activate
+            mobile-shizuku-tools (@deepseek-harness/dsh-mobile-shizuku): Error: cannot get property "workingDirectory" without inject
+                at bindService (file:///opt/dsh/plugins/dsh-mobile-shizuku/lib/pty-guard.js:335:12)
+                at Fiber.execute (file:///opt/dsh/node_modules/.pnpm/@deepseek-ai+cordis@4.0.5_@deepseek-ai+cordis-plugin-include@1.0.10_@deepseek-ai+cordis-plugin-loader@1.0.6/node_modules/@deepseek-ai/cordis/lib/index.js:1068:24)
+            dsh web: http://127.0.0.1:3080/?token=redacted
+        """.trimIndent()
+
+        assertEquals("HARNESS_EXITED", RuntimeDiagnostics.harnessFailure(cordisPluginWarning).code)
+        assertNull(RuntimeDiagnostics.prootFailure(ProcessProbeResult(1, false, cordisPluginWarning)))
+        assertEquals(
+            "PROOT_GUEST_EXEC_FAILED",
+            RuntimeDiagnostics.harnessFailure("proot error: loader was not found").code,
+        )
+        assertEquals(
+            "PROOT_GUEST_EXEC_FAILED",
+            RuntimeDiagnostics.harnessFailure("cannot execute libdsh_proot_loader.so: Permission denied").code,
+        )
+    }
+
+    @Test
     fun `classifies the preferred compatibility attempt first`() {
         val failure = RuntimeDiagnostics.guestFailure(
             listOf(

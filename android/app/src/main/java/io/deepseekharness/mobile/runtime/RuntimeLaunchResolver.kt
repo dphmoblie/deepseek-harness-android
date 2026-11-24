@@ -601,7 +601,7 @@ internal object RuntimeDiagnostics {
                 ClassifiedFailure("PROOT_PTRACE_DENIED", "系统内核拒绝 PRoot 所需的 ptrace 操作")
             "seccomp" in output && ("not supported" in output || "operation not permitted" in output) ->
                 ClassifiedFailure("PROOT_SECCOMP_UNAVAILABLE", "系统内核的 seccomp 策略与 PRoot 不兼容")
-            "proot error" in output || "execve(" in output || "loader" in output ->
+            isProotExecFailureOutput(output) ->
                 ClassifiedFailure("PROOT_GUEST_EXEC_FAILED", "PRoot 无法加载 Ubuntu 程序")
             else -> null
         }
@@ -646,11 +646,22 @@ internal object RuntimeDiagnostics {
                 ClassifiedFailure("HARNESS_NATIVE_MODULE_FAILED", "Harness 原生模块无法在当前设备运行")
             "illegal instruction" in normalized ->
                 ClassifiedFailure("NODE_CPU_UNSUPPORTED", "设备 CPU 无法执行内置 Node.js")
-            "proot error" in normalized || "execve(" in normalized || "loader" in normalized ->
+            isProotExecFailureOutput(normalized) ->
                 ClassifiedFailure("PROOT_GUEST_EXEC_FAILED", "PRoot 无法加载 Ubuntu 程序")
             else -> ClassifiedFailure("HARNESS_EXITED", "Harness 在完成启动前已退出")
         }
     }
+
+    /**
+     * 仅匹配 PRoot 自身的加载失败特征，不能匹配泛化的 `loader` 子串：
+     * Node/Cordis 的任何告警堆栈都包含 `@deepseek-ai+cordis-plugin-loader` 或 `esm/loader`，
+     * 泛化匹配会把普通插件告警误判为 `PROOT_GUEST_EXEC_FAILED`。
+     */
+    private fun isProotExecFailureOutput(normalized: String): Boolean =
+        "proot error" in normalized ||
+            "execve(" in normalized ||
+            "proot_loader" in normalized ||
+            "libdsh_proot_loader" in normalized
 }
 
 internal object ProcessProbe {
