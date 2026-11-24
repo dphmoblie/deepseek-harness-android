@@ -143,9 +143,27 @@ object RootCommandGuard {
             ),
             unconfinedCaps = true,
         ),
+        Rule(
+            "高风险操作使用不确定路径",
+            // 变量、通配符和路径穿越可能把写入/删除目标解析到核心目录；最大档也不能静默放行。
+            Regex(
+                command("(?:rm|cp|mv|install|shred|truncate|dd|tee)") +
+                    """[^|;&]*\s/[^|;&]*(?:\$|`|[*?]|\[|/\.\.(?:/|$)|/\.(?:/|$)|/{2,})""",
+            ),
+            unconfinedCaps = true,
+        ),
         // ---- 数据销毁：保护数据根与系统关键目录；/data/local/tmp 与模块目录仍可常规操作 ----
         Rule("删除数据根", Regex(command("rm") + """[^|;&]*\s/data/?\s*(?:$|[;|&)])""")),
         Rule("删除数据通配", Regex(command("rm") + """[^|;&]*\s/data/\*""")),
+        Rule(
+            "删除时使用不确定路径",
+            // 变量、命令替换、通配符和路径穿越无法在静态分类时可靠解析，按极危处理，
+            // 防止 `rm -rf /$name`、`rm -rf /d*` 或 `/data/../data` 绕过数据根规则。
+            Regex(
+                command("rm") +
+                    """[^|;&]*\s/(?:\$|`|[*?]|\[|data/(?:\.\.?(?:/|$)|/{2,}))""",
+            ),
+        ),
         Rule(
             "删除系统数据",
             Regex(

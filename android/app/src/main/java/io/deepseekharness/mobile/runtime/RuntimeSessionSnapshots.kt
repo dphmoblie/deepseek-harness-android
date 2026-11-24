@@ -4,9 +4,12 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.io.IOException
+import java.nio.file.AtomicMoveNotSupportedException
+import java.nio.file.FileAlreadyExistsException
 import java.nio.file.Files
 import java.nio.file.LinkOption
 import java.nio.file.Path
+import java.nio.file.StandardCopyOption
 import java.nio.file.attribute.BasicFileAttributes
 import java.time.Instant
 import java.util.Locale
@@ -20,7 +23,9 @@ internal interface SnapshotCipher {
 
 internal object PlaintextSnapshotCipher : SnapshotCipher {
     override fun encrypt(source: File, destination: File) { Files.copy(source.toPath(), destination.toPath()) }
-    override fun decrypt(source: File, destination: File, requireEncrypted: Boolean) { Files.copy(source.toPath(), destination.toPath()) }
+    override fun decrypt(source: File, destination: File, requireEncrypted: Boolean) {
+        Files.copy(source.toPath(), destination.toPath(), StandardCopyOption.REPLACE_EXISTING)
+    }
     override fun plaintextBytes(file: File, requireEncrypted: Boolean): Long = Files.size(file.toPath())
 }
 
@@ -464,9 +469,7 @@ internal class RuntimeSessionSnapshots(
             )
         }
         val targetRoot = if (meta.layoutVersion >= 2) sessionRoot else File(sessionRoot, "sessions")
-        if (!(targetRoot.isDirectory || targetRoot.mkdirs())) {
-            throw RuntimeFailure(RuntimeSessionSnapshotCodes.FAILED, "无法准备数据目录")
-        }
+        ensureRestoreDirectory(sessionRoot, targetRoot)
         var restored = 0
         var skipped = 0
         for (entry in entries) {
@@ -476,14 +479,23 @@ internal class RuntimeSessionSnapshots(
                 continue
             }
             target.parentFile?.let { parent ->
-                if (!existsNoFollow(parent) && !parent.mkdirs()) {
-                    throw RuntimeFailure(RuntimeSessionSnapshotCodes.FAILED, "无法创建会话目录")
-                }
+                ensureRestoreDirectory(targetRoot, parent)
             }
+            var temporary: File? = null
             try {
-                cipher.decrypt(entry.source, target, requireEncrypted)
+                // GCM authenticates on stream close. Decode beside the destination first so a
+                // damaged file can never leave a partial target that blocks a later retry.
+                val targetParent = target.parentFile
+                    ?: throw RuntimeFailure(RuntimeSessionSnapshotCodes.FAILED, "无法确定恢复目标目录")
+                temporary = Files.createTempFile(targetParent.toPath(), ".dsh-restore-", ".part").toFile()
+                cipher.decrypt(entry.source, temporary, requireEncrypted)
                 if (target.name == "settings.yaml" || target.name == ".credentials.yaml") {
-                    runCatching { Files.setPosixFilePermissions(target.toPath(), java.nio.file.attribute.PosixFilePermissions.fromString("rw-------")) }
+                    runCatching { Files.setPosixFilePermissions(temporary.toPath(), java.nio.file.attribute.PosixFilePermissions.fromString("rw-------")) }
+                }
+                try {
+                    Files.move(temporary.toPath(), target.toPath(), StandardCopyOption.ATOMIC_MOVE)
+                } catch (_: AtomicMoveNotSupportedException) {
+                    Files.move(temporary.toPath(), target.toPath())
                 }
             } catch (error: SnapshotKeyUnavailableException) {
                 throw RuntimeFailure(
@@ -497,6 +509,8 @@ internal class RuntimeSessionSnapshots(
                     "无法恢复数据文件（备份已损坏或设备密钥已失效，历史加密备份可能无法恢复）",
                     error,
                 )
+            } finally {
+                temporary?.let { runCatching { Files.deleteIfExists(it.toPath()) } }
             }
             restored += 1
         }
@@ -651,6 +665,39 @@ internal class RuntimeSessionSnapshots(
             throw RuntimeFailure(RuntimeSessionSnapshotCodes.FAILED, "会话文件相对路径无效")
         }
         return relative
+    }
+
+    /** Create restore parents one component at a time and reject symlinked directories. */
+    private fun ensureRestoreDirectory(root: File, directory: File) {
+        val rootPath = root.toPath().toAbsolutePath().normalize()
+        val directoryPath = directory.toPath().toAbsolutePath().normalize()
+        if (!directoryPath.startsWith(rootPath)) {
+            throw RuntimeFailure(RuntimeSessionSnapshotCodes.FAILED, "恢复目录越出会话数据根")
+        }
+        if (!isDirectoryNoFollow(root)) {
+            if (!root.exists() && !root.mkdirs()) {
+                throw RuntimeFailure(RuntimeSessionSnapshotCodes.FAILED, "无法准备数据目录")
+            }
+            if (!isDirectoryNoFollow(root)) {
+                throw RuntimeFailure(RuntimeSessionSnapshotCodes.FAILED, "会话数据根不是有效目录")
+            }
+        }
+        var cursor = rootPath
+        for (component in rootPath.relativize(directoryPath)) {
+            cursor = cursor.resolve(component)
+            val current = File(cursor.toString())
+            if (attributesNoFollow(current) == null) {
+                try {
+                    Files.createDirectory(cursor)
+                } catch (_: FileAlreadyExistsException) {
+                    // Concurrent creation is accepted only after the NoFollow check below.
+                }
+            }
+            val attributes = attributesNoFollow(current)
+            if (attributes == null || attributes.isSymbolicLink || !attributes.isDirectory) {
+                throw RuntimeFailure(RuntimeSessionSnapshotCodes.FAILED, "恢复路径包含不受信任的目录")
+            }
+        }
     }
 
     private fun listMeta(): List<RuntimeSessionSnapshotMeta> {

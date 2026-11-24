@@ -395,8 +395,13 @@ jobs:
 
       - name: Build Android-adapted official Harness frontend
         run: |
-          pnpm install --frozen-lockfile --filter @dsh-mobile/harness-web...
+          pnpm install --frozen-lockfile
           pnpm --dir harness-web build
+          # The runtime bundle is rebuilt in this job. Generate the same
+          # Chromium 74 compatible tree that the checks job scans, then pass
+          # that tree to the rebuilder instead of packaging raw upstream JS.
+          node scripts/downlevel-harness-frontend.mjs --quiet
+          node scripts/webview-compat-scan.mjs --baseline android10-stock --strict dist-legacy
 
       - name: Prepare dsh runtime for linux/arm64 (compile node-pty from source)
         run: |
@@ -782,7 +787,7 @@ jobs:
             python3 scripts/rebuild-rootfs-frontend.py \
               --bundle /tmp/rootfs.bundle \
               --manifest /tmp/runtime-manifest.json \
-              --dist harness-web/dist \
+              --dist dist-legacy \
               --runtime-version "${RUNTIME_VERSION}"
             ls -la /tmp/rootfs.bundle /tmp/runtime-manifest.json
             sha256sum /tmp/rootfs.bundle
@@ -1203,7 +1208,12 @@ jobs:
 
       # 仪器测试的夹具：build.gradle 的 syncHarnessWebFixture 把这份 dist 同步进 androidTest 资源。
       - name: Build adapted Harness frontend (instrumented fixture)
-        run: pnpm --dir harness-web run build
+        run: |
+          pnpm --dir harness-web run build
+          node scripts/downlevel-harness-frontend.mjs --quiet
+          node scripts/webview-compat-scan.mjs --baseline android10-stock --strict dist-legacy
+          rm -rf harness-web/dist
+          mv dist-legacy harness-web/dist
 
       - name: Set up JDK (pinned by README)
         uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4.7.1

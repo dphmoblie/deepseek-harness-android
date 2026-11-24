@@ -39,7 +39,18 @@ test('Android rootfs workflow packages the adapted official frontend at the root
   assert.match(workflow, /Build Android-adapted official Harness frontend/)
   assert.match(workflow, /pnpm --dir harness-web build/)
   assert.match(workflow, /rebuild-rootfs-frontend\.py/)
-  assert.match(workflow, /--dist\s+harness-web\/dist/)
+  const buildRootfs = workflow.slice(workflow.indexOf('  build-rootfs:'))
+  assert.match(buildRootfs, /node scripts\/downlevel-harness-frontend\.mjs --quiet/)
+  assert.match(buildRootfs, /node scripts\/webview-compat-scan\.mjs --baseline android10-stock --strict dist-legacy/)
+  assert.match(buildRootfs, /--dist\s+dist-legacy/)
+  assert.ok(
+    buildRootfs.indexOf('node scripts/downlevel-harness-frontend.mjs') < buildRootfs.indexOf('Build bundle + manifest'),
+    '运行时打包前必须先生成降级前端',
+  )
+  const smoke = workflow.slice(workflow.indexOf('  webview-android10:'))
+  assert.match(smoke, /node scripts\/downlevel-harness-frontend\.mjs --quiet/)
+  assert.match(smoke, /node scripts\/webview-compat-scan\.mjs --baseline android10-stock --strict dist-legacy/)
+  assert.match(smoke, /mv dist-legacy harness-web\/dist/)
 
   const rebuilder = await readFile(resolve(appRoot, 'scripts/rebuild-rootfs-frontend.py'), 'utf8')
   assert.match(rebuilder, /is_frontend_dist_path\(member\.name\)/)

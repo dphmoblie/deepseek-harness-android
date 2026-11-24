@@ -539,6 +539,25 @@ class RuntimeSessionSnapshotsTest {
     }
 
     @Test
+    fun restoreRejectsSymlinkedParentDirectories() {
+        val harness = harness()
+        harness.write("sessions/link/file.jsonl", "快照内容")
+        val id = harness.snapshots.create().snapshots.first().id
+        val external = File(harness.sessionRoot.parentFile, "outside").apply { mkdirs() }
+        val link = File(harness.sessionRoot, "sessions/link")
+        link.deleteRecursively()
+        try {
+            Files.createSymbolicLink(link.toPath(), external.toPath())
+        } catch (error: Throwable) {
+            assumeNoException("当前平台/权限不支持创建符号链接，跳过", error)
+        }
+
+        assertEquals(RuntimeSessionSnapshotCodes.FAILED, harness.codeOf { harness.snapshots.restore(id) })
+        assertFalse(File(external, "file.jsonl").exists())
+        assertTrue(Files.isSymbolicLink(link.toPath()))
+    }
+
+    @Test
     fun runtimeSnapshotCipherEncryptsDecryptsCountsPlaintextAndEnforcesLayout2Header() {
         val root = Files.createTempDirectory("cipher-snap-test").toFile()
         try {
@@ -598,6 +617,27 @@ class RuntimeSessionSnapshotsTest {
             assertTrue((keyLostError.message ?: "").contains("不可恢复"))
             assertFalse(File(sessionRoot, "sessions/chat.jsonl").exists())
             allowKey = true
+
+            // GCM 标签损坏可能发生在部分明文已经写出之后。恢复失败时目标必须保持不存在，
+            // 否则下一次恢复会把残留文件当成同名新内容而跳过，用户无法重试。
+            File(sessionRoot, "sessions/chat.jsonl").delete()
+            File(sessionRoot, "settings.yaml").delete()
+            val corruptedCiphertext = diskBytes.copyOf().also { it[it.lastIndex] = (it.last().toInt() xor 1).toByte() }
+            encryptedFile.writeBytes(corruptedCiphertext)
+            val corruptedError = try {
+                snapshots.restore(meta.id)
+                throw AssertionError("密文认证失败时必须拒绝恢复")
+            } catch (error: RuntimeFailure) {
+                error
+            }
+            assertEquals(RuntimeSessionSnapshotCodes.FAILED, corruptedError.code)
+            assertFalse(File(sessionRoot, "sessions/chat.jsonl").exists())
+            encryptedFile.writeBytes(diskBytes)
+            val retry = snapshots.restore(meta.id)
+            assertEquals(2, retry.restoredFileCount)
+            assertTrue(File(sessionRoot, "sessions/chat.jsonl").readBytes().contentEquals(secretBytes))
+            File(sessionRoot, "sessions/chat.jsonl").delete()
+            File(sessionRoot, "settings.yaml").delete()
 
             // layout 2 快照缺少 DSH2 头（伪造/损坏成明文）必须直接失败，禁止把未加密内容原样拷出。
             encryptedFile.writeBytes(secretBytes)
