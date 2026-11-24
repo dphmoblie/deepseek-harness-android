@@ -459,7 +459,38 @@ export interface RuntimeSessionSummary {
   parentId?: string
   /** 子代理的预设名（`agentPreset`，例如 `standard` / `cordis`）；只用于显示与搜索。 */
   agentName?: string
+  /**
+   * dsh 的 workspace 注册表把这条会话列入了归档集合（`~/.dsh/storages/workspace.json` 的
+   * `global.archivedSessionIds`）。
+   *
+   * 缺省 = 未归档：旧版原生桥不返回这个字段，界面一律按「未归档」处理，绝不会把读不到的
+   * 归档状态显示成「已归档」。归档状态由 dsh 自己维护，外壳只读，不改写。
+   */
+  archived?: boolean
 }
+
+/**
+ * 删除一条已归档会话的结果。
+ *
+ * 用三态结果而不是 reject：删除被拒绝的每一种原因都要能对用户说清楚（会话还在跑、
+ * 会话没归档、会话已经不在了），把它们折叠成一句「删除失败」等于不解释。
+ */
+export type RuntimeSessionDeleteResult =
+  | { deleted: true }
+  | { deleted: false; reason: RuntimeSessionDeleteReason }
+
+/**
+ * 删除被拒绝的受控原因：
+ * - `RUNTIME_RUNNING`：Harness 还在跑，会话日志可能正被写，删除只会留下半个会话；
+ * - `SESSION_NOT_ARCHIVED`：只允许删已归档会话（未归档的会话仍可能在用）；
+ * - `SESSION_NOT_FOUND`：磁盘上已经没有这条会话（可能刚被别处删掉）；
+ * - `SESSION_DELETE_FAILED`：其余文件系统失败。
+ */
+export type RuntimeSessionDeleteReason =
+  | 'RUNTIME_RUNNING'
+  | 'SESSION_NOT_ARCHIVED'
+  | 'SESSION_NOT_FOUND'
+  | 'SESSION_DELETE_FAILED'
 
 /**
  * 会话列表读不到的原因（受控枚举；对用户可见的文案由界面决定，桥不返回句子）。
@@ -2296,6 +2327,14 @@ export interface RuntimeBridge {
    * 注意与下面的「会话快照」区分：那是**整目录备份/恢复**，这里只是列表元数据。
    */
   listSessions: () => Promise<RuntimeSessionListResult>
+  /**
+   * 删除一条**已归档**会话（会话日志目录 + 投影缓存 + 注册表里的记账）。
+   *
+   * 只接受已归档会话：未归档的会话可能正被使用或仍有在跑的工作，删除它没有任何补救余地。
+   * 原生侧在 Harness 运行期间一律拒绝（`RUNTIME_RUNNING`），因为会话日志此时正在追加。
+   * 会话在工作区里是否归档由 dsh 自己维护；外壳删除前会从最近的列表快照核对一次。
+   */
+  deleteSession: (sessionId: string) => Promise<RuntimeSessionDeleteResult>
   /**
    * 会话快照总览（无参数，只读）。
    *

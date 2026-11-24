@@ -115,8 +115,25 @@ class SessionCatalogTest {
     }
 
     @Test
-    fun keepsGroupingFieldsButDropsEachInvalidOneWithoutLosingTheSession() {
+    fun forwardsTheArchiveFlagOnlyWhenItIsReallyTrue() {
         val result = SessionCatalogPayload.fromProbe(
+            true,
+            false,
+            payload(
+                entry("session-old", "旧会话", 2000L, mapOf("archived" to true)),
+                entry("session-live", "在用会话", 1000L, mapOf("archived" to false)),
+                // 字符串标记不算：归档与否不能靠「像 true 的字符串」来决定。
+                entry("session-string", "字符串标记", 500L, mapOf("archived" to "true")),
+            ).toString(),
+        )
+        val sessions = result.getJSONArray("sessions")
+        assertTrue(sessions.getJSONObject(0).getBoolean("archived"))
+        assertFalse(sessions.getJSONObject(1).has("archived"))
+        assertFalse(sessions.getJSONObject(2).has("archived"))
+    }
+
+    @Test
+    fun keepsGroupingFieldsButDropsEachInvalidOneWithoutLosingTheSession() {        val result = SessionCatalogPayload.fromProbe(
             true,
             false,
             payload(

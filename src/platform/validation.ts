@@ -68,6 +68,8 @@ import type {
   PluginCleanupLedger,
   RuntimeSessionListReason,
   RuntimeSessionListResult,
+  RuntimeSessionDeleteReason,
+  RuntimeSessionDeleteResult,
   RuntimeSessionSummary,
   RuntimeSessionSnapshot,
   RuntimeSessionSnapshotRestoreResult,
@@ -2456,10 +2458,41 @@ export function validateRuntimeSessionListResult(value: unknown): RuntimeSession
     const summary: RuntimeSessionSummary = { id, title, updatedAt: updatedAt as number, depth: depth as number }
     if (parentId !== undefined) summary.parentId = parentId
     if (agentName !== undefined) summary.agentName = agentName
+    // 归档标记：缺失按「未归档」处理（旧版桥没有这个字段）。一旦出现就必须是布尔——
+    // 把字符串 "true" 之类当成已归档会让界面把一个仍在用的会话归到「已归档」里。
+    if (entry.archived !== undefined) {
+      if (typeof entry.archived !== 'boolean') throw new Error('会话归档标记格式无效')
+      if (entry.archived) summary.archived = true
+    }
     return summary
   })
 
   return { status: 'ready', sessions, truncated: requiredBoolean(result.truncated, '会话列表截断标记') }
+}
+
+/** 删除会话被拒绝的原因：受控白名单，界面据此给出各自的说明。 */
+const SESSION_DELETE_REASONS = new Set<RuntimeSessionDeleteReason>([
+  'RUNTIME_RUNNING',
+  'SESSION_NOT_ARCHIVED',
+  'SESSION_NOT_FOUND',
+  'SESSION_DELETE_FAILED',
+])
+
+/**
+ * 校验删除会话的结果。
+ *
+ * 只认两种形状：`{deleted:true}` 或 `{deleted:false, reason}`；其余一律按载荷非法拒绝。
+ * 不做「缺字段就猜成失败」的容错——删除是破坏性操作，结论必须明确。
+ */
+export function validateRuntimeSessionDeleteResult(value: unknown): RuntimeSessionDeleteResult {
+  const result = asRecord(value, '删除会话结果')
+  if (result.deleted === true) return { deleted: true }
+  if (result.deleted !== false) throw new Error('删除会话结果格式无效')
+  const reason = result.reason
+  if (typeof reason !== 'string' || !SESSION_DELETE_REASONS.has(reason as RuntimeSessionDeleteReason)) {
+    throw new Error('删除会话失败原因无效')
+  }
+  return { deleted: false, reason: reason as RuntimeSessionDeleteReason }
 }
 
 /**

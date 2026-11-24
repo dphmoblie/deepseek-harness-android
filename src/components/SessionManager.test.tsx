@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import type { RuntimeSessionListResult } from '../platform/types'
+import type { RuntimeSessionDeleteResult, RuntimeSessionListResult } from '../platform/types'
 
 /**
  * 假桥：只实现这条用例需要的那个只读端点。
@@ -9,8 +9,11 @@ import type { RuntimeSessionListResult } from '../platform/types'
  * （实测报 `ReferenceError: Cannot access 'listSessions' before initialization`），
  * 所以桩本身也要用 `vi.hoisted` 一起提前建好。
  */
-const { listSessions } = vi.hoisted(() => ({ listSessions: vi.fn<() => Promise<RuntimeSessionListResult>>() }))
-vi.mock('../platform/native', () => ({ runtimeBridge: { listSessions } }))
+const { listSessions, deleteSession } = vi.hoisted(() => ({
+  listSessions: vi.fn<() => Promise<RuntimeSessionListResult>>(),
+  deleteSession: vi.fn<(sessionId: string) => Promise<RuntimeSessionDeleteResult>>(),
+}))
+vi.mock('../platform/native', () => ({ runtimeBridge: { listSessions, deleteSession } }))
 
 import { SessionManager } from './SessionManager'
 
@@ -154,7 +157,7 @@ describe('会话管理页', () => {
     expect(screen.getByText('没有匹配的会话')).toBeInTheDocument()
   })
 
-  it('筛选切成「全部 / 子代理」时主会话与子代理分开呈现', async () => {
+  it('筛选是「主会话 / 全部 / 已归档」：子代理不再单独成档，只在「全部」里随父行展开', async () => {
     listSessions.mockResolvedValue({
       status: 'ready',
       truncated: false,
@@ -168,14 +171,20 @@ describe('会话管理页', () => {
     expect(await screen.findByText('主会话标题')).toBeInTheDocument()
     expect(screen.queryByText('子任务产物')).not.toBeInTheDocument()
 
+    // 三档就是主会话 / 全部 / 已归档——原来的「子代理」档位已经被归档取代。
+    expect(screen.getAllByRole('tab').map(tab => tab.textContent)).toEqual(['主会话', '全部', '已归档'])
+    expect(screen.queryByRole('tab', { name: '子代理' })).not.toBeInTheDocument()
+
     fireEvent.click(screen.getByRole('tab', { name: '全部' }))
     expect(screen.getByText('子任务产物')).toBeInTheDocument()
-
-    fireEvent.click(screen.getByRole('tab', { name: '子代理' }))
-    expect(container.querySelectorAll('[data-session-depth="0"]')).toHaveLength(0)
-    expect(screen.getByText('子任务产物')).toBeInTheDocument()
-    // 子代理卡片仍能看出它属于谁。
+    // 子代理仍能看出它属于谁，且父行还在（不单独成列）。
     expect(screen.getByText(/属于「主会话标题」/)).toBeInTheDocument()
+    expect(container.querySelectorAll('[data-session-depth="0"]')).toHaveLength(1)
+
+    // 这一组会话都没归档：已归档档是空态，并且说清楚「归档后才会出现在这里」。
+    fireEvent.click(screen.getByRole('tab', { name: '已归档' }))
+    expect(await screen.findByText('没有已归档的会话')).toBeInTheDocument()
+    expect(screen.queryByText('子任务产物')).not.toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('tab', { name: '主会话' }))
     expect(screen.getByText('主会话标题')).toBeInTheDocument()
@@ -345,5 +354,80 @@ describe('会话管理页', () => {
     // 新建会先落一条**本地占位**（真实会话由运行时创建），空态因此让位给这条占位。
     expect(await screen.findByText('新会话 1')).toBeInTheDocument()
     expect(screen.queryByText('暂无会话')).not.toBeInTheDocument()
+  })
+
+  /**
+   * 归档标记：`archived` 来自 dsh 自己的 workspace 注册表（原生侧只读转发）。
+   *
+   * 两件事同时成立：主会话档只列未归档的会话；「已归档」这一档才列归档会话，并就地提供删除。
+   * 子代理始终折叠在父行下面，不单独成档。
+   */
+  it('已归档是独立一档：主会话档不列归档会话，归档档里可删除', async () => {
+    const updatedAt = Date.UTC(2026, 0, 2, 3, 4, 5)
+    listSessions.mockResolvedValue({
+      status: 'ready',
+      truncated: false,
+      sessions: [
+        { id: 'session-live', title: '正在用的会话', updatedAt },
+        { id: 'session-old', title: '早就结束的会话', updatedAt: updatedAt - 86_400_000, archived: true },
+        { id: 'session-child', title: '子代理会话', updatedAt, depth: 1, parentId: 'session-old', agentName: 'cordis' },
+      ],
+    })
+    deleteSession.mockResolvedValue({ deleted: true })
+
+    render(<SessionManager onBack={vi.fn()} onOpenHarness={vi.fn()} />)
+
+    // 主会话档：只列未归档的会话；归档的那条不在这一档里，而是去了单独的「已归档」。
+    expect(await screen.findByText('正在用的会话')).toBeInTheDocument()
+    expect(screen.queryByText('早就结束的会话')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '删除会话 正在用的会话' })).not.toBeInTheDocument()
+
+    // 全部档：两条父行都在，归档行带标记（混合列表里才需要标记）。
+    fireEvent.click(screen.getByRole('tab', { name: '全部' }))
+    expect(await screen.findByText('早就结束的会话')).toBeInTheDocument()
+    expect(screen.getAllByText('已归档', { selector: '.session-archived-pill' })).toHaveLength(2) // 父行 + 跟随它的子代理
+    expect(screen.getByText('子代理会话')).toBeInTheDocument()
+
+    // 已归档档：只列归档会话；整档都是归档的，所以不再逐行挂标记。
+    fireEvent.click(screen.getByRole('tab', { name: '已归档' }))
+    expect(await screen.findByText('早就结束的会话')).toBeInTheDocument()
+    expect(screen.queryByText('正在用的会话')).not.toBeInTheDocument()
+    expect(screen.queryByText('已归档', { selector: '.session-archived-pill' })).not.toBeInTheDocument()
+    // 子代理折叠在父行下面：徽标展开后才出现，且仍显示「属于谁」。
+    const badge = screen.getByRole('button', { name: /展开 1 个子代理/ })
+    fireEvent.click(badge)
+    expect(await screen.findByText('子代理会话')).toBeInTheDocument()
+    expect(screen.getByText(/属于「早就结束的会话」/)).toBeInTheDocument()
+
+    // 删除就在这一档里：确认条 → 桥调用 → 行消失，未归档的会话不动。
+    fireEvent.click(screen.getByRole('button', { name: '删除会话 早就结束的会话' }))
+    expect(screen.getByText('删除后无法恢复：会话日志与投影缓存都会被删掉。')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '删除' }))
+
+    await waitFor(() => expect(deleteSession).toHaveBeenCalledWith('session-old'))
+    await waitFor(() => expect(screen.queryByText('早就结束的会话')).not.toBeInTheDocument())
+    // 归档档删空后回到空态；另一条会话仍在主会话档里。
+    expect(await screen.findByText('没有已归档的会话')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('tab', { name: '主会话' }))
+    expect(screen.getByText('正在用的会话')).toBeInTheDocument()
+  })
+
+  it('删除被拒绝时如实说明原因，不把行从列表里抹掉', async () => {
+    const updatedAt = Date.UTC(2026, 0, 2, 3, 4, 5)
+    listSessions.mockResolvedValue({
+      status: 'ready',
+      truncated: false,
+      sessions: [{ id: 'session-old', title: '早就结束的会话', updatedAt, archived: true }],
+    })
+    deleteSession.mockResolvedValue({ deleted: false, reason: 'RUNTIME_RUNNING' })
+
+    render(<SessionManager onBack={vi.fn()} onOpenHarness={vi.fn()} />)
+    fireEvent.click(await screen.findByRole('tab', { name: '已归档' }))
+    fireEvent.click(await screen.findByRole('button', { name: '删除会话 早就结束的会话' }))
+    fireEvent.click(screen.getByRole('button', { name: '删除' }))
+
+    expect(await screen.findByText('没有删除这条会话')).toBeInTheDocument()
+    expect(screen.getByText('运行环境还在运行，先停止后再删除会话。')).toBeInTheDocument()
+    expect(screen.getByText('早就结束的会话')).toBeInTheDocument()
   })
 })

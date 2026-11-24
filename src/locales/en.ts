@@ -1,4 +1,4 @@
-﻿// 应用界面英文词典；不翻译用户输入、凭据或终端输出。
+// 应用界面英文词典；不翻译用户输入、凭据或终端输出。
 export const english: Readonly<Record<string, string>> = {
   "关于与条款": "About and terms",
   "免责条款": "Disclaimer",
@@ -217,6 +217,18 @@ export const english: Readonly<Record<string, string>> = {
   "展开 {0} 个子代理": "Show {0} subagents",
   "收起 {0} 个子代理": "Hide {0} subagents",
   "未关联子代理": "Unattached subagents",
+  "已归档": "Archived",
+  "没有已归档的会话": "No archived sessions",
+  "在 Harness 里归档的会话会出现在这里；归档后可以删除。": "Sessions archived in Harness appear here; once archived they can be deleted.",
+  "没有未归档的会话": "No unarchived sessions",
+  "已归档的会话在「已归档」里。": "Archived sessions are in Archived.",
+  "删除后无法恢复：会话日志与投影缓存都会被删掉。": "This cannot be undone: the session log and its projection cache are both deleted.",
+  "没有删除这条会话": "The session was not deleted",
+  "删除会话失败，请稍后重试。": "Deleting the session failed. Try again later.",
+  "运行环境还在运行，先停止后再删除会话。": "The runtime is still running; stop it before deleting sessions.",
+  "这条会话还没有归档，先归档再删除。": "This session is not archived yet; archive it before deleting.",
+  "磁盘上已经找不到这条会话了，列表稍后会刷新。": "This session is no longer on disk; the list will refresh shortly.",
+  "文件已不在当前目录（可能被移走，或从工作区导出没完成），列表已刷新；请重试或重新导出。": "The file is no longer in this folder (it may have been moved, or the export from the workspace never completed). The list has been refreshed; try again or export again.",
   "子代理 · {0}": "Subagent · {0}",
   "没有子代理会话": "No subagent sessions",
   "属于「{0}」": "of \"{0}\"",

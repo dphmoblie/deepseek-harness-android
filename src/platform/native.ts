@@ -107,6 +107,7 @@ import {
   validateRuntimeResidue,
   validateRuntimeResidueCleanup,
   validateRuntimeSessionListResult,
+  validateRuntimeSessionDeleteResult,
   validateRuntimeSessionSnapshotRestoreResult,
   validateRuntimeSessionSnapshotState,
   validatePreserveState,
@@ -161,6 +162,8 @@ interface NativeRuntimePlugin {
   repairRuntime(): Promise<unknown>
   /** 会话工作区的会话元数据；返回值在 TS 侧走校验（`unknown` → validate）。 */
   sessionList(): Promise<unknown>
+  /** 删除一条已归档会话；返回 `{deleted:true}` 或 `{deleted:false, reason}`。 */
+  deleteSession(options: { sessionId: string }): Promise<unknown>
   getRuntimeSessionSnapshotState(): Promise<unknown>
   createRuntimeSessionSnapshot(): Promise<unknown>
   restoreRuntimeSessionSnapshot(options: { id: string }): Promise<unknown>
@@ -714,6 +717,12 @@ function createNativeBridge(): RuntimeBridge {
     // 会话工作区：只取元数据（标识/标题/更新时间），读不到时原生侧回受控错误字段而不是空列表，
     // 这里也不把「读不到」改写成空列表——校验器只认这两种形状。
     listSessions: () => NativeRuntime.sessionList().then(validateRuntimeSessionListResult),
+    // 会话标识的形态由原生侧再校验一次（与列表载荷同一套规则）；这里只挡明显的空值/类型错误，
+    // 不做字符集复刻——两边各写一套规则迟早对不上。
+    deleteSession: sessionId => {
+      if (typeof sessionId !== 'string' || sessionId.length === 0) return Promise.reject(new Error('会话标识缺失'))
+      return NativeRuntime.deleteSession({ sessionId }).then(validateRuntimeSessionDeleteResult)
+    },
     // 快照标识的形态由原生侧把关（`RUNTIME_SNAPSHOT_ID_INVALID`）：前端原样传过去，
     // 不在这里另造一套错误文案，避免两边对「什么算合法 id」说法不一。
     getRuntimeSessionSnapshotState: () => NativeRuntime

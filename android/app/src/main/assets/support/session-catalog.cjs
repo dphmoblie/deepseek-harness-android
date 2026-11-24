@@ -25,11 +25,18 @@
  *   `fallbackMaxWords: 5`、`fallbackMaxBytes: 40`、`maxTitleBytes: 80`。
  * - **路径写死在访客内**（`/root/.dsh/sessions`）：宿主只传条数上限，不传任何路径。
  *
- * 用法：`node session-catalog.cjs [limit] [rootDir]`
+ * 归档状态：会话是否归档由 dsh 自己的 workspace 注册表维护，落在
+ * `$DSH_HOME/storages/workspace.json` 的 `global.archivedSessionIds`（纯 JSON，不压缩）。
+ * 这里**只读**这个集合，给命中的会话加一个 `archived: true`；读不到、结构不对或超限时
+ * 一律当作「没有任何会话归档」——归档状态读不到不该让整份会话列表失败，也不该
+ * 把未知状态说成已归档（外壳据此分「未归档 / 已归档」两个分区）。
+ *
+ * 用法：`node session-catalog.cjs [limit] [rootDir] [workspaceStatePath]`
  *   - `limit`   返回条数上限，默认 50，最大 50；
  *   - `rootDir` **仅供本机测试**（默认 `/root/.dsh/sessions`）；应用从不传它。
+ *   - `workspaceStatePath` **仅供本机测试**（默认 `rootDir/../storages/workspace.json`）。
  *
- * 成功：stdout 一行 `{"sessions":[{id,title,updatedAt,depth,parentId?,agentName?}...],"truncated":bool}`；
+ * 成功：stdout 一行 `{"sessions":[{id,title,updatedAt,depth,archived?,parentId?,agentName?}...],"truncated":bool}`；
  * 失败：stdout 一行 `{"error":"<受控码>"}` 且退出码为 1。
  * `truncated` 为真表示「没读全」——会话条数超过上限、本次时间预算用尽，或部分项目目录
  * 无法读取；若所有项目都无法读取则走 `error`，绝不用空列表冒充「没有会话」。
@@ -74,6 +81,11 @@ const ZSTD_MAGIC = 0xFD2FB528
 const MAX_DELEGATION_DEPTH = 8
 /** `agentPreset` 的真实形态是包名式标识（实测 `standard` / `cordis`），过宽就等于把任意文本带出去。 */
 const AGENT_NAME = /^[A-Za-z0-9._-]{1,32}$/
+/** workspace 注册表（归档集合的载体）的默认位置：`$DSH_HOME/storages/workspace.json`。 */
+const WORKSPACE_STATE_FILE = 'workspace.json'
+/** 归档集合的读取上限（字节与条数）：一个身份不明的超大注册表不该把整次列表拖慢。 */
+const MAX_WORKSPACE_STATE_BYTES = 1024 * 1024
+const MAX_ARCHIVED_IDS = 5000
 
 /** 会话日志文件名：`session.jsonl`（旧 v0）或 `session.v<N>.jsonl`，zstd 编码再加 `.zstd`。 */
 const SESSION_FILE = /^session(?:\.v([0-9]+))?\.jsonl(?:\.zstd)?$/
@@ -169,6 +181,44 @@ function isSessionIdentifier(value) {
   if (value.startsWith('.')) return false
   if (ID_FORBIDDEN.test(value) || /\s/.test(value)) return false
   return true
+}
+
+/** workspace 注册表的默认位置：与 `sessions/` 同级（`$DSH_HOME/storages/workspace.json`）。 */
+function defaultWorkspaceStatePath(root) {
+  return path.join(root, '..', 'storages', WORKSPACE_STATE_FILE)
+}
+
+/**
+ * 读 dsh 的 workspace 注册表，取出归档集合。
+ *
+ * 任何异常（文件不存在、超大、JSON 坏、结构不对）都返回空集合：归档状态是**附加**
+ * 信息，读不到时唯一的诚实表达是「一条都没被标成已归档」——外壳仍会列出全部会话，
+ * 只是不分区。绝不因为注册表读不了就让整份会话列表失败。
+ */
+function readArchivedSessionIds(workspaceStatePath) {
+  let raw
+  try {
+    const stats = fs.statSync(workspaceStatePath)
+    if (!stats.isFile() || stats.size > MAX_WORKSPACE_STATE_BYTES) return new Set()
+    raw = fs.readFileSync(workspaceStatePath)
+  } catch {
+    return new Set()
+  }
+  let document
+  try {
+    document = JSON.parse(raw.toString('utf8'))
+  } catch {
+    return new Set()
+  }
+  const globalSlot = document !== null && typeof document === 'object' ? document.global : null
+  const archived = globalSlot !== null && typeof globalSlot === 'object' ? globalSlot.archivedSessionIds : null
+  if (!Array.isArray(archived)) return new Set()
+  const ids = new Set()
+  for (const value of archived) {
+    if (ids.size >= MAX_ARCHIVED_IDS) break
+    if (isSessionIdentifier(value)) ids.add(value)
+  }
+  return ids
 }
 
 /**
@@ -473,9 +523,11 @@ function parseEvent(line) {
 }
 
 /** 主流程：列目录 → 按最近更新排序取前 N 条 → 逐条读标题与分组元数据。`hooks` 仅供单测观察（见 `readSession`）。 */
-async function buildCatalog(limit, root, hooks = null) {
+async function buildCatalog(limit, root, hooks = null, workspaceStatePath = defaultWorkspaceStatePath(root)) {
   const started = Date.now()
   const deadline = started + TIME_BUDGET_MS
+  // 归档集合在读任何会话日志之前取一次：它只有几百个 id，读失败也不影响列会话。
+  const archivedIds = readArchivedSessionIds(workspaceStatePath)
   const { candidates, unreadable, missing } = collectCandidates(root)
   if (missing) return { sessions: [], truncated: false }
   if (candidates.length === 0 && unreadable > 0) {
@@ -497,6 +549,8 @@ async function buildCatalog(limit, root, hooks = null) {
       detail = { depth: 0, title: '' }
     }
     const session = { id: candidate.id, title: detail.title, updatedAt: candidate.updatedAt, depth: detail.depth }
+    // 归档状态来自 dsh 的 workspace 注册表；只有真的在归档集合里才写这个键。
+    if (archivedIds.has(candidate.id)) session.archived = true
     // 可选字段只在真实存在时出现：界面据此区分「子代理」与「没有父的子代理」。
     if (detail.parentId !== undefined) session.parentId = detail.parentId
     if (detail.agentName !== undefined) session.agentName = detail.agentName
@@ -514,11 +568,24 @@ function parseArguments(argv) {
   const rawLimit = Number.parseInt(argv[2] ?? '', 10)
   const limit = Number.isFinite(rawLimit) ? Math.min(Math.max(rawLimit, 1), MAX_LIMIT) : DEFAULT_LIMIT
   const rawRoot = argv[3]
-  if (rawRoot === undefined) return { limit, root: DEFAULT_ROOT }
+  if (rawRoot === undefined) {
+    return { limit, root: DEFAULT_ROOT, workspaceStatePath: defaultWorkspaceStatePath(DEFAULT_ROOT) }
+  }
   if (typeof rawRoot !== 'string' || rawRoot.length === 0 || rawRoot.includes('\u0000') || !path.isAbsolute(rawRoot)) {
     throw controlledError('SESSION_CATALOG_ROOT_INVALID')
   }
-  return { limit, root: rawRoot }
+  // 第三个参数只给单测用：指向「和 sessions/ 同级」的 workspace 注册表。
+  const rawWorkspaceState = argv[4]
+  if (rawWorkspaceState === undefined) {
+    return { limit, root: rawRoot, workspaceStatePath: defaultWorkspaceStatePath(rawRoot) }
+  }
+  if (
+    typeof rawWorkspaceState !== 'string' || rawWorkspaceState.length === 0 ||
+    rawWorkspaceState.includes('\u0000') || !path.isAbsolute(rawWorkspaceState)
+  ) {
+    throw controlledError('SESSION_CATALOG_ROOT_INVALID')
+  }
+  return { limit, root: rawRoot, workspaceStatePath: rawWorkspaceState }
 }
 
 /**
@@ -537,8 +604,8 @@ function output(payload, code) {
 }
 
 async function main(argv) {
-  const { limit, root } = parseArguments(argv)
-  const catalog = await buildCatalog(limit, root)
+  const { limit, root, workspaceStatePath } = parseArguments(argv)
+  const catalog = await buildCatalog(limit, root, null, workspaceStatePath)
   output(catalog, 0)
 }
 
@@ -551,4 +618,4 @@ if (require.main === module) {
   })
 }
 
-module.exports = { MAX_SCAN_BYTES, MAX_COMPRESSED_BYTES, buildCatalog, cleanTitleText, decodeSegment, fallbackSessionTitle, normalizeSessionTitle, parseArguments, truncateTitleUtf8 }
+module.exports = { MAX_SCAN_BYTES, MAX_COMPRESSED_BYTES, buildCatalog, cleanTitleText, decodeSegment, fallbackSessionTitle, normalizeSessionTitle, parseArguments, readArchivedSessionIds, truncateTitleUtf8 }

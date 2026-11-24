@@ -207,6 +207,8 @@ export const bridge = {
   // 会话工作区：首页一挂载就会调一次 listSessions()，缺这个桩同样会让 effect 抛错并卸载整棵树
   // （见上面 `setAppTheme` 的注释：表现成「找不到任何元素」，与真正的界面缺陷几乎无法区分）。
   listSessions: vi.fn(),
+  // 删除会话：只在已归档分区里点删除时才会调用，但夹具必须齐（见本文件顶部的「每个方法都要有桩」）。
+  deleteSession: vi.fn(),
   // 更新：可用版本列表与应用自更新同样有默认桩——界面一进相关页面就会读一次，
   // 缺桩会让 effect 抛错并卸载整棵树（同上一条注释里的坑）。
   listHarnessReleases: vi.fn(),
@@ -741,6 +743,9 @@ export function beforeEachAppTest(): void {
   // 关心会话列表的用例自己覆盖这条桩。注意不要用 unavailable 当默认值——
   // 那会让首页显示「读不到会话列表」，等于把一件没发生的事故塞给所有用例。
   bridge.listSessions.mockResolvedValue({ status: 'ready', sessions: [], truncated: false })
+  // 删除会话默认回「删掉了」：默认列表里没有已归档会话，这条桩只兜住「用例自己造了归档行又点了删除」
+  // 的情形，避免忘记设置 mock 时抛 undefined。
+  bridge.deleteSession.mockResolvedValue({ deleted: true })
   // 默认空版本列表（没有可用版本可装）+ 未授权安装权限：多数用例只关心别的页面，
   // 真正关心更新的用例自己覆盖这几条桩。
   bridge.listHarnessReleases.mockResolvedValue({ entries: [] })

@@ -112,6 +112,9 @@ internal object SessionCatalogPayload {
             // 可选字段只在真的合法时出现：界面据 parentId 分组，据 agentName 让搜索命中预设名。
             readIdentifierField(entry, "parentId")?.let { session.put("parentId", it) }
             readAgentName(entry)?.let { session.put("agentName", it) }
+            // 归档状态由 dsh 的 workspace 注册表维护（访客脚本只读转发）。只认真正的布尔 true：
+            // 字符串 "true"、数字 1 之类一律当成没有这个字段，界面据此把会话留在「未归档」。
+            if (entry.opt("archived") == true) session.put("archived", true)
             sessions.put(session)
         }
         // 有会话却一条都没通过校验 → 载荷与约定不符，按「读不到」处理，不能显示成「没有会话」。

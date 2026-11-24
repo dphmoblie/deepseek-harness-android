@@ -39,6 +39,7 @@ import type {
   RuntimeResidueCleanupState,
   RuntimeResidueState,
   RuntimeSessionListResult,
+  RuntimeSessionDeleteResult,
   RuntimeSessionSnapshotRestoreResult,
   RootEngineStatus,
   PreserveDiscardResult,
@@ -807,6 +808,10 @@ export function createBrowserBridge(): RuntimeBridge {
     // 等于把「读不到」编造成「确认没有」。
     listSessions: (): Promise<RuntimeSessionListResult> =>
       Promise.reject(new Error('浏览器模式下没有运行时会话列表')),
+    // 预览里没有原生侧的会话目录：明确拒绝，不假装删掉了什么。返回 {deleted:false} 也不行——
+    // 界面会把一次「没做」显示成「做过了但不成功」，同样不诚实。
+    deleteSession: (): Promise<RuntimeSessionDeleteResult> =>
+      Promise.reject(new Error('浏览器模式下不能删除运行时会话')),
     // 预览里没有原生侧的会话快照能力：四条一律如实拒绝。
     // **不要**返回空状态对象——那会让界面显示成「还没有快照」，等于编造一次成功。
     getRuntimeSessionSnapshotState: (): Promise<RuntimeSessionSnapshotState> =>

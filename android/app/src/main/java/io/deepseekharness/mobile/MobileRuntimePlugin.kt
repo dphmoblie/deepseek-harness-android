@@ -1841,6 +1841,28 @@ class MobileRuntimePlugin : Plugin() {
     }
 
     /**
+     * 删除一条**已归档**会话（会话日志目录 + 投影缓存 + workspace 注册表记账）。
+     *
+     * 三点刻意设计：
+     * - 只接受已归档会话：未归档的会话可能正被使用，删除没有补救余地；
+     * - Harness 运行期间直接回 `RUNTIME_RUNNING`：会话日志正被追加，删目录只会留下半个会话；
+     * - 结果走 **resolve**（`{deleted:false,reason}`）而不是 reject：每种拒绝原因都要能被界面
+     *   分别说明，折叠成一句「删除失败」等于不解释。只有标识形态非法才 reject。
+     */
+    @PluginMethod
+    fun deleteSession(call: PluginCall) {
+        execute(call) {
+            controller.withLifecycleLock {
+                val sessionId = call.data.opt("sessionId") as? String
+                    ?: throw RuntimeFailure(SessionDeletion.SESSION_ID_INVALID, "会话标识缺失")
+                val running = controller.state().phase == RuntimePhase.RUNNING
+                // SessionDeletion 回的是 org.json（与访客脚本载荷同一套构造）；桥接层只认 JSObject。
+                JSObject(SessionDeletion.delete(controller.store.currentRoot, sessionId, running).toString())
+            }
+        }
+    }
+
+    /**
      * 会话快照总览。
      *
      * 只返回**快照元数据**：标识、创建时间、版本、文件数与字节数，以及快照根目录（应用私有路径）。

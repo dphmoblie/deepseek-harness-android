@@ -49,6 +49,7 @@ import {
   validateRuntimeProgress,
   validateRuntimeReleaseList,
   validateRuntimeSessionListResult,
+  validateRuntimeSessionDeleteResult,
   validateRuntimeSessionSnapshotRestoreResult,
   validateRuntimeSessionSnapshotState,
   validatePreserveState,
@@ -2320,6 +2321,33 @@ describe('会话列表元数据校验', () => {
     for (const updatedAt of [0, 4_102_444_800_000]) {
       expect(validateRuntimeSessionListResult(ready({ sessions: [session({ updatedAt })] })).status).toBe('ready')
     }
+  })
+
+  it('归档标记：只有 true 会落到载荷里，其余非布尔一律报错', () => {
+    const archived = validateRuntimeSessionListResult(ready({ sessions: [session({ archived: true })] }))
+    expect(archived.status === 'ready' ? archived.sessions[0].archived : undefined).toBe(true)
+    // 缺字段 / false 都按未归档：旧版桥没有这个字段，界面不能把历史载荷当成已归档。
+    for (const value of [undefined, false]) {
+      const parsed = validateRuntimeSessionListResult(ready({ sessions: [session({ archived: value })] }))
+      expect(parsed.status === 'ready' ? 'archived' in parsed.sessions[0] : true).toBe(false)
+    }
+    for (const value of ['true', 1, null, {}]) {
+      expect(() => validateRuntimeSessionListResult(ready({ sessions: [session({ archived: value })] })), JSON.stringify(value))
+        .toThrow('会话归档标记格式无效')
+    }
+  })
+
+  it('删除结果只认两种明确形状：成功，或带受控原因的失败', () => {
+    expect(validateRuntimeSessionDeleteResult({ deleted: true })).toEqual({ deleted: true })
+    for (const reason of ['RUNTIME_RUNNING', 'SESSION_NOT_ARCHIVED', 'SESSION_NOT_FOUND', 'SESSION_DELETE_FAILED']) {
+      expect(validateRuntimeSessionDeleteResult({ deleted: false, reason })).toEqual({ deleted: false, reason })
+    }
+    // 缺字段、原因不在枚举里、或「deleted 不是布尔」都不猜成失败——删除是破坏性操作，结论必须明确。
+    // 成功分支里多出来的键一律忽略（原生侧以后加字段不该让一次成功的删除被拒收）。
+    for (const value of [null, {}, { deleted: false }, { deleted: false, reason: 'NOPE' }, { deleted: 'yes' }]) {
+      expect(() => validateRuntimeSessionDeleteResult(value), JSON.stringify(value)).toThrow()
+    }
+    expect(validateRuntimeSessionDeleteResult({ deleted: true, reason: 'IGNORED' })).toEqual({ deleted: true })
   })
 })
 

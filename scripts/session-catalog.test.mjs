@@ -460,3 +460,37 @@ test('标题折叠规则与宿主 dsh-session-title 逐条一致', async (contex
     )
   }
 })
+
+/**
+ * 归档状态：从 dsh 的 workspace 注册表只读 `global.archivedSessionIds`。
+ * 三种情形必须区分清楚——命中标 archived、未命中不写这个键、注册表坏/缺失时一条都不标。
+ */
+test('归档状态来自 workspace 注册表：命中才标，读不到就不标', async () => {
+  const root = createRoot()
+  addSession(root, { directory: 'session-live', lines: [title('在用的会话')] })
+  addSession(root, { directory: 'session-old', lines: [title('旧的会话')] })
+  const stateDirectory = join(root, 'storages')
+  mkdirSync(stateDirectory, { recursive: true })
+  const stateFile = join(stateDirectory, 'workspace.json')
+  writeFileSync(stateFile, JSON.stringify({
+    unit: { name: 'workspace', version: 2 },
+    global: { archivedSessionIds: ['session-old', 7, 'bad id', '../escape'] },
+    tables: {},
+  }))
+
+  const report = await buildCatalog(50, root, null, stateFile)
+  const byId = new Map(report.sessions.map((session) => [session.id, session]))
+  assert.equal(byId.get('session-old')?.archived, true)
+  assert.equal('archived' in byId.get('session-live'), false, '未归档的会话不能带 archived 键')
+
+  // JSON 坏掉：当作没有任何归档，列表照旧完整返回（归档状态不该让整份列表失败）。
+  writeFileSync(stateFile, '{not json')
+  const broken = await buildCatalog(50, root, null, stateFile)
+  assert.equal(broken.sessions.length, 2)
+  assert.ok(broken.sessions.every((session) => !('archived' in session)))
+
+  // 文件不存在（还没归档过任何会话）：同样一条都不标。
+  const absent = await buildCatalog(50, root, null, join(root, 'missing-workspace.json'))
+  assert.equal(absent.sessions.length, 2)
+  assert.ok(absent.sessions.every((session) => !('archived' in session)))
+})

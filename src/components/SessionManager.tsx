@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { ArrowLeft, ChevronDown, ChevronRight, CornerDownRight, Loader2, MessageCircle, Plus, Trash2, X } from 'lucide-react'
+import { AlertTriangle, ArrowLeft, ChevronDown, ChevronRight, CornerDownRight, Loader2, MessageCircle, Plus, Trash2, X } from 'lucide-react'
 import { triggerHaptic } from '../platform/haptics'
 import { t, useLanguage } from '../i18n'
 import { runtimeBridge } from '../platform/native'
-import type { RuntimeSessionListReason, RuntimeSessionSummary } from '../platform/types'
+import type { RuntimeSessionDeleteReason, RuntimeSessionListReason, RuntimeSessionSummary } from '../platform/types'
 // 走 Vite 的资源 URL 导入（与 App.tsx 里 app-mark 的用法一致，见 src/assets.d.ts 的 *.png 声明）：
 // 打包后是一份带哈希的静态文件，不会像放 public/ 那样多一处需要手工同步的路径。
 import appMark from '../assets/app-mark.png'
@@ -24,6 +24,11 @@ interface SessionEntry {
   parentId?: string
   /** 子代理的预设名（`agentPreset`），用于显示与搜索。 */
   agentName?: string
+  /**
+   * dsh 的 workspace 注册表把这条会话列入了归档集合。
+   * 只有 `true` 会出现在这里：缺失 = 未归档（旧版桥、读不到归档状态时都不能显示成已归档）。
+   */
+  archived?: boolean
 }
 
 interface SessionManagerProps {
@@ -34,13 +39,13 @@ interface SessionManagerProps {
 }
 
 /**
- * 列表筛选：主会话 / 全部 / 子代理。
+ * 列表筛选：主会话 / 全部 / 已归档。
  *
- * **默认只看主会话**：子代理是会话日志里的一等公民，但列表里把它们与真实对话平铺在一起，
- * 会让「会话」这个词同时指两种东西——实测一台设备上 27 条会话里有 12 条是子代理（44%），
- * 50 条上限还会把主对话挤出去。子代理折叠进父行、按需展开，才是它们与用户的真实关系。
+ * **没有「子代理」这一档**：子代理是会话日志里的一等公民，但它们不占会话入口——只有折叠在父会话
+ * 下面才说得清「这是谁派生的」。单独一档平铺出来会让「会话」这个词同时指两种东西（实测一台设备上
+ * 27 条会话里有 12 条是子代理），而且把「已归档」挤出了筛选条。归档状态值得单独一档，子代理不值得。
  */
-type SessionFilter = 'main' | 'all' | 'subagents'
+type SessionFilter = 'main' | 'all' | 'archived'
 
 /**
  * 会话列表的读取状态。
@@ -73,6 +78,25 @@ function unavailableHint(reason: RuntimeSessionListReason): string {
 /** 时间格式沿用仓库既有写法（`App.tsx` 里的日志时间也是 `toLocaleString()`）。 */
 function formatUpdatedAt(millis: number): string {
   return new Date(millis).toLocaleString()
+}
+
+/**
+ * 删除被拒绝时的说明。
+ *
+ * 每种拒绝原因都要说清「为什么没删」：用户按了删除却什么都没发生，只看到一句
+ * 「删除失败」时唯一能做的就是再按一次。
+ */
+function deleteFailureHint(reason: RuntimeSessionDeleteReason): string {
+  switch (reason) {
+    case 'RUNTIME_RUNNING':
+      return '运行环境还在运行，先停止后再删除会话。'
+    case 'SESSION_NOT_ARCHIVED':
+      return '这条会话还没有归档，先归档再删除。'
+    case 'SESSION_NOT_FOUND':
+      return '磁盘上已经找不到这条会话了，列表稍后会刷新。'
+    case 'SESSION_DELETE_FAILED':
+      return '删除会话失败，请稍后重试。'
+  }
 }
 
 /** 是不是子代理会话：深度缺失（旧版桥）一律按主会话。 */
@@ -131,6 +155,16 @@ export function SessionManager({ onBack, onOpenHarness, embedded = false, disabl
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set())
   const [reloadToken, setReloadToken] = useState(0)
   const [retrying, setRetrying] = useState(false)
+  /**
+   * 「已归档」**不另开分区**：它只是卡片上的一个标记，跟着现有三档筛选（主会话 / 全部 / 子代理）
+   * 一起出现。归档的会话仍留在它原本的位置上——用户按「最近更新」找会话时，位置不该因为归档而变化。
+   */
+  /** 正在等用户确认删除的会话；同一时刻只允许一条，避免两个确认框叠在一起。 */
+  const [pendingDelete, setPendingDelete] = useState<string | null>(null)
+  /** 正在删除的会话：删除期间禁用确认按钮，避免重复提交。 */
+  const [deletingId, setDeletingId] = useState<string | null>(null)
+  /** 上一次删除被拒绝的原因；成功或换一条会话时清空。 */
+  const [deleteFailure, setDeleteFailure] = useState<string | null>(null)
   const loadingRef = useRef(false)
 
   /**
@@ -209,14 +243,16 @@ export function SessionManager({ onBack, onOpenHarness, embedded = false, disabl
 
   const normalizedQuery = query.trim().toLocaleLowerCase()
 
-  /** 当前筛选下的可见条目：父行 + 是否需要展开、以及哪些子代理要显示。 */
+  /** 当前筛选下的可见条目：父行 + 是否需要展开、以及哪些子代理（或孤儿）要显示。 */
   const view = useMemo(() => {
     const searching = normalizedQuery !== ''
-    if (filter === 'subagents') {
-      const rows = sessions.filter(session => isSubagent(session) && matchesQuery(session, normalizedQuery))
-      return { parents: [] as SessionEntry[], childrenOf: (): SessionEntry[] => [], orphans: [] as SessionEntry[], rows }
+    /** 三档之间的差别只有「取哪些父行」：子代理始终折叠在父行下面，不单独成列。 */
+    const parentsOf = (): SessionEntry[] => {
+      if (filter === 'main') return grouped.parents.filter(parent => parent.archived !== true)
+      if (filter === 'archived') return grouped.parents.filter(parent => parent.archived === true)
+      return grouped.parents
     }
-    const parents = grouped.parents
+    const parents = parentsOf()
     const visibleParents = parents.filter(parent => {
       if (!searching) return true
       // 命中父标题 → 它的子代理一起带出来；只命中子代理 → 父行也要在，否则搜到了却看不到。
@@ -230,9 +266,15 @@ export function SessionManager({ onBack, onOpenHarness, embedded = false, disabl
         : children
       return kept
     }
-    const orphans = grouped.orphans.filter(session => matchesQuery(session, normalizedQuery))
-    return { parents: visibleParents, childrenOf, orphans, rows: [] as SessionEntry[] }
-  }, [filter, grouped, normalizedQuery, sessions])
+    // 父会话被 50 条上限截断时会出现「没有父行的子代理」：按它们自己的归档状态分档，不静默隐藏。
+    const orphansSource = filter === 'main'
+      ? grouped.orphans.filter(orphan => orphan.archived !== true)
+      : filter === 'archived'
+        ? grouped.orphans.filter(orphan => orphan.archived === true)
+        : grouped.orphans
+    const orphans = orphansSource.filter(session => matchesQuery(session, normalizedQuery))
+    return { parents: visibleParents, childrenOf, orphans }
+  }, [filter, grouped, normalizedQuery])
 
   /** 一行（主会话）是否展开：搜索命中的子代理必须可见，不能靠用户再点一次。 */
   const showsChildren = (parent: SessionEntry): boolean => {
@@ -268,7 +310,158 @@ export function SessionManager({ onBack, onOpenHarness, embedded = false, disabl
     setLocalSessions(current => current.filter(session => session.id !== id))
   }
 
-  const visibleCount = filter === 'subagents' ? view.rows.length : view.parents.length + view.orphans.length
+  /**
+   * 删除一条真实会话（只对已归档的会话开放）。
+   *
+   * 删成功后**就地**从列表里摘掉这条会话与它的子代理，不整表重读：重读会把已经展开的分组、
+   * 搜索词与滚动位置一起冲掉，而用户刚做的只是删掉一行。失败时把原因写在列表上方。
+   */
+  const confirmDelete = (session: SessionEntry): void => {
+    if (deletingId !== null) return
+    triggerHaptic('warning')
+    setDeletingId(session.id)
+    setDeleteFailure(null)
+    void runtimeBridge.deleteSession(session.id)
+      .then(result => {
+        if (result.deleted) {
+          setCatalog(current => current.status === 'ready'
+            ? {
+              ...current,
+              sessions: current.sessions.filter(item => item.id !== session.id && item.parentId !== session.id),
+            }
+            : current)
+          setPendingDelete(null)
+          triggerHaptic('success')
+          return
+        }
+        setDeleteFailure(deleteFailureHint(result.reason))
+      })
+      .catch(error => {
+        setDeleteFailure(error instanceof Error && error.message !== ''
+          ? error.message
+          : t('删除会话失败，请稍后重试。'))
+      })
+      .finally(() => { setDeletingId(null) })
+  }
+
+  const visibleCount = view.parents.length + view.orphans.length
+
+  /**
+   * 归档状态来自 dsh 自己的 workspace 注册表（见 `RuntimeSessionSummary.archived`）：
+   * 外壳既不改写它，也不把「读不到」显示成「已归档」——缺失一律算未归档。
+   *
+   * 子代理没有自己的归档语义：父会话归档了，它也就跟着显示已归档（子代理不占会话入口，
+   * 单独给它一个不同的归档状态只会让同一组会话看起来自相矛盾）。
+   */
+  const isArchivedRow = (session: SessionEntry): boolean =>
+    session.archived === true ||
+    (session.parentId !== undefined && grouped.parents.some(parent => parent.id === session.parentId && parent.archived === true))
+
+  /**
+   * 「已归档」标记只在**混合**列表里出现：在「已归档」这一档里整屏都是归档会话，
+   * 每行再挂一个胶囊只是噪音——这一档的标题本身已经把话说完了。
+   */
+  const showArchivedBadge = filter !== 'archived'
+
+  /**
+   * 一行父会话：打开入口 + 子代理折叠徽标；已归档的行多一个「已归档」标记与删除入口（带就地确认）。
+   *
+   * 删除只对已归档会话开放：未归档的会话可能仍在用，原生侧也会以 `SESSION_NOT_ARCHIVED`
+   * 拒绝，界面不摆一个按了必然失败的按钮。
+   */
+  const renderParent = (session: SessionEntry) => {
+    const children = view.childrenOf(session)
+    const open = showsChildren(session)
+    const confirming = pendingDelete === session.id
+    const archived = isArchivedRow(session)
+    const title = session.title === '' ? t('未命名会话') : session.title
+    return (
+      <div className={archived ? 'session-group session-group--archived' : 'session-group'} key={session.id}>
+        <article className={archived ? 'session-card session-card--archived' : 'session-card'} data-session-depth={0}>
+          <button className="session-open" type="button" onClick={() => onOpenHarness(session.local ? undefined : session.id)} disabled={disabled}>
+            <span className="session-icon"><MessageCircle size={18} /></span>
+            <span className="session-copy">
+              {/* 读不到标题的会话保留在列表里，但显示「未命名会话」——不拿 id 或时间冒充标题。 */}
+              <strong>{title}</strong>
+              <small className="session-meta">
+                {archived && showArchivedBadge && <span className="session-archived-pill">{t('已归档')}</span>}
+                {/* 归档行省掉「最近更新」四个字：363px 下这一行还要和子代理徽标、删除按钮抢宽度，
+                    省下的四个字正好够放下时间；未归档行保持原文案不变。 */}
+                <span className="session-meta-text">{session.local === true
+                  ? t('由 Harness 管理会话内容')
+                  : archived && showArchivedBadge
+                    ? formatUpdatedAt(session.updatedAt ?? 0)
+                    : t('最近更新 {0}', formatUpdatedAt(session.updatedAt ?? 0))}</span>
+              </small>
+            </span>
+          </button>
+          {/* 真实会话只有「已归档」这一档给删除按钮：删除是不可逆的，未归档的会话还在用。 */}
+          {archived && !confirming && (
+            <button
+              className="icon-button session-delete"
+              type="button"
+              aria-label={t('删除会话 {0}', title)}
+              title={t('删除会话')}
+              disabled={disabled || deletingId !== null}
+              onClick={() => { setPendingDelete(session.id); setDeleteFailure(null) }}
+            >
+              <Trash2 size={17} />
+            </button>
+          )}
+          {/* 本地占位条目从来不在磁盘上，只有它能在这里直接移除。 */}
+          {session.local === true && (
+            <button className="icon-button session-delete" type="button" aria-label={t('删除会话 {0}', session.title)} title={t('删除会话')} onClick={() => removeSession(session.id)}>
+              <Trash2 size={17} />
+            </button>
+          )}
+          {children.length > 0 && (
+            <button
+              className="session-badge"
+              type="button"
+              aria-expanded={open}
+              aria-label={t(open ? '收起 {0} 个子代理' : '展开 {0} 个子代理', children.length)}
+              onClick={() => toggleExpanded(session.id)}
+            >
+              {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+              {/* 窄屏只留数字（见 CSS）：363px 下这一格还要和标题、删除按钮抢宽度，
+                  完整文案由 aria-label 承担，读屏与长文案场景都不丢信息。 */}
+              <span className="session-badge-text">{t('{0} 个子代理', children.length)}</span>
+              <span className="session-badge-count" aria-hidden="true">{children.length}</span>
+            </button>
+          )}
+        </article>
+        {confirming && (
+          <div className="session-delete-confirm" role="alert">
+            <span>{t('删除后无法恢复：会话日志与投影缓存都会被删掉。')}</span>
+            <span className="session-delete-actions">
+              <button className="button button-secondary compact-button" type="button" disabled={deletingId !== null} onClick={() => setPendingDelete(null)}>
+                {t('取消')}
+              </button>
+              <button className="button button-danger compact-button" type="button" disabled={deletingId !== null} onClick={() => confirmDelete(session)}>
+                {deletingId === session.id ? <Loader2 className="spin" size={14} /> : <Trash2 size={14} />}
+                {t('删除')}
+              </button>
+            </span>
+          </div>
+        )}
+        {open && (
+          <div className="session-subagents">
+            {children.map(child => (
+              <SubagentCard
+                key={child.id}
+                archived={showArchivedBadge && isArchivedRow(child)}
+                session={child}
+                parentTitle={session.title === '' ? undefined : session.title}
+                disabled={disabled}
+                onOpenHarness={onOpenHarness}
+                compact
+              />
+            ))}
+          </div>
+        )}
+      </div>
+    )
+  }
 
   return (
     <div className={embedded ? 'session-manager-embedded' : 'screen session-screen'}>
@@ -332,7 +525,7 @@ export function SessionManager({ onBack, onOpenHarness, embedded = false, disabl
         {([
           ['main', t('主会话')],
           ['all', t('全部')],
-          ['subagents', t('子代理')],
+          ['archived', t('已归档')],
         ] as const).map(([value, label]) => (
           <button
             key={value}
@@ -346,6 +539,19 @@ export function SessionManager({ onBack, onOpenHarness, embedded = false, disabl
           </button>
         ))}
       </div>
+
+      {deleteFailure !== null && (
+        <div className="inline-alert warning session-delete-failure" role="alert">
+          <AlertTriangle size={17} />
+          <div>
+            <strong>{t('没有删除这条会话')}</strong>
+            <span>{t(deleteFailure)}</span>
+          </div>
+          <button className="icon-button" type="button" aria-label={t('关闭提示')} onClick={() => setDeleteFailure(null)}>
+            <X size={15} />
+          </button>
+        </div>
+      )}
 
       <section className="session-list" aria-label={t('会话列表')}>
         {catalog.status === 'loading' ? (
@@ -368,66 +574,35 @@ export function SessionManager({ onBack, onOpenHarness, embedded = false, disabl
             <EmptyMark />
             <strong>{t(sessions.length === 0
               ? '暂无会话'
-              : filter === 'subagents' && normalizedQuery === '' ? '没有子代理会话' : '没有匹配的会话')}</strong>
-            <p>{t(sessions.length === 0 ? '点击「新建会话」开始工作。' : '换一个关键词，或新建会话开始工作。')}</p>
+              : normalizedQuery !== ''
+                ? '没有匹配的会话'
+                : filter === 'archived'
+                  ? '没有已归档的会话'
+                  : '没有未归档的会话')}</strong>
+            <p>{t(sessions.length === 0
+              ? '点击「新建会话」开始工作。'
+              : normalizedQuery !== ''
+                ? '换一个关键词，或新建会话开始工作。'
+                : filter === 'archived'
+                  ? '在 Harness 里归档的会话会出现在这里；归档后可以删除。'
+                  : '已归档的会话在「已归档」里。')}</p>
           </div>
-        ) : filter === 'subagents' ? (
-          view.rows.map(session => (
-            <SubagentCard key={session.id} session={session} parentTitle={grouped.parentTitle(session.parentId)} disabled={disabled} onOpenHarness={onOpenHarness} />
-          ))
         ) : (
           <>
-            {view.parents.map(session => {
-              const children = view.childrenOf(session)
-              const open = showsChildren(session)
-              return (
-                <div className="session-group" key={session.id}>
-                  <article className="session-card" data-session-depth={0}>
-                    <button className="session-open" type="button" onClick={() => onOpenHarness(session.local ? undefined : session.id)} disabled={disabled}>
-                      <span className="session-icon"><MessageCircle size={18} /></span>
-                      <span className="session-copy">
-                        {/* 读不到标题的会话保留在列表里，但显示「未命名会话」——不拿 id 或时间冒充标题。 */}
-                        <strong>{session.title === '' ? t('未命名会话') : session.title}</strong>
-                        <small>{session.local === true
-                          ? t('由 Harness 管理会话内容')
-                          : t('最近更新 {0}', formatUpdatedAt(session.updatedAt ?? 0))}</small>
-                      </span>
-                    </button>
-                    {/* 只有本地占位条目能在这里移除：真实会话的删除不在这条只读通道里，
-                        按钮一旦出现就等于承诺一件做不到的事。 */}
-                    {session.local === true && (
-                      <button className="icon-button session-delete" type="button" aria-label={t('删除会话 {0}', session.title)} title={t('删除会话')} onClick={() => removeSession(session.id)}>
-                        <Trash2 size={17} />
-                      </button>
-                    )}
-                    {children.length > 0 && (
-                      <button
-                        className="session-badge"
-                        type="button"
-                        aria-expanded={open}
-                        aria-label={t(open ? '收起 {0} 个子代理' : '展开 {0} 个子代理', children.length)}
-                        onClick={() => toggleExpanded(session.id)}
-                      >
-                        {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-                        {t('{0} 个子代理', children.length)}
-                      </button>
-                    )}
-                  </article>
-                  {open && (
-                    <div className="session-subagents">
-                      {children.map(child => (
-                        <SubagentCard key={child.id} session={child} parentTitle={session.title === '' ? undefined : session.title} disabled={disabled} onOpenHarness={onOpenHarness} compact />
-                      ))}
-                    </div>
-                  )}
-                </div>
-              )
-            })}
+            {/* 子代理不单独成列：它们始终折叠在父会话下面，这里只渲染父行（以及没有父行的孤儿）。 */}
+            {view.parents.map(session => renderParent(session))}
             {view.orphans.length > 0 && (
               <div className="session-group session-orphans">
                 <h3 className="session-group-title">{t('未关联子代理')}</h3>
                 {view.orphans.map(session => (
-                  <SubagentCard key={session.id} session={session} parentTitle={grouped.parentTitle(session.parentId)} disabled={disabled} onOpenHarness={onOpenHarness} />
+                  <SubagentCard
+                    key={session.id}
+                    archived={showArchivedBadge && isArchivedRow(session)}
+                    session={session}
+                    parentTitle={grouped.parentTitle(session.parentId)}
+                    disabled={disabled}
+                    onOpenHarness={onOpenHarness}
+                  />
                 ))}
               </div>
             )}
@@ -451,6 +626,8 @@ interface SubagentCardProps {
   session: SessionEntry
   /** 所属会话的标题：子代理自己通常没有标题，靠它说明「这是谁派生的」。 */
   parentTitle: string | undefined
+  /** 已归档：父会话归档时子代理跟着标记，或它自己被注册表列进归档集合。 */
+  archived?: boolean
   disabled: boolean
   onOpenHarness: (sessionId?: string) => void
   compact?: boolean
@@ -462,7 +639,7 @@ interface SubagentCardProps {
  * 点击打开的是**父会话**（子代理不能当成普通会话独立打开，那样只会得到空白页）；
  * 连父标识都没有时按钮禁用，并在说明里写清楚——不做假的成功。
  */
-function SubagentCard({ session, parentTitle, disabled, onOpenHarness, compact = false }: SubagentCardProps) {
+function SubagentCard({ session, parentTitle, archived = false, disabled, onOpenHarness, compact = false }: SubagentCardProps) {
   const openable = session.parentId !== undefined
   const subtitle = t('最近更新 {0}', formatUpdatedAt(session.updatedAt ?? 0))
   const parent = parentTitle === undefined ? '' : t('属于「{0}」', parentTitle)
@@ -478,7 +655,10 @@ function SubagentCard({ session, parentTitle, disabled, onOpenHarness, compact =
         <span className="session-icon"><CornerDownRight size={16} /></span>
         <span className="session-copy">
           <strong>{sessionTitleOf(session)}</strong>
-          <small>{parent === '' ? subtitle : `${subtitle} · ${parent}`}</small>
+          <small className="session-meta">
+            {archived && <span className="session-archived-pill">{t('已归档')}</span>}
+            <span className="session-meta-text">{parent === '' ? subtitle : `${subtitle} · ${parent}`}</span>
+          </small>
         </span>
       </button>
     </article>
