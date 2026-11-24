@@ -121,7 +121,7 @@ const SHELL_HINTS = {
   ROOT_APPROVAL_UNAVAILABLE: '当前没有可用的确认通道或无法打开应用警告页：请提醒用户先打开 DeepSeek Harness 应用前台界面后再试。',
   ROOT_APPROVAL_EXPIRED: '本次审批挑战已过期：如需继续执行，请重新发起一次调用并由用户确认。',
   ROOT_APPROVAL_INVALID: '本次高风险 Root 命令审批校验未通过：请确认脚本内容完整未改动后按正常流程重新发起。',
-  ROOT_SECURITY_VIOLATION: '该 Root 命令未通过安全确认校验：不要试图通过变量拼接或二次 Shell 绕过，请按正常流程重新发起并向用户说明原因。',
+  ROOT_SECURITY_VIOLATION: '该高危操作已被宿主硬编码安全护栏直接拦截：请勿试图通过变量拼接或二次 Shell 绕过；如需执行，请提示用户到应用「设置 → 设备 Shell 设置 → AI 高危文件与命令权限」中开启总开关及对应细分权限。',
 }
 
 /** 受控码 → 固定恢复建议。只有登记过表的命令才有建议，其余命令仍旧只回码。 */
@@ -344,7 +344,9 @@ async function callBridge(command, param, signal, maxChars = MAX_RESULT_CHARS, a
     const explanation = forwardsExplanation && typeof result.text === 'string'
       ? result.text.replace(/\s+/gu, ' ').trim().slice(0, 400)
       : ''
-    const detail = hint ?? (explanation !== '' ? explanation : undefined)
+    const detail = code === 'ROOT_SECURITY_VIOLATION' && explanation !== ''
+      ? (hint ? `${explanation}（${hint}）` : explanation)
+      : (hint ?? (explanation !== '' ? explanation : undefined))
     throw new Error(detail ? `${code}: ${detail}` : code)
   }
   return {

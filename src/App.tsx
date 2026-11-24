@@ -10,6 +10,7 @@ import type { AutomationRuleDefaults } from './components/AutomationRuleForm'
 import { AutomationAppConfigForm } from './components/AutomationAppConfigForm'
 import { AutomationDisclaimer } from './components/AutomationDisclaimer'
 import { AppDisclaimer } from './components/AppDisclaimer'
+import { HighRiskPermissionsCard } from './components/HighRiskPermissionsCard'
 import { AutomationTaskCard } from './components/AutomationTaskCard'
 import { AppBackground } from './components/AppBackground'
 import { LanguageSettings } from './components/LanguageSettings'
@@ -345,7 +346,7 @@ const SETTINGS_HOME_ENTRIES: SettingsHomeEntry[] = [
     group: 'device',
     title: '设备 Shell 设置',
     hint: 'Shizuku 授权与设备命令',
-    keywords: ['shizuku', '授权', '权限', '连接', '设备shell', 'ai shell', 'device shell'],
+    keywords: ['shizuku', '授权', '权限', '连接', '设备shell', 'ai shell', 'device shell', '高危', '拦截', '文件权限', '命令权限', 'high risk'],
     target: { kind: 'page', page: 'device-shell' },
     icon: <Smartphone size={20} />,
   },
@@ -3128,6 +3129,7 @@ function SettingsScreen({ accessibility, busy, harnessVersionBusy, diagnostic, d
             {t("提供设备命令与操作权限；不可用时不影响 Harness")}
           </p>
         </section>
+        <HighRiskPermissionsCard bridge={runtimeBridge} />
         </>
         )}
 

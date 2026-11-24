@@ -2196,6 +2196,53 @@ class MobileRuntimePlugin : Plugin() {
     }
 
     /**
+     * 读取「AI 高危文件与命令权限」设置（1 个总开关 + 17 个细分开关）。
+     */
+    @PluginMethod
+    fun getHighRiskPermissions(call: PluginCall) {
+        execute(call) {
+            io.deepseekharness.mobile.shizuku.HighRiskPermissionStore.status(context).toJs()
+        }
+    }
+
+    /**
+     * 更新「AI 高危文件与命令权限」设置（支持只改总开关、只改部分细分开关或同时修改）。
+     *
+     * 所有高危操作均由宿主硬编码规则在 [io.deepseekharness.mobile.shizuku.RootCommandGuard.verifyPermitted]
+     * 中主动拦截，绝不交由 AI 自行决定。
+     */
+    @PluginMethod
+    fun setHighRiskPermissions(call: PluginCall) {
+        execute(call) {
+            val data = call.data
+                ?: throw RuntimeFailure("HIGH_RISK_PERMISSION_INVALID", "高危权限更新参数缺失")
+            val enabledRaw = if (data.has("enabled")) data.opt("enabled") else null
+            val categoriesRaw = if (data.has("categories")) {
+                val raw = data.opt("categories")
+                if (raw == null || raw == JSONObject.NULL) {
+                    null
+                } else {
+                    raw as? JSONObject
+                        ?: throw RuntimeFailure("HIGH_RISK_PERMISSION_INVALID", "高危权限细分项格式无效")
+                }
+            } else {
+                null
+            }
+            val (enabled, categoryUpdates) = io.deepseekharness.mobile.shizuku.HighRiskPermissionStore.parseUpdate(
+                enabledRaw = enabledRaw,
+                categoriesObj = categoriesRaw,
+            )
+            audited(AuditEvent.ROOT_ENGINE_SETTING) {
+                io.deepseekharness.mobile.shizuku.HighRiskPermissionStore.update(
+                    context = context,
+                    enabled = enabled,
+                    categoryUpdates = categoryUpdates,
+                ).toJs()
+            }
+        }
+    }
+
+    /**
      * 设备电源动作：重启 / 关机。**只给设置页，不给 AI。**
      *
      * 设备桥没有这条命令，AI 工具也不暴露它；每次点击都必须先通过系统身份确认
@@ -4930,6 +4977,16 @@ class MobileRuntimePlugin : Plugin() {
         .put("connected", connected)
         .put("version", version)
         .put("appVersion", appVersion)
+
+    private fun io.deepseekharness.mobile.shizuku.HighRiskPermissions.toJs(): JSObject {
+        val cats = JSObject()
+        for (category in io.deepseekharness.mobile.shizuku.HighRiskCategory.entries) {
+            cats.put(category.wireValue, isCategoryEnabled(category))
+        }
+        return JSObject()
+            .put("enabled", enabled)
+            .put("categories", cats)
+    }
 
 }
 

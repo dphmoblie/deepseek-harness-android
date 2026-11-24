@@ -19,10 +19,13 @@ import { fireEvent, screen, waitFor, within } from '@testing-library/react'
 import { expect, vi } from 'vitest'
 import { resetLanguageSession } from '../i18n'
 import { APP_DISCLAIMER_STORAGE_KEY } from '../appDisclaimer'
-import { ALWAYS_ALLOWED_ACCESSIBILITY_PACKAGES } from '../platform/types'
+import { ALWAYS_ALLOWED_ACCESSIBILITY_PACKAGES, HIGH_RISK_PERMISSION_CATEGORIES } from '../platform/types'
 import type {
   AppOrientationMode,
   DiagnosticLogState,
+  HighRiskPermissionCategory,
+  HighRiskPermissions,
+  HighRiskPermissionsUpdate,
   KeepAliveState,
   MailboxState,
   RuntimeSettings,
@@ -184,6 +187,8 @@ export const bridge = {
   setRootEngineMode: vi.fn(),
   setRootEngineEnabled: vi.fn(),
   requestDevicePowerAction: vi.fn(),
+  getHighRiskPermissions: vi.fn(),
+  setHighRiskPermissions: vi.fn(),
   // 任务台账：界面进「无障碍应用自动化」页会读一次当前任务，取消是用户点击后才调；
   // 缺桩同样会让 effect 抛错并卸载整棵树。
   getAutomationTaskState: vi.fn(),
@@ -691,6 +696,21 @@ export function beforeEachAppTest(): void {
     suVersion: '3.1.0:KernelSU',
   })
   bridge.requestDevicePowerAction.mockResolvedValue({ ok: true, action: 'reboot' })
+  const defaultHighRiskCategories = Object.fromEntries(
+    HIGH_RISK_PERMISSION_CATEGORIES.map(category => [category, false]),
+  ) as Record<HighRiskPermissionCategory, boolean>
+  bridge.getHighRiskPermissions.mockResolvedValue({
+    enabled: false,
+    categories: { ...defaultHighRiskCategories },
+  } satisfies HighRiskPermissions)
+  bridge.setHighRiskPermissions.mockImplementation((update: HighRiskPermissionsUpdate) =>
+    Promise.resolve({
+      enabled: update.enabled ?? false,
+      categories: {
+        ...defaultHighRiskCategories,
+        ...(update.categories ?? {}),
+      },
+    } satisfies HighRiskPermissions))
   // 任务台账默认「服务连着、当前没有任务」：多数用例只关心别的页面，不该被一块写着「有任务在跑」
   // 的读数影响；需要「读不到」（connected=false）或「有任务」的用例自己覆盖这两条桩。
   bridge.getAutomationTaskState.mockResolvedValue({ connected: true, task: null })

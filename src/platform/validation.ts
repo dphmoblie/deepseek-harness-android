@@ -35,6 +35,9 @@ import type {
   DiagnosticLogText,
   ExternalBrowserState,
   HarnessLog,
+  HighRiskPermissionCategory,
+  HighRiskPermissions,
+  HighRiskPermissionsUpdate,
   KeepAliveState,
   MailboxAvailability,
   MailboxDirectoryState,
@@ -116,6 +119,7 @@ import {
   DIAGNOSTIC_RETENTION_MIN,
   HARNESS_LOG_MAX_CHARS,
   HARNESS_LOG_WINDOW_OPTIONS,
+  HIGH_RISK_PERMISSION_CATEGORIES,
   MAX_STORAGE_DIRECTORIES,
   MODEL_PROVIDER_IDS,
   VIRTUAL_SCREEN_AUTO_FOLLOW_VALUES,
@@ -3159,3 +3163,53 @@ const PRESERVE_CATEGORIES = new Set<PreserveCategory>(['conversations', 'plugins
 const MAX_PRESERVE_DIRECTORIES = 8
 const MAX_PRESERVE_ITEMS = 32
 const MAX_PRESERVE_PATH_CHARS = 300
+
+const HIGH_RISK_CATEGORY_SET = new Set<string>(HIGH_RISK_PERMISSION_CATEGORIES)
+
+/**
+ * 校验启动器「AI 高危文件与命令权限」状态（1 个总开关 + 17 个细分开关）。
+ *
+ * 17 个细分键必须全部是显式布尔值，不允许静默把缺键当 true。
+ */
+export function validateHighRiskPermissions(value: unknown): HighRiskPermissions {
+  const source = asRecord(value, '高危文件与命令权限状态')
+  const enabled = requiredBoolean(source.enabled, '高危权限总开关')
+  const rawCategories = asRecord(source.categories, '高危权限细分项')
+  const categories = {} as Record<HighRiskPermissionCategory, boolean>
+  for (const category of HIGH_RISK_PERMISSION_CATEGORIES) {
+    categories[category] = requiredBoolean(rawCategories[category], `高危权限细分项 ${category}`)
+  }
+  return { enabled, categories }
+}
+
+/**
+ * 校验「AI 高危文件与命令权限」更新入参：拒绝未知细分键或非布尔值。
+ */
+export function validateHighRiskPermissionsUpdate(value: unknown): HighRiskPermissionsUpdate {
+  const source = asRecord(value, '高危权限更新参数')
+  let enabled: boolean | undefined
+  if (source.enabled !== undefined) {
+    if (typeof source.enabled !== 'boolean') throw new Error('高危权限总开关格式无效')
+    enabled = source.enabled
+  }
+  let categories: Partial<Record<HighRiskPermissionCategory, boolean>> | undefined
+  if (source.categories !== undefined) {
+    const rawCats = asRecord(source.categories, '高危权限细分项')
+    const parsed: Partial<Record<HighRiskPermissionCategory, boolean>> = {}
+    for (const [key, val] of Object.entries(rawCats)) {
+      if (!HIGH_RISK_CATEGORY_SET.has(key)) throw new Error(`未知的高危权限细分项：${key}`)
+      if (typeof val !== 'boolean') throw new Error(`高危权限细分项 ${key} 的取值必须是布尔值`)
+      parsed[key as HighRiskPermissionCategory] = val
+    }
+    if (Object.keys(parsed).length > 0) {
+      categories = parsed
+    }
+  }
+  if (enabled === undefined && categories === undefined) {
+    throw new Error('高危权限更新参数不能为空')
+  }
+  return {
+    ...(enabled === undefined ? {} : { enabled }),
+    ...(categories === undefined ? {} : { categories }),
+  }
+}

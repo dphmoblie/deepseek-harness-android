@@ -17,6 +17,7 @@ import type {
   DeviceCommandResult,
   DiagnosticLogExport,
   DiagnosticLogState,
+  HighRiskPermissionsUpdate,
   KeepAliveState,
   MailboxRoot,
   NotificationPermissionResult,
@@ -99,6 +100,8 @@ import {
   validateDeviceCapabilityReport,
   validateRootEngineStatus,
   validateDevicePowerActionResult,
+  validateHighRiskPermissions,
+  validateHighRiskPermissionsUpdate,
   validateAutomationTaskState,
   validatePluginCleanupRequest,
   validateRuntimeResidue,
@@ -285,6 +288,8 @@ interface NativeRuntimePlugin {
   setRootEngineEnabled(options: { enabled: boolean }): Promise<unknown>
   setRootEngineMode(options: { mode: string; guardProfile: string }): Promise<unknown>
   requestDevicePowerAction(options: { action: string }): Promise<unknown>
+  getHighRiskPermissions(): Promise<unknown>
+  setHighRiskPermissions(options: HighRiskPermissionsUpdate): Promise<unknown>
   getAutomationTaskState(): Promise<unknown>
   cancelAutomationTask(): Promise<unknown>
   clearRuntimeCache(): Promise<unknown>
@@ -687,6 +692,11 @@ function createNativeBridge(): RuntimeBridge {
     setRootEngineMode: (mode, guardProfile) => NativeRuntime.setRootEngineMode({ mode, guardProfile }).then(validateRootEngineStatus),
     setRootEngineEnabled: enabled => NativeRuntime.setRootEngineEnabled({ enabled }).then(validateRootEngineStatus),
     requestDevicePowerAction: action => NativeRuntime.requestDevicePowerAction({ action }).then(validateDevicePowerActionResult),
+    getHighRiskPermissions: () => NativeRuntime.getHighRiskPermissions().then(validateHighRiskPermissions),
+    setHighRiskPermissions: update => Promise.resolve()
+      .then(() => validateHighRiskPermissionsUpdate(update))
+      .then(validated => NativeRuntime.setHighRiskPermissions(validated))
+      .then(validateHighRiskPermissions),
     // 任务台账：`connected=false` 表示无障碍服务没连上（此时 `task` 一定是 null）——界面必须把
     // 「读不到」与「现在没有任务」分开说；校验器也按这个前提拒收自相矛盾的载荷。
     getAutomationTaskState: () => NativeRuntime.getAutomationTaskState().then(validateAutomationTaskState),

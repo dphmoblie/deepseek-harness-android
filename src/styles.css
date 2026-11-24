@@ -4413,3 +4413,53 @@ html[lang="en"] .screen-heading h1, html[lang="ko"] .screen-heading h1, html[lan
 }
 .credential-save-status.success { color: var(--green); }
 .credential-save-status.error { color: var(--red); }
+
+/* AI 高危文件与命令权限分组与风险等级徽标 */
+.high-risk-group {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.high-risk-group-title {
+  margin: 0 0 8px;
+  color: var(--ink);
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+
+.high-risk-item-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.high-risk-toggle-row.is-master-disabled {
+  opacity: 0.65;
+}
+
+.high-risk-tier-badge {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 6px;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  line-height: 1.4;
+  vertical-align: middle;
+}
+
+.high-risk-tier-badge.tier-elevated {
+  color: var(--blue);
+  background: var(--blue-soft);
+}
+
+.high-risk-tier-badge.tier-high {
+  color: var(--amber-text);
+  background: var(--amber-soft);
+}
+
+.high-risk-tier-badge.tier-critical {
+  color: var(--red-text);
+  background: var(--red-soft);
+}

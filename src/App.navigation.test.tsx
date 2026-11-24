@@ -1,7 +1,8 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { APP_DISCLAIMER_STORAGE_KEY } from './appDisclaimer'
-import type { DiagnosticLogState, KeepAliveState, MailboxState, RuntimeSettings, RuntimeSettingsUpdate, RuntimeState, ShizukuState, StorageAccessState } from './platform/types'
+import { HIGH_RISK_PERMISSION_CATEGORIES } from './platform/types'
+import type { DiagnosticLogState, HighRiskPermissionCategory, KeepAliveState, MailboxState, RuntimeSettings, RuntimeSettingsUpdate, RuntimeState, ShizukuState, StorageAccessState } from './platform/types'
 
 /**
  * 返回键与视图历史。
@@ -70,6 +71,8 @@ const bridge = vi.hoisted(() => ({
   addRuntimeProgressListener: vi.fn(),
   addTerminalOutputListener: vi.fn(),
   addTerminalExitListener: vi.fn(),
+  getHighRiskPermissions: vi.fn(),
+  setHighRiskPermissions: vi.fn(),
   // 首页内嵌的「会话工作区」一挂载就读一次会话列表：缺这个桩会让 effect 抛错并卸载整棵树。
   listSessions: vi.fn(),
 }))
@@ -233,6 +236,17 @@ beforeEach(() => {
   bridge.openHarness.mockResolvedValue(undefined)
   // 导航用例不关心会话列表：默认「读得到，而且确实没有会话」。
   bridge.listSessions.mockResolvedValue({ status: 'ready', sessions: [], truncated: false })
+  const defaultHighRiskCategories = Object.fromEntries(
+    HIGH_RISK_PERMISSION_CATEGORIES.map(category => [category, false]),
+  ) as Record<HighRiskPermissionCategory, boolean>
+  bridge.getHighRiskPermissions.mockResolvedValue({
+    enabled: false,
+    categories: { ...defaultHighRiskCategories },
+  })
+  bridge.setHighRiskPermissions.mockResolvedValue({
+    enabled: false,
+    categories: { ...defaultHighRiskCategories },
+  })
 })
 
 afterEach(() => {

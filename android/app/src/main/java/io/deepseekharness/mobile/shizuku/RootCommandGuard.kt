@@ -80,14 +80,17 @@ object RootCommandGuard {
         val needsUnconfinedCaps: Boolean,
         /** 是否需要跳过外层沙箱包装（仅当用户明确在 App 警告页确认了 HIGH / CRITICAL 时生效）。 */
         val bypassSandboxWrapper: Boolean,
+        /** 命中的细分高危权限类别（去重且按严重度排序），供启动器高危权限硬编码开关直接拦截。 */
+        val categories: List<HighRiskCategory> = emptyList(),
     ) {
         val requiresHostConfirm: Boolean
             get() = route == ApprovalRoute.HOST_CONFIRM || route == ApprovalRoute.APP_WARNING
     }
 
-    /** 一条规则：`action` 给人看的动作名，`pattern` 作用于归一化文本。 */
+    /** 一条规则：`action` 给人看的动作名，`category` 对应启动器细分权限开关，`pattern` 作用于归一化文本。 */
     private data class Rule(
         val action: String,
+        val category: HighRiskCategory,
         val pattern: Regex,
         val unconfinedCaps: Boolean = false,
     )
@@ -107,36 +110,76 @@ object RootCommandGuard {
     private fun command(name: String): String = COMMAND_START + COMMAND_PREFIX + name + """\b"""
 
     /**
-     * Tier 3 · 不可逆变砖 / 数据销毁红线：不硬拦截，但必须打开 App 极危警告页并由用户强确认。
+     * Tier 3 · 不可逆变砖 / 数据销毁红线：未开启对应细分权限时由硬编码规则直接拦截；
+     * 开启后必须打开 App 极危警告页并由用户强确认。
      *
      * 少数极高危词（fastboot、mkfs、块设备等）保留全位置匹配：正常脚本几乎不会作为普通文本出现。
      */
     private val CRITICAL_RULES: List<Rule> = listOf(
         Rule(
             "重启到刷机模式",
+            HighRiskCategory.BLOCK_FLASH_MEMORY_RAW,
             Regex("""\breboot\b[^|;&]{0,40}\b(bootloader|recovery|edl|fastboot|sideload)\b"""),
             unconfinedCaps = true,
         ),
-        Rule("调用刷写工具", Regex("""\b(fastboot|fastbootd|flash_erase|flash_image|blkdiscard)\b"""), unconfinedCaps = true),
-        Rule("adb 侧载刷机", Regex(command("adb") + """\s+sideload\b"""), unconfinedCaps = true),
-        Rule("第三方刷机工具", Regex("""\b(mtkclient|edl|odin|heimdall)\b"""), unconfinedCaps = true),
-        Rule("擦除分区数据", Regex("""\bwipe\s+(data|cache|system)\b"""), unconfinedCaps = true),
-        Rule("用 fastboot 擦除", Regex("""\bfastboot\b[^|;&]{0,20}\s-w\b"""), unconfinedCaps = true),
+        Rule(
+            "调用刷写工具",
+            HighRiskCategory.BLOCK_FLASH_MEMORY_RAW,
+            Regex("""\b(fastboot|fastbootd|flash_erase|flash_image|blkdiscard)\b"""),
+            unconfinedCaps = true,
+        ),
+        Rule(
+            "adb 侧载刷机",
+            HighRiskCategory.BLOCK_FLASH_MEMORY_RAW,
+            Regex(command("adb") + """\s+sideload\b"""),
+            unconfinedCaps = true,
+        ),
+        Rule(
+            "第三方刷机工具",
+            HighRiskCategory.BLOCK_FLASH_MEMORY_RAW,
+            Regex("""\b(mtkclient|edl|odin|heimdall)\b"""),
+            unconfinedCaps = true,
+        ),
+        Rule(
+            "擦除分区数据",
+            HighRiskCategory.SYSTEM_DATA_DESTRUCTION,
+            Regex("""\bwipe\s+(data|cache|system)\b"""),
+            unconfinedCaps = true,
+        ),
+        Rule(
+            "用 fastboot 擦除",
+            HighRiskCategory.SYSTEM_DATA_DESTRUCTION,
+            Regex("""\bfastboot\b[^|;&]{0,20}\s-w\b"""),
+            unconfinedCaps = true,
+        ),
         Rule(
             "改分区表或格式化",
+            HighRiskCategory.BLOCK_FLASH_MEMORY_RAW,
             Regex("""\b(parted|sfdisk|sgdisk|fdisk|mke2fs|mkfs(\.[a-z0-9]+)?|tune2fs|make_ext4fs)\b"""),
             unconfinedCaps = true,
         ),
-        Rule("块设备低级操作", Regex("""\b(blockdev|mknod)\b"""), unconfinedCaps = true),
+        Rule(
+            "块设备低级操作",
+            HighRiskCategory.BLOCK_FLASH_MEMORY_RAW,
+            Regex("""\b(blockdev|mknod)\b"""),
+            unconfinedCaps = true,
+        ),
         Rule(
             "直写物理块设备",
+            HighRiskCategory.BLOCK_FLASH_MEMORY_RAW,
             // `/dev//block`、`/dev/../dev/block` 这类多斜杠或绕路写法一并命中。
             Regex("""(>|of\s*=|tee\s+)[^|;&]*/(dev|by-name)/{1,}(block|disk|mmcblk|nvme|sd[a-z]|ufs)"""),
             unconfinedCaps = true,
         ),
-        Rule("卸载块设备遮蔽", Regex("""\bumount\b[^|;&]*/dev/+block"""), unconfinedCaps = true),
+        Rule(
+            "卸载块设备遮蔽",
+            HighRiskCategory.BLOCK_FLASH_MEMORY_RAW,
+            Regex("""\bumount\b[^|;&]*/dev/+block"""),
+            unconfinedCaps = true,
+        ),
         Rule(
             "读写块设备",
+            HighRiskCategory.BLOCK_FLASH_MEMORY_RAW,
             Regex(
                 command("(?:cat|dd|cp|mv|install|base64|strings|xxd|hexdump|debugfs|e2fsck|fsck|resize2fs|lpmake)") +
                     """[^|;&]*\s/dev/(?:block|disk|mmcblk|nvme|sd[a-z]|ufs)\b""",
@@ -145,6 +188,7 @@ object RootCommandGuard {
         ),
         Rule(
             "高风险操作使用不确定路径",
+            HighRiskCategory.SYSTEM_DATA_DESTRUCTION,
             // 变量、通配符和路径穿越可能把写入/删除目标解析到核心目录；最大档也不能静默放行。
             Regex(
                 command("(?:rm|cp|mv|install|shred|truncate|dd|tee)") +
@@ -153,10 +197,19 @@ object RootCommandGuard {
             unconfinedCaps = true,
         ),
         // ---- 数据销毁：保护数据根与系统关键目录；/data/local/tmp 与模块目录仍可常规操作 ----
-        Rule("删除数据根", Regex(command("rm") + """[^|;&]*\s/data/?\s*(?:$|[;|&)])""")),
-        Rule("删除数据通配", Regex(command("rm") + """[^|;&]*\s/data/\*""")),
+        Rule(
+            "删除数据根",
+            HighRiskCategory.SYSTEM_DATA_DESTRUCTION,
+            Regex(command("rm") + """[^|;&]*\s/data/?\s*(?:$|[;|&)])"""),
+        ),
+        Rule(
+            "删除数据通配",
+            HighRiskCategory.SYSTEM_DATA_DESTRUCTION,
+            Regex(command("rm") + """[^|;&]*\s/data/\*"""),
+        ),
         Rule(
             "删除时使用不确定路径",
+            HighRiskCategory.SYSTEM_DATA_DESTRUCTION,
             // 变量、命令替换、通配符和路径穿越无法在静态分类时可靠解析，按极危处理，
             // 防止 `rm -rf /$name`、`rm -rf /d*` 或 `/data/../data` 绕过数据根规则。
             Regex(
@@ -166,6 +219,7 @@ object RootCommandGuard {
         ),
         Rule(
             "删除系统数据",
+            HighRiskCategory.SYSTEM_DATA_DESTRUCTION,
             Regex(
                 command("rm") +
                     """[^|;&]*\s/data/(?:system|misc|vendor|apex|property|app|dalvik-cache|ota[^/\s]*|adb(?!\s*/modules/))(?:\s|/|$|[;|&)])""",
@@ -173,14 +227,30 @@ object RootCommandGuard {
         ),
         Rule(
             "删除内置存储根",
-            Regex(command("rm") + """[^|;&]*\s/(?:sdcard|storage/emulated/0|data/media/0)/?\s*(?:$|[;|&)])"""),
+            HighRiskCategory.SHARED_STORAGE_DELETE,
+            Regex(command("rm") + """[^|;&]*\s/(?:sdcard|storage/emulated/0|storage/self/primary|data/media/0)/?\s*(?:$|[;|&)])"""),
+        ),
+        Rule(
+            "删除内置存储关键目录或通配",
+            HighRiskCategory.SHARED_STORAGE_DELETE,
+            Regex(
+                command("rm") +
+                    """[^|;&]*\s/(?:sdcard|storage/emulated/0|storage/self/primary|data/media/0)/(?:\*|(?:dcim|pictures|download|documents|movies|music)\b)""",
+            ),
         ),
         Rule(
             "批量删除",
-            Regex(command("find") + """[^|;&]*\s/(?:data|sdcard|storage/emulated/0)\b[^|;&]*\s-delete\b"""),
+            HighRiskCategory.SYSTEM_DATA_DESTRUCTION,
+            Regex(command("find") + """[^|;&]*\s/data\b[^|;&]*\s-delete\b"""),
+        ),
+        Rule(
+            "批量删除",
+            HighRiskCategory.SHARED_STORAGE_DELETE,
+            Regex(command("find") + """[^|;&]*\s/(?:sdcard|storage/emulated/0|storage/self/primary|data/media/0)\b[^|;&]*\s-delete\b"""),
         ),
         Rule(
             "覆写系统数据",
+            HighRiskCategory.SYSTEM_DATA_DESTRUCTION,
             Regex(
                 command("(?:shred|truncate)") +
                     """[^|;&]*\s/data/(?:system|misc|vendor|apex|property|app|dalvik-cache|adb(?!\s*/modules/))\b""",
@@ -188,22 +258,29 @@ object RootCommandGuard {
         ),
         Rule(
             "覆盖系统数据",
+            HighRiskCategory.SYSTEM_DATA_DESTRUCTION,
             Regex(
                 command("(?:cp|mv|install|dd)") +
                     """[^|;&]*(?:\s|=)/(?:data/(?:system|misc|vendor|apex|property|app|dalvik-cache|adb(?!\s*/modules/)))(?:\s|/|$|[;|&)])""",
             ),
         ),
         // ---- 物理内存 ----
-        Rule("物理内存", Regex("""(/dev/mem|/dev/kmem|/proc/kcore)\b"""), unconfinedCaps = true),
+        Rule(
+            "物理内存",
+            HighRiskCategory.BLOCK_FLASH_MEMORY_RAW,
+            Regex("""(/dev/mem|/dev/kmem|/proc/kcore)\b"""),
+            unconfinedCaps = true,
+        ),
     )
 
     /**
      * Tier 2 · 整机级高危：电源、SELinux、系统核心分区写入、关键服务控制、嵌套特权外壳。
-     * 需经 dsh 官方询问（若会话策略为 `ask`）+ Android 宿主 App 页确认后方可执行。
+     * 未开启对应细分权限时由硬编码规则直接拦截；开启后需经 dsh 官方询问 + Android 宿主 App 页确认后方可执行。
      */
     private val HIGH_RULES: List<Rule> = listOf(
         Rule(
             "把核心分区改回可写",
+            HighRiskCategory.CORE_PARTITION_WRITE,
             Regex(
                 """\bmount\b[^|;&]*\brw\b[^|;&]*/$CORE_PARTITIONS\b""" +
                     """|\bmount\b[^|;&]*/$CORE_PARTITIONS\b[^|;&]*\brw\b""",
@@ -212,11 +289,13 @@ object RootCommandGuard {
         ),
         Rule(
             "写核心分区",
+            HighRiskCategory.CORE_PARTITION_WRITE,
             Regex("""(?:>|>>)\s*[^|;&]*/(?:system|vendor|product|system_ext|odm|apex|system_root)(?:/|\s|$|[;|&)])"""),
             unconfinedCaps = true,
         ),
         Rule(
             "写核心分区",
+            HighRiskCategory.CORE_PARTITION_WRITE,
             Regex(
                 command("(?:tee|truncate|sed)") +
                     """[^|;&]*\s/(?:system|vendor|product|system_ext|odm|apex|system_root)(?:/|\s|$|[;|&)])""",
@@ -225,81 +304,188 @@ object RootCommandGuard {
         ),
         Rule(
             "写核心分区",
+            HighRiskCategory.CORE_PARTITION_WRITE,
             Regex(
                 command("(?:cp|mv|install)") +
                     """[^|;&]*\s/(?:system|vendor|product|system_ext|odm|apex|system_root)(?:/[^\s;|&]*)?\s*(?:$|[;|&)])""",
             ),
             unconfinedCaps = true,
         ),
-        Rule("关闭 SELinux 强制模式", Regex("""\bsetenforce\s+(0|permissive)\b"""), unconfinedCaps = true),
-        Rule("写 SELinux 开关文件", Regex(""">\s*[^|;&]*/sys/fs/selinux/enforce"""), unconfinedCaps = true),
-        Rule("用内核参数关 SELinux", Regex("""\b(androidboot\.)?selinux\s*=\s*permissive\b"""), unconfinedCaps = true),
-        Rule("修改电源/服务属性", Regex("""\b(setprop|resetprop)\b[^|;&]*\b(sys\.powerctl|ctl\.)"""), unconfinedCaps = true),
+        Rule(
+            "关闭 SELinux 强制模式",
+            HighRiskCategory.SELINUX_SECURITY_POLICY,
+            Regex("""\bsetenforce\s+(0|permissive)\b"""),
+            unconfinedCaps = true,
+        ),
+        Rule(
+            "写 SELinux 开关文件",
+            HighRiskCategory.SELINUX_SECURITY_POLICY,
+            Regex(""">\s*[^|;&]*/sys/fs/selinux/enforce"""),
+            unconfinedCaps = true,
+        ),
+        Rule(
+            "用内核参数关 SELinux",
+            HighRiskCategory.SELINUX_SECURITY_POLICY,
+            Regex("""\b(androidboot\.)?selinux\s*=\s*permissive\b"""),
+            unconfinedCaps = true,
+        ),
+        Rule(
+            "修改电源/服务属性",
+            HighRiskCategory.SYSTEM_PROPERTIES_WRITE,
+            Regex("""\b(setprop|resetprop)\b[^|;&]*\b(sys\.powerctl|ctl\.)"""),
+            unconfinedCaps = true,
+        ),
         Rule(
             "直接写 Android 属性存储",
+            HighRiskCategory.SYSTEM_PROPERTIES_WRITE,
             Regex(
                 """(>|tee\s+|of\s*=|\b(?:cp|mv|install)\b[^|;&]*\s)[^|;&]*(/data/property/|/dev/__properties__/?)""",
             ),
             unconfinedCaps = true,
         ),
-        Rule("重启或关机", Regex(command("(?:reboot|poweroff|shutdown|halt)")), unconfinedCaps = true),
-        Rule("通过系统服务电源操作", Regex(command("(?:svc|cmd)") + """\s+power\b"""), unconfinedCaps = true),
+        Rule(
+            "重启或关机",
+            HighRiskCategory.DEVICE_POWER_CONTROL,
+            Regex(command("(?:reboot|poweroff|shutdown|halt)")),
+            unconfinedCaps = true,
+        ),
+        Rule(
+            "通过系统服务电源操作",
+            HighRiskCategory.DEVICE_POWER_CONTROL,
+            Regex(command("(?:svc|cmd)") + """\s+power\b"""),
+            unconfinedCaps = true,
+        ),
         Rule(
             "发送重启广播",
+            HighRiskCategory.DEVICE_POWER_CONTROL,
             Regex(command("am") + """[^|;&]*\b(?:reboot|android\.intent\.action\.reboot)\b"""),
             unconfinedCaps = true,
         ),
         Rule(
             "通过 adb 重启",
+            HighRiskCategory.DEVICE_POWER_CONTROL,
             Regex(command("adb") + """[^|;&]*\b(?:reboot|poweroff|shutdown|(?:svc|cmd)\s+power)\b"""),
             unconfinedCaps = true,
         ),
-        Rule("杀死 init", Regex(command("kill") + """[^|;&]*\s(?:-[\w-]+\s+)*1(?:\s|$|[;|&)])"""), unconfinedCaps = true),
-        Rule("写 sysrq 触发器", Regex("""(?:>|>>|tee\s+)[^|;&]*/proc/sysrq-trigger"""), unconfinedCaps = true),
-        Rule("写电源状态", Regex("""(?:>|>>|tee\s+)[^|;&]*/sys/power/"""), unconfinedCaps = true),
+        Rule(
+            "杀死 init",
+            HighRiskCategory.SYSTEM_SERVICE_PRIVILEGE,
+            Regex(command("kill") + """[^|;&]*\s(?:-[\w-]+\s+)*1(?:\s|$|[;|&)])"""),
+            unconfinedCaps = true,
+        ),
+        Rule(
+            "写 sysrq 触发器",
+            HighRiskCategory.DEVICE_POWER_CONTROL,
+            Regex("""(?:>|>>|tee\s+)[^|;&]*/proc/sysrq-trigger"""),
+            unconfinedCaps = true,
+        ),
+        Rule(
+            "写电源状态",
+            HighRiskCategory.DEVICE_POWER_CONTROL,
+            Regex("""(?:>|>>|tee\s+)[^|;&]*/sys/power/"""),
+            unconfinedCaps = true,
+        ),
         Rule(
             "停止关键系统服务",
+            HighRiskCategory.SYSTEM_SERVICE_PRIVILEGE,
             Regex(
                 command("(?:stop|start)") +
                     """\s+(?:zygote|zygote_secondary|system_server|surfaceflinger|servicemanager)\b""",
             ),
             unconfinedCaps = true,
         ),
-        Rule("嵌套 su 执行", Regex(command("su") + """[^|;&]*\s-c\b"""), unconfinedCaps = true),
-        Rule("通过 adb 执行 Shell", Regex(command("adb") + """[^|;&]*\s(?:shell|exec-out|exec-in)\b"""), unconfinedCaps = true),
+        Rule(
+            "嵌套 su 执行",
+            HighRiskCategory.SYSTEM_SERVICE_PRIVILEGE,
+            Regex(command("su") + """[^|;&]*\s-c\b"""),
+            unconfinedCaps = true,
+        ),
+        Rule(
+            "通过 adb 执行 Shell",
+            HighRiskCategory.SYSTEM_SERVICE_PRIVILEGE,
+            Regex(command("adb") + """[^|;&]*\s(?:shell|exec-out|exec-in)\b"""),
+            unconfinedCaps = true,
+        ),
     )
 
     /**
      * Tier 1 · 中高危可逆运维 & 动态 Shell 展开：
-     * - `Profile.MAXIMUM` 下直接放行；
-     * - `Profile.STRICT` 下不再硬拦截，而是交由 dsh 官方审批（若 dsh 为 `danger-full-access` 则尊重 dsh 放行）。
+     * - 未开启对应细分权限时由硬编码规则直接拦截；
+     * - 开启后：`Profile.MAXIMUM` 下直接放行；`Profile.STRICT` 下交由 dsh 官方审批（若 dsh 为 `danger-full-access` 则尊重 dsh 放行）。
      *
      * `/dev/null`、`2>/dev/null`、`/dev/zero`、`/dev/std*` 等标准空设备/流重定向不视为危险写设备。
      */
     private val ELEVATED_RULES: List<Rule> = listOf(
-        Rule("动态 Shell 展开", Regex("""(`|\$\(|\$\{?ifs\b)""", RegexOption.IGNORE_CASE)),
+        Rule(
+            "动态 Shell 展开",
+            HighRiskCategory.DYNAMIC_SHELL_EVAL,
+            Regex("""(`|\$\(|\$\{?ifs\b)""", RegexOption.IGNORE_CASE),
+        ),
         Rule(
             "二次 Shell 解释",
+            HighRiskCategory.DYNAMIC_SHELL_EVAL,
             Regex("""\b(eval|exec|source)\b|(?:^|[;&|\s])\.\s+|\b(sh|bash|mksh)\s+-c\b"""),
         ),
-        Rule("挂载或卸载", Regex(command("(?:mount|umount)")), unconfinedCaps = true),
-        Rule("镜像或设备直写工具", Regex(command("(?:dd|losetup|dmsetup)") + """|\bof\s*="""), unconfinedCaps = true),
+        Rule(
+            "挂载或卸载",
+            HighRiskCategory.FILESYSTEM_MOUNT,
+            Regex(command("(?:mount|umount)")),
+            unconfinedCaps = true,
+        ),
+        Rule(
+            "镜像或设备直写工具",
+            HighRiskCategory.RAW_DEVICE_IMAGE_TOOL,
+            Regex(command("(?:dd|losetup|dmsetup)") + """|\bof\s*="""),
+            unconfinedCaps = true,
+        ),
         Rule(
             "写 /dev 下的设备节点",
+            HighRiskCategory.DEV_NODE_WRITE,
             Regex("""(>|tee\s+)[^|;&]*/dev/(?!(?:null|zero|stdout|stderr|stdin|fd/\d+)(?:\s|$|[;|&)]))"""),
             unconfinedCaps = true,
         ),
         Rule(
             "改系统目录权限或属主",
-            Regex("""\b(chmod|chown|chgrp|setfacl)\b[^|;&]*/(system|vendor|product|system_ext|odm|apex|dev|proc|sys)\b"""),
+            HighRiskCategory.SYSTEM_PERMISSIONS_OWNER,
+            Regex(
+                """\b(chmod|chown|chgrp|setfacl|chcon|restorecon)\b[^|;&]*/(?:system|vendor|product|system_ext|odm|apex|dev|proc|sys|data/(?:system|misc|vendor|apex|property|app|dalvik-cache|data|user/\d+|user_de/\d+|adb(?!\s*/modules/)))\b""",
+            ),
         ),
-        Rule("加载或卸载内核模块", Regex(command("(?:insmod|rmmod|modprobe)")), unconfinedCaps = true),
+        Rule(
+            "加载或卸载内核模块",
+            HighRiskCategory.KERNEL_MODULE_CONTROL,
+            Regex(command("(?:insmod|rmmod|modprobe)")),
+            unconfinedCaps = true,
+        ),
         Rule(
             "写内核参数或 sysfs 关键子树",
+            HighRiskCategory.KERNEL_SYSFS_PROC_WRITE,
             Regex("""(>|tee\s+)[^|;&]*/(proc/sys/|sys/(kernel|fs|module|class|devices|firmware)/)"""),
             unconfinedCaps = true,
         ),
-        Rule("修改 Android 系统属性", Regex(command("(?:setprop|resetprop)"))),
+        Rule(
+            "修改 Android 系统属性",
+            HighRiskCategory.SYSTEM_PROPERTIES_WRITE,
+            Regex(command("(?:setprop|resetprop)")),
+        ),
+        Rule(
+            "修改或删除应用私有数据",
+            HighRiskCategory.APP_PRIVATE_DATA_MODIFY,
+            Regex(
+                command("(?:rm|shred|truncate)") +
+                    """[^|;&]*\s/(?:data/(?:data|user/\d+|user_de/\d+)|(?:sdcard|storage/emulated/0|storage/self/primary)/android/(?:data|obb))(?:/|\s|$|[;|&)])""" +
+                    """|(?:>|>>|tee\s+|of\s*=)[^|;&]*/(?:data/(?:data|user/\d+|user_de/\d+)|(?:sdcard|storage/emulated/0|storage/self/primary)/android/(?:data|obb))/""" +
+                    """|""" + command("(?:cp|mv|install)") +
+                    """[^|;&]*\s/(?:data/(?:data|user/\d+|user_de/\d+)|(?:sdcard|storage/emulated/0|storage/self/primary)/android/(?:data|obb))(?:/[^\s;|&]*)?\s*(?:$|[;|&)])""" +
+                    """|""" + command("sed") +
+                    """[^|;&]*\s-i\b[^|;&]*/(?:data/(?:data|user/\d+|user_de/\d+)|(?:sdcard|storage/emulated/0|storage/self/primary)/android/(?:data|obb))/""",
+            ),
+        ),
+        Rule(
+            "安装卸载或禁用应用",
+            HighRiskCategory.PACKAGE_INSTALL_REMOVE,
+            Regex(command("(?:pm|cmd\\s+package)") + """\s+(?:uninstall|install|clear|disable|disable-user|hide|suspend)\b"""),
+        ),
     )
 
     /**
@@ -329,6 +515,7 @@ object RootCommandGuard {
 
         val allOrdered = criticalMatches + highMatches + elevatedMatches
         val actions = allOrdered.map { it.first.action }.distinct().take(MAX_REPORTED_ACTIONS)
+        val categories = allOrdered.map { it.first.category }.distinct()
         val snippet = primaryMatches.firstOrNull()?.second?.take(MAX_SNIPPET_CHARS).orEmpty()
         val needsUnconfinedCaps = tier == RiskTier.HIGH ||
             tier == RiskTier.CRITICAL ||
@@ -342,7 +529,44 @@ object RootCommandGuard {
             snippet = snippet,
             needsUnconfinedCaps = needsUnconfinedCaps,
             bypassSandboxWrapper = bypassSandboxWrapper,
+            categories = categories,
         )
+    }
+
+    /**
+     * 宿主硬编码高危权限开关拦截器：
+     * - 低风险常规命令（未命中任何高危分类）直接通过；
+     * - 一旦命中任何高危分类（[Assessment.categories] 非空）：
+     *   1. 若启动器「AI 高危文件与命令权限总开关」关闭（`!permissions.enabled`），**当场硬拦截**；
+     *   2. 若命中分类中存在任一未开启的细分开关，**当场硬拦截**；
+     *   3. 仅当总开关开启且所有命中的细分开关均开启时，才允许进入后续执行/审批链路。
+     *
+     * 此检查完全由宿主硬编码正则规则执行，绝不交由 AI 自行判断。
+     */
+    fun verifyPermitted(
+        script: String,
+        profile: Profile = Profile.STRICT,
+        permissions: HighRiskPermissions,
+    ): Assessment {
+        val assessment = classify(script, profile)
+        if (assessment.categories.isEmpty()) return assessment
+        val action = assessment.actions.firstOrNull() ?: "高危文件或命令操作"
+        if (!permissions.enabled) {
+            val cats = assessment.categories.joinToString("、") { it.title }
+            throw RuntimeFailure(
+                "ROOT_SECURITY_VIOLATION",
+                "根命令被安全护栏拦截：$action（AI 高危文件与命令权限总开关已关闭，涉及细分项：$cats；命中片段: ${assessment.snippet}）",
+            )
+        }
+        val blockedCategories = assessment.categories.filterNot { permissions.isCategoryEnabled(it) }
+        if (blockedCategories.isNotEmpty()) {
+            val cats = blockedCategories.joinToString("、") { it.title }
+            throw RuntimeFailure(
+                "ROOT_SECURITY_VIOLATION",
+                "根命令被安全护栏拦截：$action（未开启高危权限细分开关：$cats；命中片段: ${assessment.snippet}）",
+            )
+        }
+        return assessment
     }
 
     /**

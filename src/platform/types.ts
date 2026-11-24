@@ -706,6 +706,46 @@ export interface DevicePowerActionResult {
   ok: boolean
   action: 'reboot' | 'powerOff'
 }
+
+/**
+ * AI 高危文件与命令权限细分项白名单（17 项，与原生 `HighRiskCategory` 一一对应）。
+ *
+ * 每一项对应原生 `RootCommandGuard` 中的硬编码静态拦截规则：
+ * 默认全部为 `false`，且受总开关 `HighRiskPermissions.enabled`（默认 `false`）统管。
+ */
+export const HIGH_RISK_PERMISSION_CATEGORIES = [
+  'core_partition_write',
+  'system_data_destruction',
+  'shared_storage_delete',
+  'app_private_data_modify',
+  'system_permissions_owner',
+  'dev_node_write',
+  'dynamic_shell_eval',
+  'filesystem_mount',
+  'raw_device_image_tool',
+  'kernel_module_control',
+  'kernel_sysfs_proc_write',
+  'system_properties_write',
+  'package_install_remove',
+  'system_service_privilege',
+  'selinux_security_policy',
+  'device_power_control',
+  'block_flash_memory_raw',
+] as const
+
+export type HighRiskPermissionCategory = (typeof HIGH_RISK_PERMISSION_CATEGORIES)[number]
+
+/** 启动器「AI 高危文件与命令权限」状态（1 个总开关 + 17 个细分开关）。 */
+export interface HighRiskPermissions {
+  enabled: boolean
+  categories: Record<HighRiskPermissionCategory, boolean>
+}
+
+/** 更新「AI 高危文件与命令权限」的增量入参。 */
+export interface HighRiskPermissionsUpdate {
+  enabled?: boolean
+  categories?: Partial<Record<HighRiskPermissionCategory, boolean>>
+}
 /** 持久化的运行意图；unknown 表示从未记录。 */
 export type RuntimeIntent = 'running' | 'stopped' | 'unknown'
 
@@ -1850,6 +1890,16 @@ export interface RuntimeBridge {
    * 设置页手动重启/关机。**不在 AI 工具或设备桥里**；原生会先做系统身份确认。
    */
   requestDevicePowerAction: (action: 'reboot' | 'powerOff') => Promise<DevicePowerActionResult>
+  /**
+   * 读取启动器「AI 高危文件与命令权限」（1 个总开关 + 17 个细分开关）。
+   */
+  getHighRiskPermissions: () => Promise<HighRiskPermissions>
+  /**
+   * 更新启动器「AI 高危文件与命令权限」并返回最新状态。
+   *
+   * 拦截由宿主硬编码规则在 `RootCommandGuard.verifyPermitted` 中主动执行，不依赖 AI 自律。
+   */
+  setHighRiskPermissions: (update: HighRiskPermissionsUpdate) => Promise<HighRiskPermissions>
   requestShizukuPermission: () => Promise<ShizukuState>
   connectShizuku: () => Promise<ShizukuState>
   openShizuku: () => Promise<void>

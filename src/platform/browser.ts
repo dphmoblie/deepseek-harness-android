@@ -19,6 +19,9 @@ import type {
   AccessibilityAutomationState,
   DiagnosticLogText,
   HarnessLog,
+  HighRiskPermissionCategory,
+  HighRiskPermissions,
+  HighRiskPermissionsUpdate,
   KeepAliveState,
   MailboxRoot,
   MailboxDirectoryState,
@@ -53,9 +56,9 @@ import type {
   TerminalExit,
   TerminalKind,
 } from './types'
-import { ALWAYS_ALLOWED_ACCESSIBILITY_PACKAGES, DIAGNOSTIC_RETENTION_DEFAULT, MAX_STORAGE_DIRECTORIES, MODEL_PROVIDER_IDS } from './types'
+import { ALWAYS_ALLOWED_ACCESSIBILITY_PACKAGES, DIAGNOSTIC_RETENTION_DEFAULT, HIGH_RISK_PERMISSION_CATEGORIES, MAX_STORAGE_DIRECTORIES, MODEL_PROVIDER_IDS } from './types'
 import { validateSelfCheckOperation, type SelfCheckOperation, type SelfCheckReport } from '../runtimeSelfCheck'
-import { assertMailboxSubdirectory, assertAccessibilityAutomationAction, assertAccessibilityAutomationAppConfigInput, assertAccessibilityAutomationRuleInput, assertAccessibilityPackageName, assertAccessibilityRuleId, assertAccessibilityRuleWriteMode, assertBooleanFlag, assertRuntimeVersionPinTarget, assertRuntimeVersionTarget, assertSessionId, assertStorageDirPath, assertStorageGuestPath, validateAccessibilityPasswordInput, validateDeviceCommand, validateDeviceCommandParam, validateSettings, validateSettingsUpdate, validateRuntimeSource, validatePluginCleanupRequest } from './validation'
+import { assertMailboxSubdirectory, assertAccessibilityAutomationAction, assertAccessibilityAutomationAppConfigInput, assertAccessibilityAutomationRuleInput, assertAccessibilityPackageName, assertAccessibilityRuleId, assertAccessibilityRuleWriteMode, assertBooleanFlag, assertRuntimeVersionPinTarget, assertRuntimeVersionTarget, assertSessionId, assertStorageDirPath, assertStorageGuestPath, validateAccessibilityPasswordInput, validateDeviceCommand, validateDeviceCommandParam, validateHighRiskPermissionsUpdate, validateSettings, validateSettingsUpdate, validateRuntimeSource, validatePluginCleanupRequest } from './validation'
 
 const SETTINGS_KEY = 'dsh-mobile-settings-v1'
 /** 文档里的固定投递区路径；浏览器预览只用来**展示**，不声称它可用（见 getMailboxState）。 */
@@ -129,6 +132,12 @@ export function createBrowserBridge(): RuntimeBridge {
     fileCount: 0,
     totalBytes: 0,
     lastEntryAtMillis: 0,
+  }
+  let highRiskPermissions: HighRiskPermissions = {
+    enabled: false,
+    categories: Object.fromEntries(
+      HIGH_RISK_PERMISSION_CATEGORIES.map(category => [category, false]),
+    ) as Record<HighRiskPermissionCategory, boolean>,
   }
   const progressListeners = new Set<(event: RuntimeProgress) => void>()
   const outputListeners = new Set<(event: TerminalChunk) => void>()
@@ -766,6 +775,26 @@ export function createBrowserBridge(): RuntimeBridge {
       Promise.reject(new Error('浏览器预览不支持根通道开关')),
     requestDevicePowerAction: () =>
       Promise.reject(new Error('浏览器预览不支持设备电源操作')),
+    getHighRiskPermissions: (): Promise<HighRiskPermissions> =>
+      Promise.resolve({
+        enabled: highRiskPermissions.enabled,
+        categories: { ...highRiskPermissions.categories },
+      }),
+    setHighRiskPermissions: (update: HighRiskPermissionsUpdate): Promise<HighRiskPermissions> =>
+      Promise.resolve().then(() => {
+        const validated = validateHighRiskPermissionsUpdate(update)
+        highRiskPermissions = {
+          enabled: validated.enabled ?? highRiskPermissions.enabled,
+          categories: {
+            ...highRiskPermissions.categories,
+            ...(validated.categories ?? {}),
+          },
+        }
+        return {
+          enabled: highRiskPermissions.enabled,
+          categories: { ...highRiskPermissions.categories },
+        }
+      }),
     // 任务台账活在无障碍服务进程里，预览里没有那个进程，也没有可取消的任务：两条都如实拒绝。
     // **不要**回 `{ connected: false, task: null }`——界面得能区分「预览做不到」与「服务没连上」，
     // 后者在真机上是有意义的状态（提示去开服务），前者提示了也没用。

@@ -5,6 +5,8 @@ import io.deepseekharness.mobile.runtime.RuntimeScopedResource
 import io.deepseekharness.mobile.shizuku.DeviceCommand
 import io.deepseekharness.mobile.shizuku.DeviceFilePolicy
 import io.deepseekharness.mobile.shizuku.DeviceCommandRunner
+import io.deepseekharness.mobile.shizuku.HighRiskPermissionStore
+import io.deepseekharness.mobile.shizuku.HighRiskPermissions
 import io.deepseekharness.mobile.shizuku.LocalDeviceFileStore
 import io.deepseekharness.mobile.shizuku.RootApprovalCoordinator
 import io.deepseekharness.mobile.shizuku.RootApprovalRegistry
@@ -70,6 +72,7 @@ class DeviceBridgeServer(
     port: Int = 0,
     private val shellEnabled: () -> Boolean = { false },
     private val rootStatusProvider: (() -> RootEngineAccess.Status?)? = null,
+    private val highRiskPermissionsProvider: (() -> HighRiskPermissions)? = null,
 ) : RuntimeScopedResource {
     private val server = ServerSocket(port, 12, InetAddress.getByName("127.0.0.1"))
     // 扩大有界线程池并用 shizukuSlots 单独限流阻塞型 Shizuku 调用：即使 2 条 Shizuku 调用同时卡在
@@ -114,6 +117,10 @@ class DeviceBridgeServer(
             }
 
     private fun rootEngineUsable(): Boolean = currentRootStatus()?.usable == true
+
+    private fun currentHighRiskPermissions(): HighRiskPermissions =
+        highRiskPermissionsProvider?.invoke()
+            ?: HighRiskPermissionStore.status(applicationContextOrNull())
 
     private fun recordRootApprovalAudit(result: AuditResult, detail: String) {
         val context = applicationContextOrNull() ?: return
@@ -354,6 +361,11 @@ class DeviceBridgeServer(
                             active = state?.optBoolean("active") == true,
                             sessionDisplayId = state?.optInt("displayId", 0) ?: 0,
                         )
+                        RootCommandGuard.verifyPermitted(
+                            requireNotNull(script),
+                            RootCommandGuard.Profile.STRICT,
+                            currentHighRiskPermissions(),
+                        )
                         respondResult(output, runOneShot(DeviceCommand.SHELL, plan.command), plan.displayId)
                         return
                     }
@@ -423,7 +435,11 @@ class DeviceBridgeServer(
                     if (rootEngine) {
                         val rootGuardProfile = rootStatus?.guardProfile ?: RootCommandGuard.Profile.STRICT
                         validateShellScript(param)
-                        val assessment = RootCommandGuard.classify(param, rootGuardProfile)
+                        val assessment = RootCommandGuard.verifyPermitted(
+                            param,
+                            rootGuardProfile,
+                            currentHighRiskPermissions(),
+                        )
                         if (assessment.route == RootCommandGuard.ApprovalRoute.ALLOW) {
                             val grant = RootApprovalRegistry.grantDirect(param, assessment)
                             respondResult(output, runOneShot(command, param, true, rootGuardProfile, grant))
@@ -448,6 +464,14 @@ class DeviceBridgeServer(
                             )
                         }
                         return
+                    }
+                    if (command == DeviceCommand.SHELL) {
+                        validateShellScript(param)
+                        RootCommandGuard.verifyPermitted(
+                            param,
+                            RootCommandGuard.Profile.STRICT,
+                            currentHighRiskPermissions(),
+                        )
                     }
                     respondResult(output, runOneShot(command, param))
                 } catch (error: Throwable) {
@@ -504,10 +528,19 @@ class DeviceBridgeServer(
             shellEnabled(),
         )
         if (!rootEngine) {
+            RootCommandGuard.verifyPermitted(
+                script,
+                RootCommandGuard.Profile.STRICT,
+                currentHighRiskPermissions(),
+            )
             return runOneShot(DeviceCommand.SHELL, script)
         }
         val guardProfile = rootStatus?.guardProfile ?: RootCommandGuard.Profile.STRICT
-        val assessment = RootCommandGuard.classify(script, guardProfile)
+        val assessment = RootCommandGuard.verifyPermitted(
+            script,
+            guardProfile,
+            currentHighRiskPermissions(),
+        )
         val grant = try {
             when (assessment.route) {
                 RootCommandGuard.ApprovalRoute.ALLOW ->
