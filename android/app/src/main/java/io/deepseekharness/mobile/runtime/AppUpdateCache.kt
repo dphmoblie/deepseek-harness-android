@@ -40,6 +40,29 @@ internal class AppUpdateCache(
             .put("channel", channel.id)
     }
 
+    /**
+     * 纯本地状态（绝不触网）：立即返回本机已装版本、安装权限与已持久化频道；
+     * 仅当缓存里存在同版本同频道的有效快照时附带 `cached`/`checkedAt`/`available`，
+     * 绝不泄露旧版本或另一频道的候选。远端刷新失败时可带 `refreshFailed = true`。
+     */
+    fun localState(
+        installed: InstalledAppInfo,
+        installAllowed: Boolean,
+        channel: AppUpdateChannel,
+        refreshFailed: Boolean = false,
+    ): JSONObject {
+        val stored = synchronized(this) { read()?.takeIf { usable(it, installed, channel) } }
+        val payload = catalog.state(installed, installAllowed, stored?.available)
+            .put("channel", channel.id)
+        if (stored != null) {
+            payload.put("cached", true).put("checkedAt", stored.checkedAt)
+        }
+        if (refreshFailed) {
+            payload.put("refreshFailed", true)
+        }
+        return payload
+    }
+
     fun availableRelease(installed: InstalledAppInfo, channel: AppUpdateChannel): AppReleaseCatalog.Release? =
         lookup(installed, channel, forceRefresh = false).snapshot.available
 

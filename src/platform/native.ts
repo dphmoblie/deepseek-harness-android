@@ -300,6 +300,7 @@ interface NativeRuntimePlugin {
   /** 列出原生侧已知的运行时可用版本；结果由 TS 侧校验后再交给界面。 */
   listRuntimeReleases(): Promise<unknown>
   downloadRuntimeRelease(options: { manifestUrl: string; manifestSha256: string }): Promise<unknown>
+  getAppUpdateLocalState(): Promise<unknown>
   getAppUpdateState(options?: { forceRefresh: boolean }): Promise<unknown>
   setAppUpdateChannel(options: { channel: string }): Promise<unknown>
   downloadAppUpdate(): Promise<void>
@@ -751,6 +752,7 @@ function createNativeBridge(): RuntimeBridge {
     listRuntimeReleases: () => NativeRuntime.listRuntimeReleases().then(validateRuntimeReleaseList),
     downloadRuntimeRelease: (manifestUrl, manifestSha256) =>
       NativeRuntime.downloadRuntimeRelease({ manifestUrl, manifestSha256 }).then(() => undefined),
+    getAppUpdateLocalState: () => NativeRuntime.getAppUpdateLocalState().then(validateAppUpdateState),
     getAppUpdateState: (forceRefresh = false) => {
       if (typeof forceRefresh !== 'boolean') return Promise.reject(new Error('应用更新刷新参数无效'))
       return NativeRuntime.getAppUpdateState({ forceRefresh }).then(validateAppUpdateState)

@@ -211,6 +211,15 @@ class AppReleaseCatalogTest {
         assertNull(AppUpdateChannel.parseBackup(null))
     }
 
+    @Test
+    fun unsetChannelDefaultsToBetaForInstalledPreviewBuildsAndStableOtherwise() {
+        assertEquals(AppUpdateChannel.BETA, AppUpdateChannel.defaultForInstalled("0.4.6-mobile-690"))
+        assertEquals(AppUpdateChannel.STABLE, AppUpdateChannel.defaultForInstalled("0.4.6"))
+        assertEquals(AppUpdateChannel.STABLE, AppUpdateChannel.defaultForInstalled(null))
+        assertEquals(AppUpdateChannel.STABLE, AppUpdateChannel.defaultForInstalled("unknown"))
+        assertEquals(AppUpdateChannel.STABLE, AppUpdateChannel.defaultForInstalled("0.4.6-custom"))
+    }
+
     // ---- 更新说明 ----
 
     @Test

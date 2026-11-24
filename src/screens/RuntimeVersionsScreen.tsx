@@ -297,6 +297,8 @@ interface RuntimeVersionsScreenProps extends RuntimeVersionsPanelProps {
   restoreSnapshot: (id: string) => Promise<RuntimeSessionSnapshotRestoreResult>
   deleteSnapshot: (id: string) => Promise<RuntimeSessionSnapshotState>
   loadUpdate: (forceRefresh?: boolean) => Promise<AppUpdateState>
+  /** 纯本地应用更新状态（不触网），用于首帧展示与离线保留频道开关。 */
+  loadLocalUpdate?: () => Promise<AppUpdateState>
   /** 应用更新频道切换，只透传给 [AppUpdateSection]。 */
   setUpdateChannel: (channel: AppUpdateChannel) => Promise<AppUpdateState>
   downloadUpdate: () => Promise<void>
@@ -341,6 +343,7 @@ export function RuntimeVersionsScreen({
   restoreSnapshot,
   deleteSnapshot,
   loadUpdate,
+  loadLocalUpdate,
   setUpdateChannel,
   downloadUpdate,
   installUpdate,
@@ -394,6 +397,7 @@ export function RuntimeVersionsScreen({
 
       <AppUpdateSection
         loadUpdate={loadUpdate}
+        loadLocalUpdate={loadLocalUpdate}
         setUpdateChannel={setUpdateChannel}
         downloadUpdate={downloadUpdate}
         installUpdate={installUpdate}

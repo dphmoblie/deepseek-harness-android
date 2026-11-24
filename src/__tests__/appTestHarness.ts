@@ -215,6 +215,7 @@ export const bridge = {
   manageHarnessVersions: vi.fn(),
   listRuntimeReleases: vi.fn(),
   downloadRuntimeRelease: vi.fn(),
+  getAppUpdateLocalState: vi.fn(),
   getAppUpdateState: vi.fn(),
   setAppUpdateChannel: vi.fn(),
   downloadAppUpdate: vi.fn(),
@@ -752,6 +753,12 @@ export function beforeEachAppTest(): void {
   bridge.manageHarnessVersions.mockResolvedValue({ active: 'bundled', bundledVersion: '0.2.0-rc.2', installed: [] })
   bridge.listRuntimeReleases.mockResolvedValue({ entries: [] })
   bridge.downloadRuntimeRelease.mockResolvedValue(undefined)
+  bridge.getAppUpdateLocalState.mockResolvedValue({
+    installedVersion: '0.2.0',
+    installedVersionCode: 22,
+    channel: 'stable',
+    installAllowed: false,
+  })
   bridge.getAppUpdateState.mockResolvedValue({
     installedVersion: '0.2.0',
     installedVersionCode: 22,

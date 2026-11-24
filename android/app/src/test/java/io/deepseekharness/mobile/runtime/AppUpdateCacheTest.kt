@@ -290,4 +290,41 @@ class AppUpdateCacheTest {
         assertFalse(first.isAlive)
         assertFalse(second.isAlive)
     }
+
+    @Test
+    fun localStateNeverHitsNetworkAndDropsStaleVersionOrChannelCandidates() {
+        val storage = MemoryStorage()
+        // 先在旧版本 stable 频道写入一条可用更新缓存。
+        AppUpdateCache(storage, AppReleaseCatalog { payload("0.2.1") }, { 1000 })
+            .state(installed, installAllowed = false, AppUpdateChannel.STABLE)
+
+        val offline = AppUpdateCache(storage, AppReleaseCatalog { error("localState must not touch network") }, { 2000 })
+
+        // 同版本同频道：命中本地缓存。
+        val hit = offline.localState(installed, installAllowed = true, AppUpdateChannel.STABLE)
+        assertEquals("stable", hit.getString("channel"))
+        assertTrue(hit.getBoolean("cached"))
+        assertEquals(1000L, hit.getLong("checkedAt"))
+        assertTrue(hit.getBoolean("installAllowed"))
+        assertEquals("0.2.1", hit.getJSONObject("available").getString("version"))
+        assertFalse(hit.has("refreshFailed"))
+
+        // 应用更新后（版本变化）：不触网、保留已装版本与 beta 频道，且绝不泄露旧版本候选。
+        val upgraded = InstalledAppInfo("0.4.6-mobile-690", 54L)
+        val afterUpgrade = offline.localState(upgraded, installAllowed = true, AppUpdateChannel.BETA)
+        assertEquals("0.4.6-mobile-690", afterUpgrade.getString("installedVersion"))
+        assertEquals(54L, afterUpgrade.getLong("installedVersionCode"))
+        assertEquals("beta", afterUpgrade.getString("channel"))
+        assertFalse(afterUpgrade.has("available"))
+        assertFalse(afterUpgrade.has("cached"))
+        assertFalse(afterUpgrade.has("checkedAt"))
+
+        // 离线切换频道（refreshFailed=true）：回传新频道与失败标记，绝不泄露旧频道候选。
+        val switchedOffline = offline.localState(installed, installAllowed = false, AppUpdateChannel.BETA, refreshFailed = true)
+        assertEquals("beta", switchedOffline.getString("channel"))
+        assertTrue(switchedOffline.getBoolean("refreshFailed"))
+        assertFalse(switchedOffline.has("available"))
+        assertFalse(switchedOffline.has("cached"))
+        assertFalse(switchedOffline.has("checkedAt"))
+    }
 }

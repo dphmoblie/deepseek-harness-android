@@ -1013,17 +1013,37 @@ class MobileRuntimePlugin : Plugin() {
 
     /**
      * 权限：应用内桥接。
+     * 纯本地应用更新状态（绝不联网、不抢占远端更新锁）：立即回传本机已装版本、安装权限、
+     * 已持久化频道及同版本同频道的有效缓存（若有）。用于版本管理页首帧与离线降级，
+     * 避免应用更新后缓存失效或 GitHub 波动时把「接收测试版本」开关回弹关闭并锁死。
+     */
+    @PluginMethod
+    fun getAppUpdateLocalState(call: PluginCall) {
+        execute(call) {
+            AppUpdateCache.from(context).localState(
+                AppReleaseCatalog.installed(context),
+                AppReleaseCatalog.installAllowed(context),
+                AppUpdateChannel.load(context),
+            ).toJsObject()
+        }
+    }
+
+    /**
+     * 权限：应用内桥接。
      * 应用自身更新状态：本机已安装版本、是否已授权安装未知应用，以及**严格更新**时才出现的 available。
      *
      * 默认读取有效缓存；调用方可显式传 true 检查远端最新版。
      * 没有更新时 available 键缺失，
      * cached / checkedAt 说明元数据来源；channel 是当前生效的更新频道（stable / beta），
      * 界面据此渲染「接收测试版本」开关；本机版本和安装权限始终实时读取，不回传下载地址。
+     *
+     * 只读元数据查询走 [AppUpdateCache] 内部 `inFlight` 按 `(installed, channel)` 去重，
+     * 不再占用 [appUpdateOperationLock]，避免开机每日提醒与版本页/频道切换互相阻塞。
      */
     @PluginMethod
     fun getAppUpdateState(call: PluginCall) {
         execute(call) {
-            audited(AuditEvent.APP_UPDATE, appUpdateOperationLock) {
+            auditedUnlocked(AuditEvent.APP_UPDATE) {
                 val forceRefresh = if (call.data.has("forceRefresh")) {
                     call.data.opt("forceRefresh") as? Boolean
                         ?: throw RuntimeFailure("APP_UPDATE_INPUT_INVALID", "更新检查参数无效")
@@ -1040,10 +1060,13 @@ class MobileRuntimePlugin : Plugin() {
 
     /**
      * 权限：应用内桥接。
-     * 切换应用更新频道（stable / beta）：频道持久化在原生 SharedPreferences，前端不存、不传参。
+     * 切换应用更新频道（stable / beta）：频道持久化在原生 SharedPreferences + 文件副本，前端不存、不传参。
      *
-     * 频道决定下载哪个 APK，与「目录与地址由原生自己决定」是同一条安全边界。先以
-     * forceRefresh 检查目标频道，成功后才保存并返回完整 state；检查失败保持原频道。
+     * 频道决定下载哪个 APK，与「目录与地址由原生自己决定」是同一条安全边界。
+     * **先同步落盘频道选择**，再以 `forceRefresh = true` 拉取目标频道候选：
+     * - 联网成功：返回新频道完整 state；
+     * - 联网失败：不丢弃已保存的频道，返回新频道的本地态（`refreshFailed = true`，不带旧频道 `available`，
+     *   因此既不会按旧频道误下载，也不会把开关回弹锁死）。
      */
     @PluginMethod
     fun setAppUpdateChannel(call: PluginCall) {
@@ -1051,14 +1074,15 @@ class MobileRuntimePlugin : Plugin() {
             audited(AuditEvent.APP_UPDATE, appUpdateOperationLock) {
                 val channel = AppUpdateChannel.fromId(call.data.opt("channel") as? String)
                     ?: throw RuntimeFailure("APP_UPDATE_INPUT_INVALID", "更新频道参数无效")
-                val state = AppUpdateCache.from(context).state(
-                    AppReleaseCatalog.installed(context),
-                    AppReleaseCatalog.installAllowed(context),
-                    channel,
-                    forceRefresh = true,
-                ).toJsObject()
                 AppUpdateChannel.save(context, channel)
-                state
+                val installed = AppReleaseCatalog.installed(context)
+                val installAllowed = AppReleaseCatalog.installAllowed(context)
+                val cache = AppUpdateCache.from(context)
+                try {
+                    cache.state(installed, installAllowed, channel, forceRefresh = true).toJsObject()
+                } catch (_: RuntimeFailure) {
+                    cache.localState(installed, installAllowed, channel, refreshFailed = true).toJsObject()
+                }
             }
         }
     }
@@ -4778,22 +4802,26 @@ class MobileRuntimePlugin : Plugin() {
 
     private fun <T> audited(event: AuditEvent, lock: ReentrantLock = auditedOperationLock, operation: () -> T): T {
         return lock.withLock {
-            ensurePluginActive()
-            recordAudit(event, AuditResult.STARTED)
-            try {
-                operation().also { recordAudit(event, AuditResult.SUCCEEDED) }
-            } catch (failure: RuntimeFailure) {
-                val result = if (event == AuditEvent.RUNTIME_INSTALL && failure.code == "INSTALL_CANCELLED") {
-                    AuditResult.CANCELLED
-                } else {
-                    AuditResult.FAILED
-                }
-                recordAudit(event, result, failure.code)
-                throw failure
-            } catch (error: Throwable) {
-                recordAudit(event, AuditResult.FAILED, "INTERNAL_ERROR")
-                throw error
+            auditedUnlocked(event, operation)
+        }
+    }
+
+    private fun <T> auditedUnlocked(event: AuditEvent, operation: () -> T): T {
+        ensurePluginActive()
+        recordAudit(event, AuditResult.STARTED)
+        return try {
+            operation().also { recordAudit(event, AuditResult.SUCCEEDED) }
+        } catch (failure: RuntimeFailure) {
+            val result = if (event == AuditEvent.RUNTIME_INSTALL && failure.code == "INSTALL_CANCELLED") {
+                AuditResult.CANCELLED
+            } else {
+                AuditResult.FAILED
             }
+            recordAudit(event, result, failure.code)
+            throw failure
+        } catch (error: Throwable) {
+            recordAudit(event, AuditResult.FAILED, "INTERNAL_ERROR")
+            throw error
         }
     }
 

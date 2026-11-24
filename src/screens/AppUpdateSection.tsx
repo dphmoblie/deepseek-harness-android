@@ -19,7 +19,9 @@ import type {
 interface AppUpdateSectionProps {
   /** 读取应用自身（APK）的更新状态；默认联网检查最新版，明确传 false 才读取缓存。 */
   loadUpdate: (forceRefresh?: boolean) => Promise<AppUpdateState>
-  /** 切换更新频道；一次往返返回最新状态，失败时回读实际频道（不做乐观态）。 */
+  /** 读取纯本地更新事实（已装版本、安装权限与已持久化频道），绝不触网。 */
+  loadLocalUpdate?: () => Promise<AppUpdateState>
+  /** 切换更新频道；原生先落盘再尝试联网刷新，联网失败时回传已保存频道的本地态。 */
   setUpdateChannel: (channel: AppUpdateChannel) => Promise<AppUpdateState>
   downloadUpdate: () => Promise<void>
   installUpdate: () => Promise<void>
@@ -40,7 +42,7 @@ interface AppUpdateSectionProps {
  * 上面几块换的是运行时镜像。安装必须由系统安装器完成，应用只能把包递过去，
  * 所以这里会如实说明「会跳到系统安装界面」以及「需要允许安装未知来源」。
  */
-export function AppUpdateSection({ loadUpdate, setUpdateChannel, downloadUpdate, installUpdate, openInstallSettings, notify, subscribeProgress, reminderEnabled, onReminderEnabledChange, reminderStorageAvailable }: AppUpdateSectionProps) {
+export function AppUpdateSection({ loadUpdate, loadLocalUpdate, setUpdateChannel, downloadUpdate, installUpdate, openInstallSettings, notify, subscribeProgress, reminderEnabled, onReminderEnabledChange, reminderStorageAvailable }: AppUpdateSectionProps) {
   const [state, setState] = useState<AppUpdateState | null>(null)
   const [loading, setLoading] = useState(true)
   const [failed, setFailed] = useState(false)
@@ -73,19 +75,33 @@ export function AppUpdateSection({ loadUpdate, setUpdateChannel, downloadUpdate,
 
   const load = useCallback((forceRefresh = true) => {
     const revision = ++readRevision.current
+    let remoteSucceeded = false
     setLoading(true)
     setFailed(false)
+    if (loadLocalUpdate !== undefined) {
+      // 首帧与离线先读本地事实（已装版本、安装权限与持久化频道），防止更新后缓存失效
+      // 或 GitHub 波动把「接收测试版本」开关回弹关闭并锁死。
+      void loadLocalUpdate().then(local => {
+        if (revision === readRevision.current && !remoteSucceeded) {
+          setState(prev => prev ?? local)
+        }
+      }).catch(() => undefined)
+    }
     void (async () => {
       try {
         const next = await loadUpdate(forceRefresh)
-        if (revision === readRevision.current) setState(next)
+        remoteSucceeded = true
+        if (revision === readRevision.current) {
+          setState(next)
+          setFailed(next.refreshFailed === true)
+        }
       } catch {
         if (revision === readRevision.current) setFailed(true)
       } finally {
         if (revision === readRevision.current) setLoading(false)
       }
     })()
-  }, [loadUpdate])
+  }, [loadLocalUpdate, loadUpdate])
 
   useEffect(() => {
     // 进入页面默认直连发布目录，避免 24 小时缓存让用户看到旧的下一版本。
@@ -114,28 +130,50 @@ export function AppUpdateSection({ loadUpdate, setUpdateChannel, downloadUpdate,
   const available = state?.available
 
   /**
-   * 切换更新频道：一次往返带回最新状态，开关始终以原生回读的 state.channel 为准。
+   * 切换更新频道：原生先同步落盘频道，再尝试联网刷新目标频道候选。
    *
-   * 失败后重新确认实际频道；无法确认时清除旧候选，避免按不明频道下载。
-   * 复用 readRevision 守卫：切换进行中禁用所有会触发 load 的按钮，所以这个序号
-   * 只会被卸载清理打断，不会被本组件的其它读取覆盖。
+   * - 联网成功：直接采用返回的完整状态；
+   * - 联网失败（`refreshFailed: true`）：保留新频道与本地事实、清除旧频道候选，并提示稍后重试；
+   * - 落盘或桥接异常：先尝试远端回读，再退回本地回读，避免网络故障时把开关锁死。
    */
   const switchChannel = (next: AppUpdateChannel): void => {
-    if (state === null || loading || busy !== null || switchingChannel) return
+    if (state === null || busy !== null || switchingChannel) return
     const revision = ++readRevision.current
     setSwitchingChannel(true)
+    setLoading(false)
     setFailed(false)
     void (async () => {
       try {
         const fresh = await setUpdateChannel(next)
-        if (revision === readRevision.current) setState(fresh)
+        if (revision !== readRevision.current) return
+        setState(fresh)
+        if (fresh.refreshFailed === true) {
+          setFailed(true)
+          notify(t("更新频道已保存，但暂时无法检查远端更新，请稍后重试。"), 'error')
+        }
       } catch (error) {
         if (revision !== readRevision.current) return
         notify(errorMessage(error), 'error')
         try {
           const fresh = await loadUpdate(true)
-          if (revision === readRevision.current) setState(fresh)
+          if (revision === readRevision.current) {
+            setState(fresh)
+            setFailed(fresh.refreshFailed === true)
+          }
         } catch {
+          if (revision !== readRevision.current) return
+          if (loadLocalUpdate !== undefined) {
+            try {
+              const local = await loadLocalUpdate()
+              if (revision === readRevision.current) {
+                setState(local)
+                setFailed(true)
+              }
+              return
+            } catch {
+              // 本地回读也失败时，下方退回空态并禁用开关。
+            }
+          }
           if (revision === readRevision.current) {
             setState(null)
             setFailed(true)
@@ -146,6 +184,17 @@ export function AppUpdateSection({ loadUpdate, setUpdateChannel, downloadUpdate,
       }
     })()
   }
+  const hasRemoteStatus = state !== null && (state.checkedAt !== undefined || (!loading && !failed && state.refreshFailed !== true))
+  const showRefreshAlert = state !== null && (failed || state.refreshFailed === true)
+  const statusChipTone = available !== undefined ? 'warn' : (hasRemoteStatus ? 'success' : 'warn')
+  const statusChipLabel = available !== undefined
+    ? t("可更新")
+    : (hasRemoteStatus ? t("已是最新") : (loading ? t("正在检查") : t("未检查")))
+  const statusDetail = available !== undefined
+    ? `${available.version} · ${formatBytes(available.bytes)}`
+    : (hasRemoteStatus
+      ? (state?.channel === 'beta' ? t("发布页上没有更新的正式版或测试版") : t("发布页上没有更新的正式版本"))
+      : (loading ? t("正在连接发布目录…") : t("暂时无法连接发布目录，请检查网络后重试")))
   // 百分比只在拿到原生进度、且总量为正时才有意义；否则显示「处理中」的不确定进度条。
   const downloadPercent = progress === null || progress.totalBytes <= 0
     ? null
@@ -179,7 +228,7 @@ export function AppUpdateSection({ loadUpdate, setUpdateChannel, downloadUpdate,
           role="switch"
           aria-label={t("接收测试版本")}
           checked={state?.channel === 'beta'}
-          disabled={state === null || loading || busy !== null || switchingChannel}
+          disabled={state === null || busy !== null || switchingChannel}
           onChange={event => switchChannel(event.target.checked ? 'beta' : 'stable')}
         />
       </label>
@@ -206,17 +255,23 @@ export function AppUpdateSection({ loadUpdate, setUpdateChannel, downloadUpdate,
 
       {state !== null && (
         <>
-          {failed && <p className="settings-note" role="alert">{t("重新检查失败，仍显示上次缓存的更新信息。")}</p>}
+          {showRefreshAlert && (
+            <p className="settings-note" role="alert">
+              {state.checkedAt !== undefined || state.available !== undefined
+                ? t("重新检查失败，仍显示上次缓存的更新信息。")
+                : t("暂时无法连接发布目录，已保留当前更新频道，请检查网络后重试。")}
+            </p>
+          )}
           <div className="settings-status-list">
             <div className="settings-status-row">
               <span className="status-chip">{t("当前应用")}</span>
               <strong>{`${state.installedVersion}（${state.installedVersionCode}）`}</strong>
             </div>
             <div className="settings-status-row">
-              <span className={`status-chip ${available === undefined ? 'success' : 'warn'}`}>
-                {available === undefined ? t("已是最新") : t("可更新")}
+              <span className={`status-chip ${statusChipTone}`}>
+                {statusChipLabel}
               </span>
-              <strong>{available === undefined ? t("发布页上没有更新的正式版本") : `${available.version} · ${formatBytes(available.bytes)}`}</strong>
+              <strong>{statusDetail}</strong>
             </div>
           </div>
           {state.checkedAt !== undefined && <p className="settings-note">

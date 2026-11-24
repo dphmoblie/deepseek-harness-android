@@ -1935,6 +1935,15 @@ describe('应用更新状态校验', () => {
     expect(() => validateAppUpdateState(state({ available: null }))).toThrow('可用应用更新格式无效')
     expect(() => validateAppUpdateState(state({ available: [] }))).toThrow('可用应用更新格式无效')
   })
+
+  it('支持可选 refreshFailed 标记并拒绝非布尔值', () => {
+    expect(validateAppUpdateState(state({ refreshFailed: true })).refreshFailed).toBe(true)
+    expect(validateAppUpdateState(state({ refreshFailed: false })).refreshFailed).toBeUndefined()
+    for (const value of [null, 'true', 1, {}, []]) {
+      expect(() => validateAppUpdateState(state({ refreshFailed: value })), JSON.stringify(value))
+        .toThrow('应用更新刷新状态无效')
+    }
+  })
 })
 
 describe('运行时会话快照校验', () => {

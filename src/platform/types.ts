@@ -588,6 +588,8 @@ export interface AppUpdateState {
   checkedAt?: number
   /** 当前生效的更新频道；available 已按它过滤。 */
   channel: AppUpdateChannel
+  /** 最近一次远端刷新是否失败（此时本地频道与已装版本仍有效，但暂未拿到最新远端候选）。 */
+  refreshFailed?: boolean
   /**
    * 本应用是否已被授予「安装未知应用」权限（原生 `canRequestPackageInstalls()`）。
    *
@@ -2390,15 +2392,17 @@ export interface RuntimeBridge {
    * 界面要按「能不能装」分开渲染，而不是把列表里的每一项都当成可安装。
    */
   listRuntimeReleases: () => Promise<RuntimeReleaseList>
+  /** 应用自身的纯本地更新状态（绝不触网）：立即返回已安装版本、安装权限、已持久化频道与有效缓存。 */
+  getAppUpdateLocalState: () => Promise<AppUpdateState>
   /** 应用自身的更新状态：已安装版本、当前频道，以及按频道过滤后是否有可用更新。 */
   getAppUpdateState: (forceRefresh?: boolean) => Promise<AppUpdateState>
   /** 只读取「安装未知应用」权限，不触发更新检查；首次权限说明可离线使用。 */
   getAppUpdateInstallPermission: () => Promise<AppUpdateInstallPermission>
   /**
-   * 切换应用更新频道并返回最新状态（一次往返：联网检查成功后保存频道）。
+   * 切换应用更新频道并返回最新状态（先同步落盘频道，再尝试联网检查目标频道）。
    *
-   * 检查失败保持原频道；界面仍回读 [RuntimeBridge.getAppUpdateState] 确认实际状态，
-   * 兼容旧版桥接及检查完成后的响应失败，不把开关做成乐观态。
+   * 联网检查失败时保留已保存的新频道并返回新频道的本地态（`refreshFailed: true`，不含旧频道候选），
+   * 仅当落盘本身或桥接异常失败时拒绝。
    */
   setAppUpdateChannel: (channel: AppUpdateChannel) => Promise<AppUpdateState>
   /**

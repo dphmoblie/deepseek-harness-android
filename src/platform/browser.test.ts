@@ -353,6 +353,7 @@ describe('浏览器桥的更新渠道与应用自更新', () => {
     const bridge = createBrowserBridge()
 
     await expect(bridge.listRuntimeReleases()).rejects.toThrow('浏览器模式下没有更新渠道')
+    await expect(bridge.getAppUpdateLocalState()).rejects.toThrow('浏览器模式下没有应用更新')
     await expect(bridge.getAppUpdateState()).rejects.toThrow('浏览器模式下没有应用更新')
     await expect(bridge.getAppUpdateState(false)).rejects.toThrow('浏览器模式下没有应用更新')
     await expect(bridge.getAppUpdateState(true)).rejects.toThrow('浏览器模式下没有应用更新')

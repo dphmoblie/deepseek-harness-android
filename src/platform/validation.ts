@@ -2247,6 +2247,11 @@ export function validateAppUpdateState(value: unknown): AppUpdateState {
   if (typeof state.installAllowed !== 'boolean') throw new Error('应用更新安装权限状态无效')
   if (state.channel !== 'stable' && state.channel !== 'beta') throw new Error('应用更新频道状态无效')
   const channel: AppUpdateChannel = state.channel
+  const refresh: Pick<AppUpdateState, 'refreshFailed'> = {}
+  if (state.refreshFailed !== undefined) {
+    if (typeof state.refreshFailed !== 'boolean') throw new Error('应用更新刷新状态无效')
+    if (state.refreshFailed) refresh.refreshFailed = true
+  }
   const cache: Pick<AppUpdateState, 'cached' | 'checkedAt'> = {}
   if (state.cached !== undefined || state.checkedAt !== undefined) {
     if (typeof state.cached !== 'boolean' || !Number.isSafeInteger(state.checkedAt) ||
@@ -2258,7 +2263,7 @@ export function validateAppUpdateState(value: unknown): AppUpdateState {
   }
 
   if (state.available === undefined) {
-    return { installedVersion, installedVersionCode, channel, installAllowed: state.installAllowed, ...cache }
+    return { installedVersion, installedVersionCode, channel, installAllowed: state.installAllowed, ...cache, ...refresh }
   }
 
   const release = asRecord(state.available, '可用应用更新')
@@ -2277,6 +2282,7 @@ export function validateAppUpdateState(value: unknown): AppUpdateState {
     installAllowed: state.installAllowed,
     available: { version, bytes, sha256: release.sha256, notes: release.notes },
     ...cache,
+    ...refresh,
   }
 }
 

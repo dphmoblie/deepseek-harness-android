@@ -271,7 +271,14 @@ jobs:
           DSH_KEYSTORE_BASE64: ${{ secrets.DSH_KEYSTORE_BASE64 }}
           DSH_KEYSTORE_PASSWORD: ${{ secrets.DSH_KEYSTORE_PASSWORD }}
         working-directory: android
-        run: ./gradlew assembleRelease lintRelease testDebugUnitTest assembleDebugAndroidTest --no-daemon
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ github.event.inputs.release_type }}" = "stable" ]; then
+            export DSH_APP_VERSION_SUFFIX=""
+          else
+            export DSH_APP_VERSION_SUFFIX="-mobile-${GITHUB_RUN_NUMBER}"
+          fi
+          ./gradlew assembleRelease lintRelease testDebugUnitTest assembleDebugAndroidTest --no-daemon
 
       - name: Build unsigned debug APK + lint + unit tests + instrumented test APK (PR)
         if: github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && github.ref != 'refs/heads/main')

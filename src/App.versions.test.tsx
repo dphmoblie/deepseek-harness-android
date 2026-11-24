@@ -290,17 +290,26 @@ describe('版本管理：应用自身更新', () => {
     expect(screen.queryByRole('progressbar', { name: '更新包下载进度' })).toBeNull()
   })
 
-  it('频道开关回显原生当前频道', async () => {
+  it('频道开关回显原生当前频道并在测试版无更新时给出准确文案', async () => {
     bridge.getState.mockResolvedValue({ ...readyState })
-    bridge.getAppUpdateState.mockResolvedValue({
-      installedVersion: '0.2.0',
-      installedVersionCode: 22,
+    bridge.getAppUpdateLocalState.mockResolvedValue({
+      installedVersion: '0.4.6-mobile-690',
+      installedVersionCode: 54,
       channel: 'beta',
       installAllowed: false,
+    })
+    bridge.getAppUpdateState.mockResolvedValue({
+      installedVersion: '0.4.6-mobile-690',
+      installedVersionCode: 54,
+      channel: 'beta',
+      installAllowed: false,
+      cached: false,
+      checkedAt: 1_700_000_000_000,
     })
     await openVersionsPage()
 
     await waitFor(() => expect(screen.getByRole('switch', { name: '接收测试版本' })).toBeChecked())
+    expect(await screen.findByText('发布页上没有更新的正式版或测试版')).toBeVisible()
   })
 
   it('开启测试频道后一次往返采用返回的新状态，不再二次请求', async () => {
@@ -367,8 +376,9 @@ describe('版本管理：应用自身更新', () => {
     expect(screen.getByRole('switch', { name: '接收测试版本' })).not.toBeChecked()
   })
 
-  it('读不到更新状态时频道开关保持禁用', async () => {
+  it('远端和本地均读不到更新状态时频道开关保持禁用', async () => {
     bridge.getState.mockResolvedValue({ ...readyState })
+    bridge.getAppUpdateLocalState.mockRejectedValue(new Error('local-boom'))
     bridge.getAppUpdateState.mockRejectedValue(new Error('boom'))
     await openVersionsPage()
 
