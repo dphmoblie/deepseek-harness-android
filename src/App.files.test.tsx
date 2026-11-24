@@ -229,6 +229,68 @@ describe('文件管理（投递区与共享目录同一个浏览器）', () => {
     }))
   })
 
+  /**
+   * 「文件不存在」的真身：列表快照过期（文件被移走，或工作区导出那一步没落地）。
+   * 界面必须做两件事——把目录重读一遍，并给出能自助的说明；原样甩一句「文件不存在或不可用」
+   * 等于让用户对着一个已经不存在的条目反复点。
+   */
+  it('文件在复制时已经不在目录里：重读当前目录并给出过期说明', async () => {
+    bridge.getMailboxState.mockResolvedValue({ ...availableMailbox })
+    bridge.getMailboxDirectory.mockResolvedValue({
+      root: 'outbox', path: undefined,
+      entries: [{ name: 'dsh-workspace.tar', kind: 'file', bytes: 12 }], truncated: false,
+    })
+    bridge.getStorageDirs.mockResolvedValue(dirsState([dirEntry()]))
+    bridge.getStorageDirectory.mockResolvedValue({
+      guestPath: '/mnt/user/1', path: undefined, entries: [], truncated: false,
+    })
+    bridge.externalFileAction.mockRejectedValue(
+      Object.assign(new Error('文件不存在或不可用'), { code: 'MAILBOX_DIRECTORY_NOT_FOUND' }),
+    )
+
+    render(<App />)
+    await waitFor(() => expect(bridge.getStorageDirs).toHaveBeenCalledTimes(1))
+    await openFilesPage()
+    fireEvent.click(screen.getByRole('tab', { name: /outbox · 产物取出/ }))
+    await waitFor(() => expect(bridge.getMailboxDirectory).toHaveBeenCalledWith('outbox', undefined))
+    const readsBefore = bridge.getMailboxDirectory.mock.calls.length
+
+    fireEvent.click(screen.getByRole('button', { name: '分享 dsh-workspace.tar' }))
+
+    // 过期条目：目录被重读（列表随之刷新），提示里说清「已不在当前目录」而不是只报错。
+    await waitFor(() => expect(bridge.getMailboxDirectory.mock.calls.length).toBeGreaterThan(readsBefore))
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent('文件已不在当前目录')
+  })
+
+  it('其它失败（例如没有应用能打开）原样报出，不冒充成「文件没了」', async () => {
+    bridge.getMailboxState.mockResolvedValue({ ...availableMailbox })
+    bridge.getMailboxDirectory.mockResolvedValue({
+      root: 'inbox', path: undefined,
+      entries: [{ name: 'report.pdf', kind: 'file', bytes: 12 }], truncated: false,
+    })
+    bridge.getStorageDirs.mockResolvedValue(dirsState([dirEntry()]))
+    bridge.getStorageDirectory.mockResolvedValue({
+      guestPath: '/mnt/user/1', path: undefined, entries: [], truncated: false,
+    })
+    bridge.externalFileAction.mockRejectedValue(
+      Object.assign(new Error('没有应用可以处理此文件'), { code: 'EXTERNAL_FILE_NO_HANDLER' }),
+    )
+
+    render(<App />)
+    await waitFor(() => expect(bridge.getStorageDirs).toHaveBeenCalledTimes(1))
+    await openFilesPage()
+    const readsBefore = bridge.getMailboxDirectory.mock.calls.length
+
+    fireEvent.click(screen.getByRole('button', { name: '其他应用打开 report.pdf' }))
+
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent('没有应用可以处理此文件')
+    expect(alert).not.toHaveTextContent('文件已不在当前目录')
+    // 不是过期条目：不该顺手把目录再读一遍。
+    expect(bridge.getMailboxDirectory.mock.calls.length).toBe(readsBefore)
+  })
+
   it('在共享目录里新建文件夹走 createStorageFolder，不会串到投递区', async () => {
     bridge.getStorageDirs.mockResolvedValue(dirsState([dirEntry()]))
     bridge.getStorageDirectory.mockResolvedValue({

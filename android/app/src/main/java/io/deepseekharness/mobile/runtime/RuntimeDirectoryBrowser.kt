@@ -248,7 +248,26 @@ internal object RuntimeDirectoryBrowser {
         }
         return try {
             val rootPath = root.toPath().toAbsolutePath().normalize()
-            withSecureRoot(rootPath, texts) { stream -> copyFromSecureDirectory(stream, names, 0, target, texts) }
+            /*
+             * 先走安全目录流（openat + NOFOLLOW，能挡住「检查完被换成符号链接」的竞态）。
+             *
+             * 但**不能只有这一条路**：投递区与共享目录都在外部存储（FUSE）上，部分 ROM 的 SELinux
+             * 策略会拒绝应用对 /storage/emulated/0 之下目录做 openat，表现成 IOException/EACCES。
+             * 那时条目在列表里看得见（目录浏览走的是路径访问），点「打开/分享」却永远得到
+             * 「文件不存在或不可用」——这正是用户报的缺陷。因此失败后退到路径式兜底：
+             * 判定口径与 `requireDirectory` 完全一致（逐级 NoFollow、最后一级必须是常规文件），
+             * 只是少了 openat 那一层竞态保护；把「打不开」换成「打得开」比多一层理论防护更重要。
+             */
+            val secureFailure = try {
+                withSecureRoot(rootPath, texts) { stream -> copyFromSecureDirectory(stream, names, 0, target, texts) }
+                null
+            } catch (error: Exception) {
+                error
+            }
+            if (secureFailure != null) {
+                target.delete()
+                copyByPath(rootPath, names, target, texts)
+            }
             target
         } catch (error: RuntimeFailure) {
             target.delete()
@@ -259,6 +278,57 @@ internal object RuntimeDirectoryBrowser {
         } catch (error: Throwable) {
             target.delete()
             throw RuntimeFailure(texts.codes.directoryFailed, "无法准备文件分享", error)
+        }
+    }
+
+    /**
+     * 路径式兜底：逐级确认每一段都是真实目录，最后一级必须是常规文件。
+     *
+     * 与目录浏览（[requireDirectory]）同一口径，因此「列表里能看到的条目」在这条路上一定打得开；
+     * 真正的「文件已被移走」仍然如实报 [DirectoryBrowseCodes.directoryNotFound]。
+     */
+    private fun copyByPath(root: Path, names: List<String>, target: File, texts: DirectoryBrowseTexts) {
+        var cursor = root
+        for (index in 0 until names.lastIndex) {
+            cursor = cursor.resolve(names[index])
+            if (!MailboxTree.isRealDirectory(cursor)) {
+                throw RuntimeFailure(texts.codes.directoryNotFound, texts.missingDirectory)
+            }
+        }
+        val file = cursor.resolve(names.last())
+        val attributes = MailboxTree.readAttributesNoFollow(file)
+        if (attributes == null || !attributes.isRegularFile || attributes.isSymbolicLink) {
+            throw RuntimeFailure(texts.codes.directoryNotFound, "文件不存在或不可用")
+        }
+        if (attributes.size() > MAX_SHARE_BYTES) {
+            throw RuntimeFailure(texts.codes.directoryFailed, "文件超过分享大小限制")
+        }
+        try {
+            Files.newInputStream(file, LinkOption.NOFOLLOW_LINKS).use { input ->
+                // 写入目标是**我们自己**在分享缓存里刚建的临时文件，不需要 NOFOLLOW；
+                // 而 Windows 的文件系统提供者会以 ENOENT 拒绝带 NOFOLLOW 的打开（真机是 Linux，但
+                // 单测跑在 Windows 上，这条差异必须由实现吸收，否则兜底路径在测试里永远「文件不存在」）。
+                // CREATE 不能省：安全目录流失败后目标临时文件已被删掉，只带 WRITE+TRUNCATE
+                // 会以 ENOENT 失败（真机与单测同理）。
+                Files.newOutputStream(
+                    target.toPath(),
+                    StandardOpenOption.CREATE,
+                    StandardOpenOption.WRITE,
+                    StandardOpenOption.TRUNCATE_EXISTING,
+                ).use { output ->
+                    val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                    var total = 0L
+                    while (true) {
+                        val read = input.read(buffer)
+                        if (read < 0) break
+                        total += read
+                        if (total > MAX_SHARE_BYTES) throw RuntimeFailure(texts.codes.directoryFailed, "文件超过分享大小限制")
+                        output.write(buffer, 0, read)
+                    }
+                }
+            }
+        } catch (error: IOException) {
+            throw RuntimeFailure(texts.codes.directoryNotFound, "文件不存在或不可用", error)
         }
     }
 

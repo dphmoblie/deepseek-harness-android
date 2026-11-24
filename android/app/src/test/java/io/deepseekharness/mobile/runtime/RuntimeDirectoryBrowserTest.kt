@@ -6,7 +6,6 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeNoException
-import org.junit.Assume.assumeTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
@@ -14,7 +13,6 @@ import java.io.File
 import java.io.IOException
 import java.nio.file.Files
 import java.nio.file.Path
-import java.nio.file.SecureDirectoryStream
 
 /**
  * 共享浏览核心的用例。
@@ -241,10 +239,11 @@ class RuntimeDirectoryBrowserTest {
     }
 
     @Test
-    fun `copies only the selected regular file for external actions`() {
+    fun `copies the selected regular file on every host, with or without SecureDirectoryStream`() {
         val source = file("nested/result.json", 7)
-        val secure = Files.newDirectoryStream(temporaryFolder.root.toPath()).use { it is SecureDirectoryStream<*> }
-        assumeTrue("host filesystem has no SecureDirectoryStream", secure)
+        // 这条用例**故意不再按 SecureDirectoryStream 跳过**：外部存储（FUSE）上安全目录流会被
+        // SELinux 拒绝（真机缺陷「文件不存在或不可用」），此时必须由路径式兜底把文件复制出来。
+        // 在 Windows / 不支持安全目录流的 JVM 上跑，正好就是在测那条兜底路径。
 
         val cache = temporaryFolder.newFolder("cache")
         val exported = RuntimeDirectoryBrowser.copyFileForSharing(
@@ -256,6 +255,27 @@ class RuntimeDirectoryBrowserTest {
 
         assertEquals(source.readBytes().toList(), exported.readBytes().toList())
         assertEquals(RuntimeCacheEntries.EXTERNAL_SHARE, exported.parentFile?.name)
+    }
+
+    @Test
+    fun `falls back to path access when the file is reachable but the secure route cannot be used`() {
+        // 兜底路径的判定口径必须与目录浏览一致：中间目录缺失 → 目录不存在，而不是笼统的失败。
+        val cache = temporaryFolder.newFolder("cache-fallback")
+        file("only-here.txt", 2)
+
+        val missingLevel = assertThrows(RuntimeFailure::class.java) {
+            RuntimeDirectoryBrowser.copyFileForSharing(temporaryFolder.root, "gone/only-here.txt", shared, cache)
+        }
+        assertEquals(StorageDirCodes.NOT_A_DIRECTORY, missingLevel.code)
+
+        // 末级是符号链接：两条路都必须拒绝，绝不能把链接目标交给外部应用。
+        val outside = file("outside-fallback.txt", 1)
+        val link = File(temporaryFolder.root, "link-fallback.txt").toPath()
+        createSymbolicLinkOrSkip(link, outside.toPath())
+        val linkFailure = assertThrows(RuntimeFailure::class.java) {
+            RuntimeDirectoryBrowser.copyFileForSharing(temporaryFolder.root, "link-fallback.txt", shared, cache)
+        }
+        assertEquals(StorageDirCodes.NOT_A_DIRECTORY, linkFailure.code)
     }
 
     @Test
