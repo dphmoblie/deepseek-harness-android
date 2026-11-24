@@ -98,13 +98,20 @@ object RootCommandGuard {
     /** 核心分区：这些路径改可写等于绕过只读重挂。 */
     private const val CORE_PARTITIONS = "(system|vendor|product|system_ext|odm|apex|system_root)"
 
-    /** 一条命令的起点：行首、分隔符之后，可带一层 shell 关键字/包装命令。 */
-    private const val COMMAND_START =
-        """(?:^|[;|&({!]\s*)(?:(?:then|else|do|if|elif|while|until|in|time|env|nohup|setsid|command|xargs|watch)\s+)?"""
+    /** 行内环境变量赋值前缀（如 `A=1 reboot`、`PATH=/system/bin rm -rf /data`）。 */
+    private const val ENV_ASSIGN = """[a-z_][a-z0-9_]*=[^\s;|&)]*\s+"""
 
-    /** 命令前缀：绝对路径、busybox/toybox 包装。 */
+    /** 常见 shell 关键字与命令包装器（允许带短横线选项，如 `env -i`、`nice -n 10`、`timeout 5`）。 */
+    private const val WRAPPER_WORD =
+        """(?:(?:then|else|do|if|elif|while|until|in|time|nohup|setsid|command|builtin|env|xargs|watch|nice|ionice|chrt|taskset|stdbuf)(?:\s+-[a-z0-9-]+(?:\s+\d+)?){0,4}|timeout(?:\s+-[a-z0-9-]+|\s+\d+[smhd]?){0,4})\s+"""
+
+    /** 一条命令的起点：行首、分隔符或 find `-exec`/`-ok` 之后，可带多层行内变量赋值与包装命令。 */
+    private const val COMMAND_START =
+        """(?:^|[;|&({!]\s*|-(?:exec|execdir|ok)\s+)(?:$ENV_ASSIGN|$WRAPPER_WORD){0,6}"""
+
+    /** 命令前缀：绝对路径（含 Android SAR 常见 `/bin`、`/sbin`、`/system/xbin`）及 busybox/toybox 包装。 */
     private const val COMMAND_PREFIX =
-        """(?:/(?:system|system_ext|vendor|product|odm)/bin/|/data/adb/(?:ksu|magisk)/bin/)?(?:busybox\s+|toybox\s+)?"""
+        """(?:/(?:(?:system|system_ext|vendor|product|odm)/(?:bin|xbin)|bin|sbin|usr/bin|data/adb/(?:ksu|magisk|ap)/bin)/)?(?:(?:busybox|toybox)(?:\s+--)?\s+)?"""
 
     /** 拼一个「命令位置 + 前缀 + 命令名」的正则片段。 */
     private fun command(name: String): String = COMMAND_START + COMMAND_PREFIX + name + """\b"""
@@ -189,10 +196,11 @@ object RootCommandGuard {
         Rule(
             "高风险操作使用不确定路径",
             HighRiskCategory.SYSTEM_DATA_DESTRUCTION,
-            // 变量、通配符和路径穿越可能把写入/删除目标解析到核心目录；最大档也不能静默放行。
+            // 变量、命令替换、路径穿越、重斜杠，以及落在工作区/共享存储之外的通配符都可能解析到核心目录；
+            // 明确停留在 `/data/local/tmp/`、`/data/adb/modules/` 或共享存储内的无穿越通配符分别放行或归入共享存储规则。
             Regex(
-                command("(?:rm|cp|mv|install|shred|truncate|dd|tee)") +
-                    """[^|;&]*\s/[^|;&]*(?:\$|`|[*?]|\[|/\.\.(?:/|$)|/\.(?:/|$)|/{2,})""",
+                command("(?:rm|unlink|rmdir|cp|mv|install|shred|truncate|dd|tee)") +
+                    """[^|;&]*\s/(?:[^\s|;&]*(?:\$|`|/\.\.(?:/|$)|/\.(?:/|$)|/{2,})|(?!(?:data/local/tmp/|data/adb/modules/|sdcard/|storage/emulated/0/|storage/self/primary/|data/media/0/))[^\s|;&]*(?:[*?]|\[))""",
             ),
             unconfinedCaps = true,
         ),
@@ -200,12 +208,12 @@ object RootCommandGuard {
         Rule(
             "删除数据根",
             HighRiskCategory.SYSTEM_DATA_DESTRUCTION,
-            Regex(command("rm") + """[^|;&]*\s/data/?\s*(?:$|[;|&)])"""),
+            Regex(command("(?:rm|unlink|rmdir)") + """[^|;&]*\s/data/?\s*(?:$|[;|&)])"""),
         ),
         Rule(
             "删除数据通配",
             HighRiskCategory.SYSTEM_DATA_DESTRUCTION,
-            Regex(command("rm") + """[^|;&]*\s/data/\*"""),
+            Regex(command("(?:rm|unlink|rmdir)") + """[^|;&]*\s/data/\*"""),
         ),
         Rule(
             "删除时使用不确定路径",
@@ -213,7 +221,7 @@ object RootCommandGuard {
             // 变量、命令替换、通配符和路径穿越无法在静态分类时可靠解析，按极危处理，
             // 防止 `rm -rf /$name`、`rm -rf /d*` 或 `/data/../data` 绕过数据根规则。
             Regex(
-                command("rm") +
+                command("(?:rm|unlink|rmdir)") +
                     """[^|;&]*\s/(?:\$|`|[*?]|\[|data/(?:\.\.?(?:/|$)|/{2,}))""",
             ),
         ),
@@ -221,32 +229,32 @@ object RootCommandGuard {
             "删除系统数据",
             HighRiskCategory.SYSTEM_DATA_DESTRUCTION,
             Regex(
-                command("rm") +
+                command("(?:rm|unlink|rmdir)") +
                     """[^|;&]*\s/data/(?:system|misc|vendor|apex|property|app|dalvik-cache|ota[^/\s]*|adb(?!\s*/modules/))(?:\s|/|$|[;|&)])""",
             ),
         ),
         Rule(
             "删除内置存储根",
             HighRiskCategory.SHARED_STORAGE_DELETE,
-            Regex(command("rm") + """[^|;&]*\s/(?:sdcard|storage/emulated/0|storage/self/primary|data/media/0)/?\s*(?:$|[;|&)])"""),
+            Regex(command("(?:rm|unlink|rmdir)") + """[^|;&]*\s/(?:sdcard|storage/emulated/0|storage/self/primary|data/media/0)/?\s*(?:$|[;|&)])"""),
         ),
         Rule(
             "删除内置存储关键目录或通配",
             HighRiskCategory.SHARED_STORAGE_DELETE,
             Regex(
-                command("rm") +
-                    """[^|;&]*\s/(?:sdcard|storage/emulated/0|storage/self/primary|data/media/0)/(?:\*|(?:dcim|pictures|download|documents|movies|music)\b)""",
+                command("(?:rm|unlink|rmdir|shred|truncate)") +
+                    """[^|;&]*\s/(?:sdcard|storage/emulated/0|storage/self/primary|data/media/0)/(?:[^\s|;&]*(?:[*?]|\[)|(?:dcim|pictures|download|documents|movies|music)\b)""",
             ),
         ),
         Rule(
             "批量删除",
             HighRiskCategory.SYSTEM_DATA_DESTRUCTION,
-            Regex(command("find") + """[^|;&]*\s/data\b[^|;&]*\s-delete\b"""),
+            Regex(command("find") + """[^|;&]*\s/data\b[^|;&]*\s-(?:delete\b|exec(?:dir)?\s+(?:\S+/)?(?:rm|unlink|rmdir|shred|truncate)\b)"""),
         ),
         Rule(
             "批量删除",
             HighRiskCategory.SHARED_STORAGE_DELETE,
-            Regex(command("find") + """[^|;&]*\s/(?:sdcard|storage/emulated/0|storage/self/primary|data/media/0)\b[^|;&]*\s-delete\b"""),
+            Regex(command("find") + """[^|;&]*\s/(?:sdcard|storage/emulated/0|storage/self/primary|data/media/0)\b[^|;&]*\s-(?:delete\b|exec(?:dir)?\s+(?:\S+/)?(?:rm|unlink|rmdir|shred|truncate)\b)"""),
         ),
         Rule(
             "覆写系统数据",
@@ -320,7 +328,7 @@ object RootCommandGuard {
         Rule(
             "写 SELinux 开关文件",
             HighRiskCategory.SELINUX_SECURITY_POLICY,
-            Regex(""">\s*[^|;&]*/sys/fs/selinux/enforce"""),
+            Regex("""(?:>|>>|tee\s+|of\s*=|\b(?:cp|mv|install)\b[^|;&]*\s)[^|;&]*/sys/fs/selinux/(?:enforce|load|booleans)\b"""),
             unconfinedCaps = true,
         ),
         Rule(
@@ -460,7 +468,7 @@ object RootCommandGuard {
         Rule(
             "写内核参数或 sysfs 关键子树",
             HighRiskCategory.KERNEL_SYSFS_PROC_WRITE,
-            Regex("""(>|tee\s+)[^|;&]*/(proc/sys/|sys/(kernel|fs|module|class|devices|firmware)/)"""),
+            Regex("""(?:>|>>|tee\s+|of\s*=|\b(?:cp|mv|install)\b[^|;&]*\s)[^|;&]*/(proc/sys/|sys/(kernel|fs|module|class|devices|firmware)/)"""),
             unconfinedCaps = true,
         ),
         Rule(
@@ -472,7 +480,7 @@ object RootCommandGuard {
             "修改或删除应用私有数据",
             HighRiskCategory.APP_PRIVATE_DATA_MODIFY,
             Regex(
-                command("(?:rm|shred|truncate)") +
+                command("(?:rm|unlink|rmdir|shred|truncate)") +
                     """[^|;&]*\s/(?:data/(?:data|user/\d+|user_de/\d+)|(?:sdcard|storage/emulated/0|storage/self/primary)/android/(?:data|obb))(?:/|\s|$|[;|&)])""" +
                     """|(?:>|>>|tee\s+|of\s*=)[^|;&]*/(?:data/(?:data|user/\d+|user_de/\d+)|(?:sdcard|storage/emulated/0|storage/self/primary)/android/(?:data|obb))/""" +
                     """|""" + command("(?:cp|mv|install)") +

@@ -154,4 +154,39 @@ describe('HighRiskPermissionsCard', () => {
     expect(screen.getByRole('switch', { name: 'Core system partition write & rw remount' })).toBeChecked()
     expect(screen.getByRole('switch', { name: 'Physical block devices, partitioning, flashing & raw memory access' })).not.toBeChecked()
   })
+
+  it('迟到的旧查询响应不会覆盖已提交的新权限状态', async () => {
+    let resolveDelayedRead!: (value: HighRiskPermissions) => void
+    const delayedRead = new Promise<HighRiskPermissions>(resolve => {
+      resolveDelayedRead = resolve
+    })
+    const { bridge, getHighRiskPermissions, setHighRiskPermissions } = makeBridge(makePermissions(false))
+    // 第一次成功加载，第二次（重试触发的慢查询）挂起
+    getHighRiskPermissions
+      .mockResolvedValueOnce(makePermissions(false))
+      .mockReturnValueOnce(delayedRead)
+
+    render(<HighRiskPermissionsCard bridge={bridge} />)
+    const masterSwitch = await screen.findByRole('switch', {
+      name: '允许 AI 申请高危文件与命令权限（总开关）',
+    })
+    // 触发一次失败更新后立刻补一次成功更新；迟到的回读不能把最新开启状态冲回关闭
+    setHighRiskPermissions.mockRejectedValueOnce(new Error('临时错误'))
+    fireEvent.click(masterSwitch)
+    await screen.findByRole('alert')
+
+    // 趁回读仍挂起，发起第二次成功开启
+    fireEvent.click(masterSwitch)
+    await waitFor(() => {
+      expect(screen.getByText('已放行 0 / 17 项')).toBeVisible()
+    })
+    expect(masterSwitch).toBeChecked()
+
+    // 迟到的旧查询此刻返回 enabled=false，不应覆盖当前已开启状态
+    resolveDelayedRead(makePermissions(false))
+    await waitFor(() => {
+      expect(masterSwitch).toBeChecked()
+      expect(screen.getByText('已放行 0 / 17 项')).toBeVisible()
+    })
+  })
 })

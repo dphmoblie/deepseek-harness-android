@@ -76,7 +76,7 @@ enum class HighRiskCategory(
     SYSTEM_PROPERTIES_WRITE(
         "system_properties_write",
         "Android 系统属性与属性库修改",
-        RootCommandGuard.RiskTier.ELEVATED,
+        RootCommandGuard.RiskTier.HIGH,
     ),
     PACKAGE_INSTALL_REMOVE(
         "package_install_remove",

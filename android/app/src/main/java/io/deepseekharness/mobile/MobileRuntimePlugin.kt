@@ -2112,11 +2112,19 @@ class MobileRuntimePlugin : Plugin() {
                 throw RuntimeFailure("SESSION_NOT_FOUND", "设备 Shell 会话不存在或已结束")
             }
             val rootGuardProfile = io.deepseekharness.mobile.shizuku.RootEngineAccess.guardProfile(context)
+            val param = call.getString("param") ?: ""
+            if (command == DeviceCommand.SHELL) {
+                io.deepseekharness.mobile.shizuku.RootCommandGuard.verifyPermitted(
+                    script = param,
+                    profile = if (rootEngine) rootGuardProfile else io.deepseekharness.mobile.shizuku.RootCommandGuard.Profile.STRICT,
+                    permissions = io.deepseekharness.mobile.shizuku.HighRiskPermissionStore.status(context),
+                )
+            }
             val result = RuntimeHost.deviceCommands()
                 .execute(
                     sessionId,
                     command,
-                    call.getString("param") ?: "",
+                    param,
                     DEVICE_COMMAND_TIMEOUT_MS,
                     useRootEngine = rootEngine,
                     rootGuardProfile = rootGuardProfile,
@@ -2233,11 +2241,17 @@ class MobileRuntimePlugin : Plugin() {
                 categoriesObj = categoriesRaw,
             )
             audited(AuditEvent.ROOT_ENGINE_SETTING) {
-                io.deepseekharness.mobile.shizuku.HighRiskPermissionStore.update(
+                val updated = io.deepseekharness.mobile.shizuku.HighRiskPermissionStore.update(
                     context = context,
                     enabled = enabled,
                     categoryUpdates = categoryUpdates,
-                ).toJs()
+                )
+                // 收紧总开关或关闭任意细分权限时，立即吊销所有在途审批挑战并关闭等待确认的警告窗。
+                if (enabled == false || categoryUpdates.values.any { !it }) {
+                    io.deepseekharness.mobile.shizuku.RootApprovalCoordinator.cancelAll()
+                    io.deepseekharness.mobile.shizuku.RootApprovalRegistry.clear()
+                }
+                updated.toJs()
             }
         }
     }
@@ -2425,11 +2439,17 @@ class MobileRuntimePlugin : Plugin() {
                 throw RuntimeFailure("DEVICE_SHELL_DISABLED", "请先开启 AI Shell")
             }
             val state = io.deepseekharness.mobile.virtualscreen.VirtualScreenService.current?.state()
+            val script = call.getString("script")
             val plan = io.deepseekharness.mobile.virtualscreen.VirtualScreenShellPolicy.plan(
-                script = call.getString("script"),
+                script = script,
                 requestedDisplayId = call.getInt("displayId"),
                 active = state?.optBoolean("active") == true,
                 sessionDisplayId = state?.optInt("displayId", 0) ?: 0,
+            )
+            io.deepseekharness.mobile.shizuku.RootCommandGuard.verifyPermitted(
+                script = requireNotNull(script),
+                profile = io.deepseekharness.mobile.shizuku.RootCommandGuard.Profile.STRICT,
+                permissions = io.deepseekharness.mobile.shizuku.HighRiskPermissionStore.status(context),
             )
             val sessionId = controller.createTerminal("device", VIRTUAL_SCREEN_COLUMNS, VIRTUAL_SCREEN_ROWS)
             val result = try {

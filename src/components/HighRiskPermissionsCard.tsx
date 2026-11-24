@@ -198,16 +198,22 @@ export function HighRiskPermissionsCard({ bridge = runtimeBridge }: { bridge?: R
   }, [refresh])
 
   const applyUpdate = useCallback(async (update: HighRiskPermissionsUpdate) => {
+    const currentRequest = ++requestId.current
     setBusy(true)
     setWriteError(null)
     try {
       const next = await bridge.setHighRiskPermissions(update)
+      if (currentRequest !== requestId.current) return
       setLoad({ status: 'ready', value: next })
     } catch (error) {
+      if (currentRequest !== requestId.current) return
       setWriteError(error instanceof Error ? error.message : String(error))
-      await refresh()
-    } finally {
       setBusy(false)
+      void refresh()
+    } finally {
+      if (currentRequest === requestId.current) {
+        setBusy(false)
+      }
     }
   }, [bridge, refresh])
 

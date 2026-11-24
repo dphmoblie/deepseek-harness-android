@@ -1258,6 +1258,7 @@ class RootSecurityTest {
             "pm list packages",
             "chmod +x /data/local/tmp/run.sh",
             "rm -rf /data/local/tmp/build",
+            "rm -f /data/local/tmp/*.tmp",
             "tar -czf /sdcard/backup.tar.gz /data/data/com.test.app/files",
             "cp /data/data/com.test.app/files/log.txt /data/local/tmp/log.txt",
         )
@@ -1286,6 +1287,61 @@ class RootSecurityTest {
                 "rm -rf /storage/self/primary/DCIM",
             ).categories,
         )
+        // /sdcard 通配删除仅归入 SHARED_STORAGE_DELETE，不误伤 SYSTEM_DATA_DESTRUCTION；
+        // 但包含路径穿越的 /sdcard/../data 仍归入 SYSTEM_DATA_DESTRUCTION。
+        assertEquals(
+            listOf(HighRiskCategory.SHARED_STORAGE_DELETE),
+            RootCommandGuard.classify("rm -rf /sdcard/*").categories,
+        )
+        assertEquals(
+            listOf(HighRiskCategory.SHARED_STORAGE_DELETE),
+            RootCommandGuard.classify("rm -f /sdcard/Download/*.apk").categories,
+        )
+        assertTrue(
+            HighRiskCategory.SYSTEM_DATA_DESTRUCTION in RootCommandGuard.classify("rm -rf /sdcard/../data").categories,
+        )
+        assertTrue(
+            HighRiskCategory.SYSTEM_DATA_DESTRUCTION in RootCommandGuard.classify("rm -rf /data/local/tmp/../../system").categories,
+        )
+
+        // 绕过回归：行内环境变量赋值、带参包装器、SAR 路径、find -exec、unlink/rmdir、SELinux tee/cp
+        val bypassRegressions: List<Pair<String, HighRiskCategory>> = listOf(
+            "A=1 reboot" to HighRiskCategory.DEVICE_POWER_CONTROL,
+            "FOO=1 rm -rf /data" to HighRiskCategory.SYSTEM_DATA_DESTRUCTION,
+            "LANG=C pm uninstall com.example.app" to HighRiskCategory.PACKAGE_INSTALL_REMOVE,
+            "X=1 su -c id" to HighRiskCategory.SYSTEM_SERVICE_PRIVILEGE,
+            "A=1 setprop ro.debuggable 1" to HighRiskCategory.SYSTEM_PROPERTIES_WRITE,
+            "A=1 mount -o remount,rw /data" to HighRiskCategory.FILESYSTEM_MOUNT,
+            "env -i reboot" to HighRiskCategory.DEVICE_POWER_CONTROL,
+            "timeout 5 rm -rf /data" to HighRiskCategory.SYSTEM_DATA_DESTRUCTION,
+            "nice -n 10 pm clear com.example.app" to HighRiskCategory.PACKAGE_INSTALL_REMOVE,
+            "busybox -- reboot" to HighRiskCategory.DEVICE_POWER_CONTROL,
+            "/bin/reboot" to HighRiskCategory.DEVICE_POWER_CONTROL,
+            "/sbin/reboot" to HighRiskCategory.DEVICE_POWER_CONTROL,
+            "/bin/rm -rf /data" to HighRiskCategory.SYSTEM_DATA_DESTRUCTION,
+            "/system/xbin/su -c id" to HighRiskCategory.SYSTEM_SERVICE_PRIVILEGE,
+            "find /data/system -exec rm -rf {} +" to HighRiskCategory.SYSTEM_DATA_DESTRUCTION,
+            "find /sdcard/DCIM -exec rm -rf {} \\;" to HighRiskCategory.SHARED_STORAGE_DELETE,
+            "unlink /data/system/locksettings.db" to HighRiskCategory.SYSTEM_DATA_DESTRUCTION,
+            "rmdir /sdcard/DCIM" to HighRiskCategory.SHARED_STORAGE_DELETE,
+            "unlink /data/data/com.example.app/files/a" to HighRiskCategory.APP_PRIVATE_DATA_MODIFY,
+            "echo 0 | tee /sys/fs/selinux/enforce" to HighRiskCategory.SELINUX_SECURITY_POLICY,
+            "cp /data/local/tmp/z /sys/fs/selinux/enforce" to HighRiskCategory.SELINUX_SECURITY_POLICY,
+        )
+        for ((script, expectedCategory) in bypassRegressions) {
+            val assessment = RootCommandGuard.classify(script, RootCommandGuard.Profile.MAXIMUM)
+            assertTrue(
+                "绕过变体必须命中 $expectedCategory: $script（实际命中 ${assessment.categories}）",
+                expectedCategory in assessment.categories,
+            )
+            try {
+                RootCommandGuard.verifyPermitted(script, RootCommandGuard.Profile.MAXIMUM, HighRiskPermissions.ALL_DISABLED)
+                fail("绕过变体在总开关关闭时必须被硬拦截: $script")
+            } catch (e: RuntimeFailure) {
+                assertEquals("ROOT_SECURITY_VIOLATION", e.code)
+            }
+        }
+        assertEquals(RootCommandGuard.RiskTier.HIGH, HighRiskCategory.SYSTEM_PROPERTIES_WRITE.tier)
 
         // 2. 逐类校验：总开关关必拦；总开关开但该细分关必拦；仅开对应细分时放行
         for ((category, script) in sampleByCategory) {
