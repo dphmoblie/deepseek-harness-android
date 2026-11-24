@@ -212,6 +212,36 @@ Harness 运行时本身只认 `zh`/`en`，`RuntimeStore.syncHarnessLocale` 集�
 - 代价要说清：设备上 `write` 新建文件或图片附件落盘失败时，自检不再单独指认「可能是硬链接被拒」。
   此时看 dsh 报错原文（`EACCES: permission denied, link ...`）与上面那份回退文档。
 
+## 16. 应用内配色只看外壳的 surface，不要交回页面的 `prefers-color-scheme`
+
+同步过主题的 DSH 页面，文字与底色必须由**同一个开关**决定。2026-11-24 的修法（用户报
+「应用白字 / 通知黑字」与「黑字压深底」）就是这条，别把判据改回媒体查询：
+
+- 判据是 `HarnessThemeBridge.pagePalette(surface)`：surface 的 WCAG 相对亮度 `> 0.179`
+  用浅色调色板（黑字），否则深色调色板（白字），与 `src/theme.ts` 的 `--on-blue` 同一口径。
+  写 `data-dsh-theme-resolved` + `--dsh-theme-label-*`；`android.css` 用
+  `html[data-dsh-theme-source='shell'][data-dsh-theme-resolved] body`（0,2,2）把官方
+  `--dsw-alias-label-*` 接到那三个变量上，压过 `body[data-ds-dark-theme]`（0,1,1）。
+  **不要**改官方两套根值（外置浏览器没有外壳同步，会跟着错乱）。
+- `system` 模式在桥里也**不查系统**：同步过来的 surface 是外壳在它自己解析出的明暗下算好的；
+  WebView 的 `prefers-color-scheme` 跟的是宿主 Activity 的 uiMode（本应用允许外观与系统不同），
+  拿它判深浅必然与底色分家。
+- 注入脚本会把 `body[data-ds-dark-theme]` 与 html 的内联 `color-scheme` **对齐**到那个结论。
+  这是仲裁，不是第二个写入者：值一致就不回写，不会与页面的 `apply` 形成环。删掉它，页面
+  运行期 apply 一次就翻回旧排版（边框、代码块、提示气泡全挂在同一个属性上）。
+- `android.css` 顶层**不许**出现 `!important`（子模块测试逐条扫）：它对付不了内联样式，
+  真正的解法是上面的内联对齐；强制声明只属于窄屏/粗指针查询。
+- 注入时机分两层：Activity 里 `installDocumentStart`（document-start，首帧就对）+
+  `onPageFinished` 的 `apply()` 兜底；脚本自己等 body（短轮询 + DOMContentLoaded/load +
+  documentElement 的 childList/样式 observer），body 被重建也会补上。脚本里带的是**当前**
+  主题常量，所以值变了必须用 `replaceDocumentStart` 换注册；取消同步要撤注册并跑
+  `RESET_SCRIPT`（从没同步过的页面上它必须零副作用）。注册只归 `attached` 那块页面，
+  浮层小窗的 `apply()` 不能把注册抢走。
+- 通知的**文字**颜色由 SystemUI 按自己的深色模式绘制，只对齐强调色（`setColor`），
+  不要给通知写死 `#FFF`/`#000`。
+- 回归入口：`android/.../HarnessThemeBridgeTest.kt`、
+  `scripts/android-theme-contract.test.mjs`（两端令牌/色值契约 + jsdom 里跑真实注入脚本）。
+
 ## 改动前先跑这些
 
 本机 pnpm 不可用时用 node 直调（PATH 前置 `node` 目录）：

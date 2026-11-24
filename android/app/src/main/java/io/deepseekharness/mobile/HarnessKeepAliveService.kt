@@ -240,7 +240,7 @@ class HarnessKeepAliveService : Service() {
         // 通知文案跟随应用语言，而不是系统语言：应用内选了日文，锁屏上也该是日文。
         // 服务自身的 getString 用的是系统配置，所以这里显式取本地化上下文。
         val localized = AppLanguage.localizedContext(this)
-        return NotificationCompat.Builder(this, CHANNEL_ID)
+        val notification = NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_keep_alive)
             .setContentTitle(localized.getString(R.string.keep_alive_notification_title))
             .setContentText(localized.getString(R.string.keep_alive_notification_text))
@@ -252,7 +252,12 @@ class HarnessKeepAliveService : Service() {
             .setSilent(true)
             .setShowWhen(false)
             .setOnlyAlertOnce(true)
-            .build()
+        // 通知的文字颜色由 SystemUI 按它自己的主题绘制，应用无权干预（也不该为它写死黑白）；
+        // 能对齐的只有强调色。没同步过主题时保持系统默认，不硬塞一个色。
+        HarnessThemeBridge.accentColor(this)?.let { tint ->
+            notification.setColor(tint).setColorized(false)
+        }
+        return notification.build()
     }
 
     private fun ensureNotificationChannel() {

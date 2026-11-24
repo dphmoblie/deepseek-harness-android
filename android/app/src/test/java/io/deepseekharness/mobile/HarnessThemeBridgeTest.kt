@@ -118,4 +118,63 @@ class HarnessThemeBridgeTest {
         assertTrue(HarnessThemeBridge.BACKGROUND_PATH.startsWith("/__shell/"))
         assertFalse(HarnessThemeBridge.BACKGROUND_PATH.contains("://"))
     }
+
+    @Test
+    fun `文字深浅按页面底下那块 surface 的亮度选`() {
+        // 深色面板（本机实测的 #2a2919、默认深色档的 #18222c）：白字。
+        assertEquals(HarnessThemeBridge.DARK_PAGE, HarnessThemeBridge.pagePalette("#2a2919"))
+        assertEquals(HarnessThemeBridge.DARK_PAGE, HarnessThemeBridge.pagePalette("#18222c"))
+        assertEquals(HarnessThemeBridge.DARK_PAGE, HarnessThemeBridge.pagePalette("#000000"))
+        // 浅色面板（deriveSurface 在浅色档给出的近白）：黑字。
+        assertEquals(HarnessThemeBridge.LIGHT_PAGE, HarnessThemeBridge.pagePalette("#fbfcfd"))
+        assertEquals(HarnessThemeBridge.LIGHT_PAGE, HarnessThemeBridge.pagePalette("#ffffff"))
+        // 中间灰：黑字对比度 5.3、白字只有 3.95，所以判给深色文字。
+        assertEquals(HarnessThemeBridge.LIGHT_PAGE, HarnessThemeBridge.pagePalette("#808080"))
+        assertEquals(HarnessThemeBridge.DARK_PAGE, HarnessThemeBridge.pagePalette("#666666"))
+        assertEquals(HarnessThemeBridge.LIGHT_PAGE, HarnessThemeBridge.pagePalette("#999999"))
+    }
+
+    @Test
+    fun `无法解析的面板色不给结论`() {
+        assertEquals(null, HarnessThemeBridge.pagePalette("#fff"))
+        assertEquals(null, HarnessThemeBridge.pagePalette("rgb(0,0,0)"))
+        assertEquals(null, HarnessThemeBridge.pagePalette(""))
+        assertEquals(null, HarnessThemeBridge.relativeLuminance("#12345"))
+        assertEquals(null, HarnessThemeBridge.relativeLuminance("red"))
+    }
+
+    @Test
+    fun `相对亮度按 WCAG 线性化且单调`() {
+        assertEquals(0.0, HarnessThemeBridge.relativeLuminance("#000000")!!, 1e-9)
+        assertEquals(1.0, HarnessThemeBridge.relativeLuminance("#ffffff")!!, 1e-9)
+        val grey = HarnessThemeBridge.relativeLuminance("#808080")!!
+        assertTrue(grey > 0.20 && grey < 0.23)
+        assertTrue(HarnessThemeBridge.relativeLuminance("#333333")!! < grey)
+        assertTrue(HarnessThemeBridge.relativeLuminance("#cccccc")!! > grey)
+        // 大小写不改变结论：白名单与解析都按十六进制处理。
+        assertEquals(HarnessThemeBridge.relativeLuminance("#aaaaaa"), HarnessThemeBridge.relativeLuminance("#AAAAAA"))
+    }
+
+    @Test
+    fun `标签色与官方调色板逐字一致`() {
+        // android.css 的 var() 缺省值必须与这里一致，否则「桥没升级」时会掉成另一套字色。
+        assertEquals("#f9fafb", HarnessThemeBridge.DARK_PAGE.primary)
+        assertEquals("#cfd3d6", HarnessThemeBridge.DARK_PAGE.secondary)
+        assertEquals("#adb2b8", HarnessThemeBridge.DARK_PAGE.tertiary)
+        assertEquals("#0f1115", HarnessThemeBridge.LIGHT_PAGE.primary)
+        assertEquals("#61666b", HarnessThemeBridge.LIGHT_PAGE.secondary)
+        assertEquals("#81858c", HarnessThemeBridge.LIGHT_PAGE.tertiary)
+        assertEquals("dark", HarnessThemeBridge.DARK_PAGE.css)
+        assertEquals("light", HarnessThemeBridge.LIGHT_PAGE.css)
+    }
+
+    @Test
+    fun `强调色只在格式合法时给出 ARGB`() {
+        assertEquals(0xFF315FCF.toInt(), HarnessThemeBridge.toArgb("#315FCF"))
+        assertEquals(0xFF000000.toInt(), HarnessThemeBridge.toArgb("#000000"))
+        assertEquals(null, HarnessThemeBridge.toArgb(null))
+        assertEquals(null, HarnessThemeBridge.toArgb("#fff"))
+        assertEquals(null, HarnessThemeBridge.toArgb("red"))
+        assertEquals(null, HarnessThemeBridge.toArgb("';alert(1);//"))
+    }
 }
