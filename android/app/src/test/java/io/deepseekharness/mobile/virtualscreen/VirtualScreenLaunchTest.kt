@@ -50,6 +50,27 @@ class VirtualScreenLaunchTest {
         assertTrue(oversized.message!!, oversized.message!!.contains("链接长度必须在 1～2048 个字符内"))
     }
 
+    @Test fun `开启任意 URI Scheme 后放行自定义应用协议，仍硬拒绝 file javascript data`() {
+        assertThrows(IllegalArgumentException::class.java) {
+            VirtualScreenPolicy.launchUri("weixin://dl/scan", allowAnyScheme = false)
+        }
+        assertEquals("weixin://dl/scan", VirtualScreenPolicy.launchUri("weixin://dl/scan", allowAnyScheme = true))
+        assertEquals("alipays://platformapi/startapp", VirtualScreenPolicy.launchUri("alipays://platformapi/startapp", allowAnyScheme = true))
+        assertEquals(
+            VirtualScreenPolicy.LaunchRequest.Uri("weixin://dl/scan"),
+            VirtualScreenPolicy.launchRequest(
+                JSONObject()
+                    .put("uri", "weixin://dl/scan")
+                    .put(VirtualScreenPolicy.ALLOW_ANY_URI_SCHEME_FIELD, true),
+            ),
+        )
+        for (blocked in listOf("file:///sdcard/secret", "javascript:alert(1)", "data:text/html,hi")) {
+            assertThrows(IllegalArgumentException::class.java) {
+                VirtualScreenPolicy.launchUri(blocked, allowAnyScheme = true)
+            }
+        }
+    }
+
     @Test fun `包名与组件规则沿用既有校验`() {
         assertEquals("com.tencent.mm", VirtualScreenPolicy.launchPackage("com.tencent.mm"))
         for (value in listOf("com", "1com.a", "com.tencent.mm/", "", "com..a")) {

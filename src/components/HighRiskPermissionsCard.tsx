@@ -144,6 +144,60 @@ const HIGH_RISK_CATEGORY_GROUPS: readonly HighRiskCategoryGroup[] = [
       },
     ],
   },
+  {
+    id: 'host_capability_unlock',
+    title: '四、完全放开 AI 宿主、沙箱与设备能力（8 项）',
+    items: [
+      {
+        id: 'root_unconfined_sandbox',
+        tier: 'critical',
+        title: 'Root 解除命名空间与能力沙箱包装',
+        description: '跳过 unshare 命名空间隔离、/system 只读重挂载、/dev/block 遮蔽与 setpriv 能力裁剪，直接以完整宿主 UID 0 命名空间执行 Root 命令（关闭即恢复沙箱包装）',
+      },
+      {
+        id: 'root_skip_app_confirm',
+        tier: 'critical',
+        title: 'Root 高危与极危跳过应用警告页直通',
+        description: '当命令命中的细分分类均已开启时，跳过 dsh 审批与 Android 应用高危/极危警告确认页实现全自动 Root 执行（未开启对应命令分类时仍硬拦截）',
+      },
+      {
+        id: 'accessibility_system_apps',
+        tier: 'high',
+        title: '无障碍操作受保护系统组件与权限弹窗',
+        description: '放开 android、系统设置、系统界面（SystemUI）、应用安装器与权限控制器等系统包名限制，允许无障碍读取与点击系统弹窗',
+      },
+      {
+        id: 'accessibility_sensitive_windows',
+        tier: 'critical',
+        title: '无障碍读取与操作敏感窗口及密码框',
+        description: '解除密码框、验证码、支付与授权窗口整棵拦截，并在主屏与副屏无障碍树中放开可编辑输入框文本与敏感词输入',
+      },
+      {
+        id: 'accessibility_lockscreen_and_burst',
+        tier: 'high',
+        title: '无障碍解除锁屏拦截与高频动作节流',
+        description: '允许熄屏/锁屏状态下继续调用无障碍读取与动作，并取消主屏与副屏连发动作之间的强制冷却间隔',
+      },
+      {
+        id: 'device_file_unrestricted',
+        tier: 'high',
+        title: '设备文件通道解除投递区目录与大小限制',
+        description: '放开 root=device 整机绝对路径读写与建目录，并将文件通道单文件传输上限从 128 KiB 提升至 4 MiB（关闭即恢复仅限 inbox/outbox 与 128 KiB）',
+      },
+      {
+        id: 'virtual_screen_unrestricted',
+        tier: 'high',
+        title: '副屏解除主屏限制与任意 URI Scheme 启动',
+        description: '允许副屏 Shell 指定 displayId=0（主屏，且不要求已启动副屏会话），并放开副屏 launch 调起自定义应用 URI Scheme（仍拒绝 file/javascript/data）',
+      },
+      {
+        id: 'storage_full_sdcard_mount',
+        tier: 'high',
+        title: '访客自动挂载完整共享存储（/mnt/sdcard）与 Android 目录',
+        description: '下次启动 Ubuntu 访客时自动将完整内置存储挂载到 /mnt/sdcard，并放开目录白名单选择共享存储根目录与 Android/data、obb 子目录（关闭开关后下一次启动即刻撤除）',
+      },
+    ],
+  },
 ] as const
 
 const TIER_LABELS: Record<HighRiskCategoryMeta['tier'], string> = {
@@ -163,12 +217,12 @@ function samePermissions(a: HighRiskPermissions, b: HighRiskPermissions): boolea
 }
 
 /**
- * 启动器「AI 高危文件与命令权限」设置面板（1 个总开关 + 17 个细分开关）。
+ * 启动器「AI 高危文件与命令权限」设置面板（1 个总开关 + 25 个细分开关）。
  *
  * 核心原则：
- *  - 所有规则均在宿主 `RootCommandGuard.verifyPermitted` 中硬编码主动拦截，绝不交由 AI 自行决定；
- *  - 默认总开关关闭、17 项细分开关全部关闭，补回放开权限带来的风险提升；
- *  - 即使开启对应细分开关，Root 通道下的审批与 Android 应用警告确认页仍继续生效（双重防线）。
+ *  - 所有规则均在宿主硬编码主动拦截，绝不交由 AI 自行决定；
+ *  - 默认总开关关闭、25 项细分开关全部关闭，补回放开权限带来的风险提升；
+ *  - 前 17 项开启后默认仍保留沙箱隔离与 Root 应用警告确认页，第四组 8 项按需单独放开宿主级限制，关闭即刻恢复硬编码拦截。
  */
 export function HighRiskPermissionsCard({ bridge = runtimeBridge }: { bridge?: RuntimeBridge }) {
   const [load, setLoad] = useState<PermissionsLoad>({ status: 'loading' })
@@ -261,7 +315,7 @@ export function HighRiskPermissionsCard({ bridge = runtimeBridge }: { bridge?: R
             <span>
               <strong>{t('允许 AI 申请高危文件与命令权限（总开关）')}</strong>
               <small>
-                {t('关闭时，下方全部 17 类高危文件修改与系统命令均由宿主硬编码规则直接拦截；开启后，仅对下方显式勾选的细分项放行。')}
+                {t('关闭时，下方全部 25 类高危文件修改、系统命令与宿主能力放开均由宿主硬编码规则直接拦截；开启后，仅对下方显式勾选的细分项放行。')}
               </small>
             </span>
             <input
@@ -277,7 +331,7 @@ export function HighRiskPermissionsCard({ bridge = runtimeBridge }: { bridge?: R
           </label>
 
           <p className="settings-note">
-            {t('纵深防御说明：此处的硬编码规则对 Root 通道与 Shizuku 通道同时生效。即使开启了某项细分权限，Root 通道下的中高危操作仍需走 dsh 审批，高危与极危操作仍会强制弹出 Android 应用警告确认页。')}
+            {t('纵深防御说明：硬编码规则覆盖 Root、Shizuku、无障碍、文件通道、副屏与访客挂载。前 17 项开启后默认仍保留沙箱隔离与 Root 应用警告确认页；只有显式勾选第四组对应开关，才会进一步放开沙箱、确认页或宿主能力，关闭开关即刻恢复全部硬编码拦截。')}
           </p>
 
           <div className="settings-inline-actions">

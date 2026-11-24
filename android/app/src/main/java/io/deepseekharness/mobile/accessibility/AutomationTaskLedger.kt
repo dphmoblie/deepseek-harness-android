@@ -572,8 +572,9 @@ internal object AutomationTaskPlan {
 
     fun isTaskId(value: String): Boolean = value.length in 1..MAX_TASK_ID_CHARS && TASK_ID.matches(value)
 
-    /** 与 `AccessibilityAutomationPolicy.validPackage` 同一套形状口径；保留包名不在这里拦。 */
-    fun isPackageName(value: String): Boolean = value.length in 1..MAX_PACKAGE_CHARS && PACKAGE.matches(value)
+    /** 与 `AccessibilityAutomationPolicy.validPackage` 同一套形状口径；保留包名（含系统框架 `android`）不在这里拦，由服务侧 `packageAllowed` 硬开关兜底。 */
+    fun isPackageName(value: String): Boolean =
+        value == "android" || (value.length in 1..MAX_PACKAGE_CHARS && PACKAGE.matches(value))
 
     /** 返回 null 表示这条计划合法；否则是一句给调用方看的拒绝原因。 */
     fun validate(spec: AutomationTaskStepSpec, seen: MutableSet<String>): String? {

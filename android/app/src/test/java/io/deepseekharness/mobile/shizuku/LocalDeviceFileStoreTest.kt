@@ -139,4 +139,77 @@ class LocalDeviceFileStoreTest {
         assertFalse(escaped.ok)
         assertEquals("DEVICE_FILE_ESCAPE", escaped.errorCode)
     }
+
+    @Test
+    fun `unrestricted switch unlocks device root, absolute path, and 4 MiB transfer limit`() {
+        val base = temporaryFolder.newFolder("dsh-unrestricted").toPath()
+        val resolver = rootResolver(base)
+        val mediumBytes = ByteArray(200 * 1024) { (it % 251).toByte() }
+        val mediumBase64 = Base64.getEncoder().encodeToString(mediumBytes)
+
+        // 1. 默认关闭时：root=device 与 >128 KiB 一律硬拒绝
+        val deviceRejected = assertThrows(RuntimeFailure::class.java) {
+            LocalDeviceFileStore.tryExecute(
+                DeviceCommand.FILE_LIST,
+                """{"root":"device","path":""}""",
+                resolver,
+                allowUnrestricted = false,
+            )
+        }
+        assertEquals("DEVICE_FILE_INVALID", deviceRejected.code)
+
+        val sizeRejected = assertThrows(RuntimeFailure::class.java) {
+            LocalDeviceFileStore.tryExecute(
+                DeviceCommand.FILE_WRITE,
+                """{"root":"outbox","path":"medium.bin","contentBase64":"$mediumBase64"}""",
+                resolver,
+                allowUnrestricted = false,
+            )
+        }
+        assertEquals("DEVICE_FILE_INVALID", sizeRejected.code)
+
+        // 2. 开启 allowUnrestricted 后：支持 root=device 与 200 KiB 文件读写
+        val writeDevice = LocalDeviceFileStore.tryExecute(
+            DeviceCommand.FILE_WRITE,
+            """{"root":"device","path":"medium.bin","contentBase64":"$mediumBase64"}""",
+            resolver,
+            allowUnrestricted = true,
+        )!!
+        assertTrue(writeDevice.ok)
+
+        val readDevice = LocalDeviceFileStore.tryExecute(
+            DeviceCommand.FILE_READ,
+            """{"root":"device","path":"medium.bin"}""",
+            resolver,
+            allowUnrestricted = true,
+        )!!
+        assertTrue(readDevice.ok)
+        assertEquals(mediumBase64, readDevice.text)
+
+        // 3. 绝对路径策略也由 allowUnrestricted 精准控制，且根目录 "/" 仅允许 list、禁止 read/write/mkdir
+        val absoluteReq = DeviceFilePolicy.parse(
+            """{"root":"device","path":"/data/local/tmp/probe.txt"}""",
+            allowUnrestricted = true,
+        )
+        assertEquals(DeviceFilePolicy.Root.DEVICE, absoluteReq.root)
+        assertEquals("/data/local/tmp/probe.txt", absoluteReq.path)
+        assertThrows(RuntimeFailure::class.java) {
+            DeviceFilePolicy.parse("""{"root":"device","path":"/data/local/tmp/probe.txt"}""", allowUnrestricted = false)
+        }
+        val runner = DeviceCommandRunner { _, _ -> }
+        for ((cmd, param) in listOf(
+            DeviceCommand.FILE_READ to """{"root":"device","path":"/"}""",
+            DeviceCommand.FILE_WRITE to """{"root":"device","path":"/","contentBase64":"$mediumBase64"}""",
+            DeviceCommand.FILE_MKDIR to """{"root":"device","path":"/"}""",
+        )) {
+            val localErr = assertThrows(RuntimeFailure::class.java) {
+                LocalDeviceFileStore.tryExecute(cmd, param, resolver, allowUnrestricted = true)
+            }
+            assertEquals("DEVICE_FILE_INVALID", localErr.code)
+            val runnerErr = assertThrows(RuntimeFailure::class.java) {
+                runner.buildInput("00000000-0000-0000-0000-000000000001", cmd, param, allowUnrestrictedFiles = true)
+            }
+            assertEquals("DEVICE_FILE_INVALID", runnerErr.code)
+        }
+    }
 }

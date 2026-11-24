@@ -5,9 +5,10 @@ import io.deepseekharness.mobile.runtime.RuntimeFailure
 import org.json.JSONObject
 
 /**
- * AI 执行或修改高危文件与高危命令的细分权限分类（17 项）。
+ * AI 执行或修改高危文件、高危命令及放开宿主能力限制的细分权限分类（25 项）。
  *
- * 每一项对应 [RootCommandGuard] 中的一组硬编码静态拦截规则；
+ * 前 17 项对应 [RootCommandGuard] 中的硬编码命令/文件拦截规则；
+ * 后 8 项对应 Root 沙箱/确认页、无障碍、设备文件、副屏与访客存储挂载的宿主级硬编码限制。
  * 默认全部关闭（false），并受总开关 [HighRiskPermissions.enabled]（默认 false）统管。
  */
 enum class HighRiskCategory(
@@ -105,9 +106,66 @@ enum class HighRiskCategory(
         "物理块设备、分区格式化、刷机与物理内存访问",
         RootCommandGuard.RiskTier.CRITICAL,
     ),
+
+    // ---- 四、完全放开 AI 宿主、沙箱与设备能力（8 项） ----
+    ROOT_UNCONFINED_SANDBOX(
+        "root_unconfined_sandbox",
+        "Root 解除命名空间与能力沙箱包装",
+        RootCommandGuard.RiskTier.CRITICAL,
+    ),
+    ROOT_SKIP_APP_CONFIRM(
+        "root_skip_app_confirm",
+        "Root 高危与极危跳过应用警告页直通",
+        RootCommandGuard.RiskTier.CRITICAL,
+    ),
+    ACCESSIBILITY_SYSTEM_APPS(
+        "accessibility_system_apps",
+        "无障碍操作受保护系统组件与权限弹窗",
+        RootCommandGuard.RiskTier.HIGH,
+    ),
+    ACCESSIBILITY_SENSITIVE_WINDOWS(
+        "accessibility_sensitive_windows",
+        "无障碍读取与操作敏感窗口及密码框",
+        RootCommandGuard.RiskTier.CRITICAL,
+    ),
+    ACCESSIBILITY_LOCKSCREEN_BURST(
+        "accessibility_lockscreen_and_burst",
+        "无障碍解除锁屏拦截与高频动作节流",
+        RootCommandGuard.RiskTier.HIGH,
+    ),
+    DEVICE_FILE_UNRESTRICTED(
+        "device_file_unrestricted",
+        "设备文件通道解除投递区目录与大小限制",
+        RootCommandGuard.RiskTier.HIGH,
+    ),
+    VIRTUAL_SCREEN_UNRESTRICTED(
+        "virtual_screen_unrestricted",
+        "副屏解除主屏限制与任意 URI Scheme 启动",
+        RootCommandGuard.RiskTier.HIGH,
+    ),
+    STORAGE_FULL_SDCARD_MOUNT(
+        "storage_full_sdcard_mount",
+        "访客自动挂载完整共享存储（/mnt/sdcard）与 Android 目录",
+        RootCommandGuard.RiskTier.HIGH,
+    ),
     ;
 
     companion object {
+        /** 前 17 项静态命令/文件分类；后 8 项是宿主级能力放开开关。 */
+        val HOST_UNLOCK_CATEGORIES: Set<HighRiskCategory> = setOf(
+            ROOT_UNCONFINED_SANDBOX,
+            ROOT_SKIP_APP_CONFIRM,
+            ACCESSIBILITY_SYSTEM_APPS,
+            ACCESSIBILITY_SENSITIVE_WINDOWS,
+            ACCESSIBILITY_LOCKSCREEN_BURST,
+            DEVICE_FILE_UNRESTRICTED,
+            VIRTUAL_SCREEN_UNRESTRICTED,
+            STORAGE_FULL_SDCARD_MOUNT,
+        )
+
+        val COMMAND_CATEGORIES: List<HighRiskCategory> =
+            entries.filterNot { it in HOST_UNLOCK_CATEGORIES }
+
         fun fromWire(value: String?): HighRiskCategory? =
             entries.firstOrNull { it.wireValue == value }
     }
@@ -152,6 +210,12 @@ data class HighRiskPermissions(
         val ALL_ENABLED = HighRiskPermissions(
             enabled = true,
             categories = HighRiskCategory.entries.associateWith { true },
+        )
+
+        /** 仅开启 17 项命令/文件分类、保持 8 项宿主能力放开开关关闭（用于验证常规审批/警告链路）。 */
+        val COMMAND_CATEGORIES_ONLY = HighRiskPermissions(
+            enabled = true,
+            categories = HighRiskCategory.entries.associateWith { it !in HighRiskCategory.HOST_UNLOCK_CATEGORIES },
         )
     }
 }

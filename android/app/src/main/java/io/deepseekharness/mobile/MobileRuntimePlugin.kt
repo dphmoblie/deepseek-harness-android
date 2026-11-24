@@ -2133,14 +2133,19 @@ class MobileRuntimePlugin : Plugin() {
             if (!rootEngine && !controller.hasDeviceSession(sessionId)) {
                 throw RuntimeFailure("SESSION_NOT_FOUND", "设备 Shell 会话不存在或已结束")
             }
+            val highRiskPermissions = io.deepseekharness.mobile.shizuku.HighRiskPermissionStore.status(context)
             val rootGuardProfile = io.deepseekharness.mobile.shizuku.RootEngineAccess.guardProfile(context)
             val param = call.getString("param") ?: ""
+            var rootExecutionGrant: io.deepseekharness.mobile.shizuku.RootExecutionGrant? = null
             if (command == DeviceCommand.SHELL) {
-                io.deepseekharness.mobile.shizuku.RootCommandGuard.verifyPermitted(
+                val assessment = io.deepseekharness.mobile.shizuku.RootCommandGuard.verifyPermitted(
                     script = param,
                     profile = if (rootEngine) rootGuardProfile else io.deepseekharness.mobile.shizuku.RootCommandGuard.Profile.STRICT,
-                    permissions = io.deepseekharness.mobile.shizuku.HighRiskPermissionStore.status(context),
+                    permissions = highRiskPermissions,
                 )
+                if (rootEngine && assessment.route == io.deepseekharness.mobile.shizuku.RootCommandGuard.ApprovalRoute.ALLOW) {
+                    rootExecutionGrant = io.deepseekharness.mobile.shizuku.RootApprovalRegistry.grantDirect(param, assessment)
+                }
             }
             val result = RuntimeHost.deviceCommands()
                 .execute(
@@ -2150,6 +2155,10 @@ class MobileRuntimePlugin : Plugin() {
                     DEVICE_COMMAND_TIMEOUT_MS,
                     useRootEngine = rootEngine,
                     rootGuardProfile = rootGuardProfile,
+                    rootExecutionGrant = rootExecutionGrant,
+                    allowUnrestrictedFiles = highRiskPermissions.isAllowed(
+                        io.deepseekharness.mobile.shizuku.HighRiskCategory.DEVICE_FILE_UNRESTRICTED,
+                    ),
                 )
             JSObject()
                 .put("ok", result.ok)
@@ -2460,6 +2469,7 @@ class MobileRuntimePlugin : Plugin() {
             if (!io.deepseekharness.mobile.shizuku.DeviceShellAccess.enabled(context)) {
                 throw RuntimeFailure("DEVICE_SHELL_DISABLED", "请先开启 AI Shell")
             }
+            val highRiskPermissions = io.deepseekharness.mobile.shizuku.HighRiskPermissionStore.status(context)
             val state = io.deepseekharness.mobile.virtualscreen.VirtualScreenService.current?.state()
             val script = call.getString("script")
             val plan = io.deepseekharness.mobile.virtualscreen.VirtualScreenShellPolicy.plan(
@@ -2467,11 +2477,14 @@ class MobileRuntimePlugin : Plugin() {
                 requestedDisplayId = call.getInt("displayId"),
                 active = state?.optBoolean("active") == true,
                 sessionDisplayId = state?.optInt("displayId", 0) ?: 0,
+                allowMainDisplay = highRiskPermissions.isAllowed(
+                    io.deepseekharness.mobile.shizuku.HighRiskCategory.VIRTUAL_SCREEN_UNRESTRICTED,
+                ),
             )
             io.deepseekharness.mobile.shizuku.RootCommandGuard.verifyPermitted(
                 script = requireNotNull(script),
                 profile = io.deepseekharness.mobile.shizuku.RootCommandGuard.Profile.STRICT,
-                permissions = io.deepseekharness.mobile.shizuku.HighRiskPermissionStore.status(context),
+                permissions = highRiskPermissions,
             )
             val sessionId = controller.createTerminal("device", VIRTUAL_SCREEN_COLUMNS, VIRTUAL_SCREEN_ROWS)
             val result = try {

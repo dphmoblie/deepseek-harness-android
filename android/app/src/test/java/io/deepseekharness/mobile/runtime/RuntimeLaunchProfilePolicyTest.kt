@@ -96,4 +96,16 @@ class RuntimeLaunchProfilePolicyTest {
         // `/sdcard` 整体绑定已被白名单取代：它的固定挂载点不再出现在任何回退档里。
         assertEquals(0, fallbacks.count { fallback -> fallback.bindMounts.any { it.target == "/sdcard" } })
     }
+
+    @Test
+    fun `proot failure drops optional full sdcard mount independently without dropping required mounts`() {
+        val sdcardMount = ProotBindMount("/storage/emulated/0", RuntimeStorageDirsLayout.FULL_SDCARD_GUEST_PATH)
+        val profile = ProotLaunchProfile(false, listOf(requiredMount, sdcardMount))
+        val result = ProcessProbeResult(1, false, "proot error: bind failed")
+
+        assertEquals(
+            listOf(profile.copy(bindMounts = listOf(requiredMount))),
+            prootProfileFallbacks(profile, result, commandCanFail = true),
+        )
+    }
 }

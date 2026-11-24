@@ -140,4 +140,46 @@ class AccessibilityAutomationPolicyTest {
         assertEquals("scroll", AccessibilityAutomationPolicy.parseAction(value)?.action)
         assertNull(AccessibilityAutomationPolicy.parseAction(value.replace("forward", "up")))
     }
+
+    @Test
+    fun hostUnlockFlagsToggleReservedSystemPackagesAndSensitiveText() {
+        val reserved = listOf(
+            "android",
+            "com.android.settings",
+            "com.android.systemui",
+            "com.android.packageinstaller",
+            "com.android.permissioncontroller",
+        )
+        for (pkg in reserved) {
+            assertFalse("默认拒绝系统包 $pkg", AccessibilityAutomationPolicy.packageAllowed(pkg, emptySet(), true, allowReserved = false))
+            assertTrue("开启开关后放行系统包 $pkg", AccessibilityAutomationPolicy.packageAllowed(pkg, emptySet(), true, allowReserved = true))
+        }
+        val androidDialogClick = "{" +
+            "\"packageName\":\"android\"," +
+            "\"action\":\"click\"," +
+            "\"selector\":{\"viewId\":\"android:id/button1\"}}"
+        assertNull(AccessibilityAutomationPolicy.parseAction(androidDialogClick, allowReserved = false))
+        assertNotNull(AccessibilityAutomationPolicy.parseAction(androidDialogClick, allowReserved = true))
+
+        val settingsDialogClick = "{" +
+            "\"packageName\":\"com.android.settings\"," +
+            "\"action\":\"click\"," +
+            "\"selector\":{\"viewId\":\"android:id/button1\"}}"
+        assertNull(AccessibilityAutomationPolicy.parseAction(settingsDialogClick, allowReserved = false))
+        assertNotNull(AccessibilityAutomationPolicy.parseAction(settingsDialogClick, allowReserved = true))
+
+        val ordinaryAppCrossPkg = "{" +
+            "\"packageName\":\"com.example.reader\"," +
+            "\"action\":\"click\"," +
+            "\"selector\":{\"viewId\":\"android:id/button1\"}}"
+        assertNull(AccessibilityAutomationPolicy.parseAction(ordinaryAppCrossPkg, allowReserved = true))
+
+        val sensitiveInput = "{" +
+            "\"packageName\":\"com.example.reader\"," +
+            "\"action\":\"setText\"," +
+            "\"selector\":{\"viewId\":\"com.example.reader:id/input\"}," +
+            "\"text\":\"验证码123456\"}"
+        assertNull(AccessibilityAutomationPolicy.parseAction(sensitiveInput, allowSensitiveText = false))
+        assertEquals("验证码123456", AccessibilityAutomationPolicy.parseAction(sensitiveInput, allowSensitiveText = true)?.text)
+    }
 }

@@ -391,15 +391,21 @@ class RuntimeLaunchResolver(
     /** 投递区门面；只用于追加可选绑定与判断可用性，不接触凭据路径。 */
     private fun mailbox(): RuntimeMailbox = RuntimeMailbox(store)
 
+    /** 整卡直挂可选绑定提供者：仅在显式开启高危开关 `STORAGE_FULL_SDCARD_MOUNT` 时将共享存储根挂入 `/mnt/sdcard`。 */
+    private val fullSdcardBind: RuntimeFullSdcardBindProvider by lazy {
+        RuntimeFullSdcardBindProvider.from(appContext, store)
+    }
+
     /**
      * 可选绑定提供者，**顺序即绑定顺序**：投递区（`/mnt/inbox`、`/mnt/outbox`）在前，
-     * 用户目录白名单（`/mnt/user/<序号>`）在后。
+     * 用户目录白名单（`/mnt/user/<序号>`）居中，整卡直挂（`/mnt/sdcard`，默认关闭）在后。
      *
-     * 两条链路在「不可用返回空列表」「可用性/内容折进缓存键」上共用同一个接口
+     * 三条链路在「不可用返回空列表」「可用性/内容折进缓存键」上共用同一个接口
      * （见 `OptionalBindProvider`），这里只负责把它们按固定顺序摆好；顺序变了，
      * 启动档里的挂载顺序与缓存键都会跟着变，因此不要随手调整。
      */
-    private val optionalBinds: List<OptionalBindProvider> get() = listOf(mailbox(), storageDirs)
+    private val optionalBinds: List<OptionalBindProvider>
+        get() = listOf(mailbox(), storageDirs, fullSdcardBind)
 
     private fun probeProfiles(
         initial: CachedProfile,
@@ -484,7 +490,7 @@ class RuntimeLaunchResolver(
             manifest.version,
             manifest.rootfs.sha256,
             PROFILE_KEY_SANDBOX_BIND,
-        ) + optionalBinds.map { it.cacheToken() }
+        ) + optionalBinds.mapNotNull { it.cacheToken().takeIf(String::isNotEmpty) }
         ).joinToString(":")
 
     private fun throwIfStartCancelled(externalCancellation: () -> Boolean) {

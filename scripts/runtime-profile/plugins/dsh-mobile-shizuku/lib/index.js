@@ -19,10 +19,12 @@ const MAX_WAIT_MILLIS = 10_000
 const MAX_RESULT_CHARS = 200_000
 const MAX_SCREENSHOT_BASE64_CHARS = 8 * 1024 * 1024
 const MAX_HTTP_RESPONSE_BYTES = 12 * 1024 * 1024
-const MAX_FILE_BYTES = 128 * 1024
+// 默认上限 128 KiB 与仅 inbox/outbox 由 Android 宿主 DeviceFilePolicy 强制执行；
+// 当用户在启动器显式开启「设备文件通道解除投递区目录与大小限制」后，宿主放行 root=device 与最高 4 MiB 单文件。
+const MAX_FILE_BYTES = 4 * 1024 * 1024
 const MAX_FILE_BASE64_CHARS = 4 * Math.ceil(MAX_FILE_BYTES / 3) + 4
 const MAX_FILE_PATH_CHARS = 240
-const MAX_FILE_PARAM_CHARS = 180_000
+const MAX_FILE_PARAM_CHARS = MAX_FILE_BASE64_CHARS + MAX_FILE_PATH_CHARS + 256
 const REQUEST_TIMEOUT_MS = 75_000
 // 高危 / 极危根命令会等待用户在 Android 应用警告页核对并完成验证（原生默认 120 秒 + 命令 60 秒）。
 const HOST_APPROVAL_REQUEST_TIMEOUT_MS = 185_000
@@ -48,11 +50,12 @@ const VIRTUAL_TOUCH_PHASES = ['down', 'move', 'up', 'cancel']
 const VIRTUAL_LIMIT_X = 1440
 const VIRTUAL_LIMIT_Y = 2560
 const COMPONENT_PATTERN = /^[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)+[/][A-Za-z0-9_.$]+$/u
-// launch 的链接只放行 http/https/market；私有 scheme 请改用 component 或 package。
-const LAUNCH_URI_PATTERN = /^(?:https?|market):/iu
+// 默认由宿主 VirtualScreenPolicy.launchUri 限制为 http/https/market；开启「副屏放开主屏 Shell 与任意 URI Scheme」后
+// 宿主放行其余 RFC-3986 自定义应用协议，但 file:/javascript:/data: 始终硬拒绝。
+const LAUNCH_URI_PATTERN = /^(?!(?:file|javascript|data):)[A-Za-z][A-Za-z0-9+.-]*:/iu
 // 空白、控制字符与 shell 元字符：链接始终作为 am start -d 的单个参数传入，这里先把危险字符挡在外面。
 const LAUNCH_URI_FORBIDDEN_PATTERN = /[\u0000-\u0020"'`;|$\\<>]/u
-const FILE_ROOTS = new Set(['inbox', 'outbox'])
+const FILE_ROOTS = new Set(['inbox', 'outbox', 'device'])
 const FILE_FORBIDDEN_CHARS = /[\u0000-\u001f\u007f'"`\\;|&$<>*?(){}[\]!~]/u
 // 只提供固定恢复建议，不能把设备异常里的文本变成模型指令或自动重放输入。
 const VIRTUAL_ERROR_HINTS = {
@@ -435,15 +438,17 @@ function assertFileRoot(value) {
   return value
 }
 
-function assertFilePath(value, allowEmpty = false) {
+function assertFilePath(value, allowEmpty = false, allowAbsolute = false) {
   if (typeof value !== 'string' || value.length > MAX_FILE_PATH_CHARS || (!allowEmpty && value.length === 0)) {
     throw new Error('DEVICE_FILE_INVALID')
   }
   if (value.length === 0) return value
-  if (value.startsWith('/') || value.endsWith('/') || value.includes('//') || FILE_FORBIDDEN_CHARS.test(value)) {
+  if (allowAbsolute && value === '/') return value
+  if ((!allowAbsolute && value.startsWith('/')) || value.endsWith('/') || value.includes('//') || FILE_FORBIDDEN_CHARS.test(value)) {
     throw new Error('DEVICE_FILE_INVALID')
   }
-  const parts = value.split('/')
+  const body = allowAbsolute && value.startsWith('/') ? value.slice(1) : value
+  const parts = body.split('/')
   if (parts.length > 32 || parts.some(part => part.length === 0 || part === '.' || part === '..' || part.length > 128)) {
     throw new Error('DEVICE_FILE_INVALID')
   }
@@ -460,9 +465,10 @@ function assertFileBase64(value) {
 }
 
 function fileParam({ root, path, contentBase64, overwrite }) {
+  const checkedRoot = assertFileRoot(root)
   const request = {
-    root: assertFileRoot(root),
-    path: assertFilePath(path, true),
+    root: checkedRoot,
+    path: assertFilePath(path, true, checkedRoot === 'device'),
   }
   if (contentBase64 !== undefined) request.contentBase64 = assertFileBase64(contentBase64).value
   if (overwrite !== undefined) {
@@ -543,7 +549,7 @@ const FILE_READ_OUTPUT = {
     additionalProperties: false,
     properties: {
       ok: { type: 'boolean', required: true },
-      root: { type: 'string', required: true, enum: ['inbox', 'outbox'] },
+      root: { type: 'string', required: true, enum: ['inbox', 'outbox', 'device'] },
       path: { type: 'string', required: true },
       bytes: { type: 'integer', required: true },
       contentBase64: { type: 'string', required: true },
@@ -562,7 +568,7 @@ const FILE_WRITE_OUTPUT = {
     additionalProperties: false,
     properties: {
       ok: { type: 'boolean', required: true },
-      root: { type: 'string', required: true, enum: ['inbox', 'outbox'] },
+      root: { type: 'string', required: true, enum: ['inbox', 'outbox', 'device'] },
       path: { type: 'string', required: true },
       bytes: { type: 'integer', required: true },
       overwritten: { type: 'boolean', required: true },
@@ -583,10 +589,14 @@ function accessibilityActionParam(args) {
   const packageName = args?.packageName
   const viewId = args?.viewId
   const action = args?.action
-  if (typeof packageName !== 'string' || packageName.length > 160 || !ACCESSIBILITY_PACKAGE_PATTERN.test(packageName) ||
-      typeof viewId !== 'string' || viewId.length > 240 ||
-      ACCESSIBILITY_VIEW_ID_PATTERN.exec(viewId)?.[1] !== packageName ||
-      !['click', 'setText', 'scroll'].includes(action)) {
+  const isAndroidFramework = packageName === 'android'
+  const validPkg = typeof packageName === 'string' && packageName.length <= 160 &&
+    (isAndroidFramework || ACCESSIBILITY_PACKAGE_PATTERN.test(packageName))
+  const validViewId = typeof viewId === 'string' && viewId.length <= 240 && (
+    /^android:id\/[A-Za-z_][A-Za-z0-9_]{0,79}$/u.test(viewId) ||
+    ACCESSIBILITY_VIEW_ID_PATTERN.exec(viewId)?.[1] === packageName
+  )
+  if (!validPkg || !validViewId || !['click', 'setText', 'scroll'].includes(action)) {
     throw new Error('ACCESSIBILITY_ACTION_INVALID')
   }
   const request = { packageName, action, selector: { viewId } }
@@ -1134,7 +1144,7 @@ export function apply(ctx) {
       },
       component: { type: 'string', description: '仅 launch 动作：明确的应用入口，形如 com.example.app/.MainActivity。与 package、uri 三者只能提供一个。' },
       package: { type: 'string', description: '仅 launch 动作：要打开的应用包名，设备端用 cmd package resolve-activity 解析入口。与 component、uri 三者只能提供一个。' },
-      uri: { type: 'string', description: '仅 launch 动作：要打开的链接，只支持 http/https/market。与 component、package 三者只能提供一个。' },
+      uri: { type: 'string', description: '仅 launch 动作：要打开的链接；默认支持 http/https/market，开启「副屏放开主屏 Shell 与任意 URI Scheme」后支持其他自定义应用协议（仍拒绝 file/javascript/data）。与 component、package 三者只能提供一个。' },
       selfPackage: { type: 'string', description: '仅 autoFollowTick 动作：调用方自己的包名，用于把「本应用自己」排除在可提升目标之外，可省略。' },
     },
     output: VIRTUAL_ACTION_OUTPUT,
@@ -1540,7 +1550,7 @@ export function apply(ctx) {
     name: 'mobile_device_file_list',
     description: '列出 Android DSH 投递区 inbox 或 outbox 下一级目录条目；只返回受控相对路径，不提供任意 Shell。',
     parameters: {
-      root: { type: 'string', required: true, enum: ['inbox', 'outbox'] },
+      root: { type: 'string', required: true, enum: ['inbox', 'outbox', 'device'] },
       path: { type: 'string', description: '相对于投递区根目录的目录路径，可为空。' },
     },
     output: output(),
@@ -1555,7 +1565,7 @@ export function apply(ctx) {
     name: 'mobile_device_file_read',
     description: '读取 Android DSH 投递区中的小文件并返回 Base64；只能访问 inbox/outbox 下的普通文件。',
     parameters: {
-      root: { type: 'string', required: true, enum: ['inbox', 'outbox'] },
+      root: { type: 'string', required: true, enum: ['inbox', 'outbox', 'device'] },
       path: { type: 'string', required: true, description: '相对于投递区根目录的文件路径。' },
     },
     output: FILE_READ_OUTPUT,
@@ -1567,7 +1577,7 @@ export function apply(ctx) {
     name: 'mobile_device_file_download',
     description: '从 Android DSH 投递区下载一个不超过 128 KiB 的普通文件，结果为 Base64。',
     parameters: {
-      root: { type: 'string', required: true, enum: ['inbox', 'outbox'] },
+      root: { type: 'string', required: true, enum: ['inbox', 'outbox', 'device'] },
       path: { type: 'string', required: true, description: '相对于投递区根目录的文件路径。' },
     },
     output: FILE_READ_OUTPUT,
@@ -1579,7 +1589,7 @@ export function apply(ctx) {
     name: 'mobile_device_file_write',
     description: '把 Base64 小文件写入 Android DSH 投递区；默认拒绝覆盖已有文件，需要用户确认。',
     parameters: {
-      root: { type: 'string', required: true, enum: ['inbox', 'outbox'] },
+      root: { type: 'string', required: true, enum: ['inbox', 'outbox', 'device'] },
       path: { type: 'string', required: true, description: '相对于投递区根目录的文件路径。' },
       contentBase64: { type: 'string', required: true, description: '不超过 128 KiB 解码大小的 Base64 内容。' },
       overwrite: { type: 'boolean', description: '是否覆盖同名普通文件；默认 false。' },
@@ -1593,7 +1603,7 @@ export function apply(ctx) {
     name: 'mobile_device_file_upload',
     description: '上传 Base64 小文件到 Android DSH 投递区；这是受控 file_write 别名，不提供任意 Shell。',
     parameters: {
-      root: { type: 'string', required: true, enum: ['inbox', 'outbox'] },
+      root: { type: 'string', required: true, enum: ['inbox', 'outbox', 'device'] },
       path: { type: 'string', required: true, description: '相对于投递区根目录的文件路径。' },
       contentBase64: { type: 'string', required: true, description: '不超过 128 KiB 解码大小的 Base64 内容。' },
       overwrite: { type: 'boolean', description: '是否覆盖同名普通文件；默认 false。' },
@@ -1607,7 +1617,7 @@ export function apply(ctx) {
     name: 'mobile_device_file_mkdir',
     description: '在 Android DSH 投递区创建相对目录，用于分类管理投递文件。',
     parameters: {
-      root: { type: 'string', required: true, enum: ['inbox', 'outbox'] },
+      root: { type: 'string', required: true, enum: ['inbox', 'outbox', 'device'] },
       path: { type: 'string', required: true, description: '相对于投递区根目录的新目录路径。' },
     },
     output: FILE_WRITE_OUTPUT,

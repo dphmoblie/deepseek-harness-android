@@ -739,9 +739,10 @@ export interface DevicePowerActionResult {
 }
 
 /**
- * AI 高危文件与命令权限细分项白名单（17 项，与原生 `HighRiskCategory` 一一对应）。
+ * AI 高危文件、命令与宿主能力放开权限细分项白名单（25 项，与原生 `HighRiskCategory` 一一对应）。
  *
- * 每一项对应原生 `RootCommandGuard` 中的硬编码静态拦截规则：
+ * 前 17 项对应原生 `RootCommandGuard` 中的硬编码静态拦截规则；
+ * 后 8 项对应 Root 沙箱/确认页、无障碍、设备文件、副屏与访客整卡挂载的宿主级硬编码限制。
  * 默认全部为 `false`，且受总开关 `HighRiskPermissions.enabled`（默认 `false`）统管。
  */
 export const HIGH_RISK_PERMISSION_CATEGORIES = [
@@ -762,11 +763,19 @@ export const HIGH_RISK_PERMISSION_CATEGORIES = [
   'selinux_security_policy',
   'device_power_control',
   'block_flash_memory_raw',
+  'root_unconfined_sandbox',
+  'root_skip_app_confirm',
+  'accessibility_system_apps',
+  'accessibility_sensitive_windows',
+  'accessibility_lockscreen_and_burst',
+  'device_file_unrestricted',
+  'virtual_screen_unrestricted',
+  'storage_full_sdcard_mount',
 ] as const
 
 export type HighRiskPermissionCategory = (typeof HIGH_RISK_PERMISSION_CATEGORIES)[number]
 
-/** 启动器「AI 高危文件与命令权限」状态（1 个总开关 + 17 个细分开关）。 */
+/** 启动器「AI 高危文件与命令权限」状态（1 个总开关 + 25 个细分开关）。 */
 export interface HighRiskPermissions {
   enabled: boolean
   categories: Record<HighRiskPermissionCategory, boolean>

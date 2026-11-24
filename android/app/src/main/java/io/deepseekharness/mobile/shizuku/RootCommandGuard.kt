@@ -557,24 +557,35 @@ object RootCommandGuard {
         permissions: HighRiskPermissions,
     ): Assessment {
         val assessment = classify(script, profile)
-        if (assessment.categories.isEmpty()) return assessment
-        val action = assessment.actions.firstOrNull() ?: "高危文件或命令操作"
-        if (!permissions.enabled) {
-            val cats = assessment.categories.joinToString("、") { it.title }
-            throw RuntimeFailure(
-                "ROOT_SECURITY_VIOLATION",
-                "根命令被安全护栏拦截：$action（AI 高危文件与命令权限总开关已关闭，涉及细分项：$cats；命中片段: ${assessment.snippet}）",
+        if (assessment.categories.isNotEmpty()) {
+            val action = assessment.actions.firstOrNull() ?: "高危文件或命令操作"
+            if (!permissions.enabled) {
+                val cats = assessment.categories.joinToString("、") { it.title }
+                throw RuntimeFailure(
+                    "ROOT_SECURITY_VIOLATION",
+                    "根命令被安全护栏拦截：$action（AI 高危文件与命令权限总开关已关闭，涉及细分项：$cats；命中片段: ${assessment.snippet}）",
+                )
+            }
+            val blockedCategories = assessment.categories.filterNot { permissions.isCategoryEnabled(it) }
+            if (blockedCategories.isNotEmpty()) {
+                val cats = blockedCategories.joinToString("、") { it.title }
+                throw RuntimeFailure(
+                    "ROOT_SECURITY_VIOLATION",
+                    "根命令被安全护栏拦截：$action（未开启高危权限细分开关：$cats；命中片段: ${assessment.snippet}）",
+                )
+            }
+        }
+        val unconfinedSandbox = permissions.isAllowed(HighRiskCategory.ROOT_UNCONFINED_SANDBOX)
+        val skipAppConfirm = permissions.isAllowed(HighRiskCategory.ROOT_SKIP_APP_CONFIRM)
+        return if (!unconfinedSandbox && !skipAppConfirm) {
+            assessment
+        } else {
+            assessment.copy(
+                route = if (skipAppConfirm) ApprovalRoute.ALLOW else assessment.route,
+                needsUnconfinedCaps = assessment.needsUnconfinedCaps || unconfinedSandbox,
+                bypassSandboxWrapper = assessment.bypassSandboxWrapper || unconfinedSandbox,
             )
         }
-        val blockedCategories = assessment.categories.filterNot { permissions.isCategoryEnabled(it) }
-        if (blockedCategories.isNotEmpty()) {
-            val cats = blockedCategories.joinToString("、") { it.title }
-            throw RuntimeFailure(
-                "ROOT_SECURITY_VIOLATION",
-                "根命令被安全护栏拦截：$action（未开启高危权限细分开关：$cats；命中片段: ${assessment.snippet}）",
-            )
-        }
-        return assessment
     }
 
     /**

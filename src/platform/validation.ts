@@ -1235,8 +1235,9 @@ const DEVICE_COMMANDS = new Set<DeviceCommand>([
   'shell',
   'backgroundTasks',
 ])
-// 文件上传通过 Base64 传递，原生侧仍有 128 KiB 解码上限；这里保留 JSON 参数的有界窗口。
-const MAX_DEVICE_PARAM_CHARS = 180_000
+// 默认 128 KiB 上限由原生 DeviceFilePolicy 硬强制执行；当用户显式开启「设备文件通道解除投递区目录与大小限制」后
+// 宿主放行最高 4 MiB Base64 载荷，前端粗上界与其保持一致。
+const MAX_DEVICE_PARAM_CHARS = 4 * Math.ceil((4 * 1024 * 1024) / 3) + 512
 /** 「白名单验证密码」的长度区间；密码本身不会被前端留存或回显。 */
 const ACCESSIBILITY_PASSWORD_MIN_CHARS = 6
 const ACCESSIBILITY_PASSWORD_MAX_CHARS = 64

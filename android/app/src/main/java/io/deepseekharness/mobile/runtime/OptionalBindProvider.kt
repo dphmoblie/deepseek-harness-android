@@ -14,7 +14,10 @@ internal enum class OptionalBindGroup(private val matches: (String) -> Boolean) 
     MAILBOX({ it == RuntimeMailboxLayout.GUEST_INBOX || it == RuntimeMailboxLayout.GUEST_OUTBOX }),
 
     /** 用户目录白名单：访客侧固定为 `/mnt/user/<序号>`。 */
-    USER_DIRECTORIES({ RuntimeStorageDirsLayout.isGuestPath(it) });
+    USER_DIRECTORIES({ RuntimeStorageDirsLayout.isGuestPath(it) }),
+
+    /** 整卡直挂（高危放行开关）：访客侧固定为 `/mnt/sdcard`，仅在显式开启时追加。 */
+    FULL_SDCARD({ it == RuntimeStorageDirsLayout.FULL_SDCARD_GUEST_PATH });
 
     /** 这个挂载目标属不属于本类。 */
     fun owns(target: String): Boolean = matches(target)

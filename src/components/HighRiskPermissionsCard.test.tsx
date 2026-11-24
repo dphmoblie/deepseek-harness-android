@@ -56,7 +56,7 @@ describe('HighRiskPermissionsCard', () => {
     resetLanguageSession()
   })
 
-  it('默认总开关关闭、17 项细分开关全部关闭且不可点击', async () => {
+  it('默认总开关关闭、25 项细分开关全部关闭且不可点击', async () => {
     const { bridge } = makeBridge()
     render(<HighRiskPermissionsCard bridge={bridge} />)
 
@@ -65,12 +65,12 @@ describe('HighRiskPermissionsCard', () => {
     expect(masterSwitch).not.toBeChecked()
     expect(masterSwitch).toBeEnabled()
 
-    // 总共 1 个总开关 + 17 个细分开关 = 18 个 switch
+    // 总共 1 个总开关 + 25 个细分开关 = 26 个 switch
     const allSwitches = screen.getAllByRole('switch')
-    expect(allSwitches).toHaveLength(18)
+    expect(allSwitches).toHaveLength(26)
 
     const subSwitches = allSwitches.filter(el => el !== masterSwitch)
-    expect(subSwitches).toHaveLength(17)
+    expect(subSwitches).toHaveLength(25)
     for (const sw of subSwitches) {
       expect(sw).not.toBeChecked()
       expect(sw).toBeDisabled()
@@ -80,7 +80,7 @@ describe('HighRiskPermissionsCard', () => {
     expect(screen.getByRole('button', { name: '全部关闭' })).toBeDisabled()
   })
 
-  it('开启总开关后可单独开关细分权限，并支持全部开启/全部关闭', async () => {
+  it('开启总开关后可单独开关细分权限（含第四组宿主能力放开项），并支持全部开启/全部关闭', async () => {
     const { bridge, setHighRiskPermissions } = makeBridge()
     render(<HighRiskPermissionsCard bridge={bridge} />)
 
@@ -91,7 +91,7 @@ describe('HighRiskPermissionsCard', () => {
 
     await waitFor(() => {
       expect(setHighRiskPermissions).toHaveBeenCalledWith({ enabled: true })
-      expect(screen.getByText('已放行 0 / 17 项')).toBeVisible()
+      expect(screen.getByText('已放行 0 / 25 项')).toBeVisible()
     })
 
     const powerSwitch = screen.getByRole('switch', { name: '设备重启、关机与电源触发' })
@@ -102,20 +102,32 @@ describe('HighRiskPermissionsCard', () => {
       expect(setHighRiskPermissions).toHaveBeenLastCalledWith({
         categories: { device_power_control: true },
       })
-      expect(screen.getByText('已放行 1 / 17 项')).toBeVisible()
+      expect(screen.getByText('已放行 1 / 25 项')).toBeVisible()
       expect(powerSwitch).toBeChecked()
+    })
+
+    const unconfinedSwitch = screen.getByRole('switch', { name: 'Root 解除命名空间与能力沙箱包装' })
+    expect(unconfinedSwitch).toBeEnabled()
+    fireEvent.click(unconfinedSwitch)
+
+    await waitFor(() => {
+      expect(setHighRiskPermissions).toHaveBeenLastCalledWith({
+        categories: { root_unconfined_sandbox: true },
+      })
+      expect(screen.getByText('已放行 2 / 25 项')).toBeVisible()
+      expect(unconfinedSwitch).toBeChecked()
     })
 
     fireEvent.click(screen.getByRole('button', { name: '全部开启' }))
     await waitFor(() => {
-      expect(screen.getByText('已放行 17 / 17 项')).toBeVisible()
+      expect(screen.getByText('已放行 25 / 25 项')).toBeVisible()
     })
     expect(screen.getByRole('button', { name: '全部开启' })).toBeDisabled()
     expect(screen.getByRole('button', { name: '全部关闭' })).toBeEnabled()
 
     fireEvent.click(screen.getByRole('button', { name: '全部关闭' }))
     await waitFor(() => {
-      expect(screen.getByText('已放行 0 / 17 项')).toBeVisible()
+      expect(screen.getByText('已放行 0 / 25 项')).toBeVisible()
     })
   })
 
@@ -144,15 +156,16 @@ describe('HighRiskPermissionsCard', () => {
     unmount()
   })
 
-  it('英文界面完整翻译标题、总开关与 17 项细分项', async () => {
+  it('英文界面完整翻译标题、总开关与 25 项细分项', async () => {
     saveLanguage('en')
-    const { bridge } = makeBridge(makePermissions(true, { core_partition_write: true }))
+    const { bridge } = makeBridge(makePermissions(true, { core_partition_write: true, storage_full_sdcard_mount: true }))
     render(<HighRiskPermissionsCard bridge={bridge} />)
 
     expect(await screen.findByRole('heading', { name: 'AI High-Risk File & Command Permissions' })).toBeVisible()
-    expect(screen.getByText('1 / 17 allowed')).toBeVisible()
+    expect(screen.getByText('2 / 25 allowed')).toBeVisible()
     expect(screen.getByRole('switch', { name: 'Core system partition write & rw remount' })).toBeChecked()
     expect(screen.getByRole('switch', { name: 'Physical block devices, partitioning, flashing & raw memory access' })).not.toBeChecked()
+    expect(screen.getByRole('switch', { name: 'Auto-mount full shared storage (/mnt/sdcard) & Android directories' })).toBeChecked()
   })
 
   it('迟到的旧查询响应不会覆盖已提交的新权限状态', async () => {
@@ -178,7 +191,7 @@ describe('HighRiskPermissionsCard', () => {
     // 趁回读仍挂起，发起第二次成功开启
     fireEvent.click(masterSwitch)
     await waitFor(() => {
-      expect(screen.getByText('已放行 0 / 17 项')).toBeVisible()
+      expect(screen.getByText('已放行 0 / 25 项')).toBeVisible()
     })
     expect(masterSwitch).toBeChecked()
 
@@ -186,7 +199,7 @@ describe('HighRiskPermissionsCard', () => {
     resolveDelayedRead(makePermissions(false))
     await waitFor(() => {
       expect(masterSwitch).toBeChecked()
-      expect(screen.getByText('已放行 0 / 17 项')).toBeVisible()
+      expect(screen.getByText('已放行 0 / 25 项')).toBeVisible()
     })
   })
 })

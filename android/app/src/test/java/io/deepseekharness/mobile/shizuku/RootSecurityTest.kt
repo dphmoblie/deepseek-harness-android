@@ -1124,7 +1124,7 @@ class RootSecurityTest {
             port = 0,
             shellEnabled = { false },
             rootStatusProvider = { strictRootStatus },
-            highRiskPermissionsProvider = { HighRiskPermissions.ALL_ENABLED },
+            highRiskPermissionsProvider = { HighRiskPermissions.COMMAND_CATEGORIES_ONLY },
         )
         bridge.start()
         try {
@@ -1248,7 +1248,9 @@ class RootSecurityTest {
             HighRiskCategory.DEVICE_POWER_CONTROL to "reboot",
             HighRiskCategory.BLOCK_FLASH_MEMORY_RAW to "cat /dev/block/sda",
         )
-        assertEquals("必须覆盖全部 17 类高危细分权限", HighRiskCategory.entries.size, sampleByCategory.size)
+        assertEquals("必须覆盖全部 17 类高危命令细分权限", HighRiskCategory.COMMAND_CATEGORIES.size, sampleByCategory.size)
+        assertEquals("应包含 8 类宿主能力放开细分开关", 8, HighRiskCategory.HOST_UNLOCK_CATEGORIES.size)
+        assertEquals("总计应为 25 类高危权限细分开关", 25, HighRiskCategory.entries.size)
 
         // 1. 低风险常规命令在总开关关闭时依然放行
         val safeCommands = listOf(
@@ -1505,6 +1507,103 @@ class RootSecurityTest {
             fail("非布尔总开关必须拒绝")
         } catch (e: RuntimeFailure) {
             assertEquals("HIGH_RISK_PERMISSION_INVALID", e.code)
+        }
+    }
+
+    @Test
+    fun `ROOT_UNCONFINED_SANDBOX 与 ROOT_SKIP_APP_CONFIRM 开关开合可完整放开并恢复硬编码防护`() {
+        val prevLauncher = RootCommandRunner.processLauncher
+        val launched = mutableListOf<List<String>>()
+        RootCommandRunner.processLauncher = { argv ->
+            launched += argv
+            FakeProcess("ok\n", 0)
+        }
+        val token = "C".repeat(43)
+        var currentPermissions = HighRiskPermissions.ALL_DISABLED
+        val strictRootStatus = RootEngineAccess.Status(
+            enabled = true,
+            mode = RootEngineAccess.Mode.READ_WRITE,
+            guardProfile = RootCommandGuard.Profile.STRICT,
+            kernelSuStatus = KernelSuProbe.STATUS_READY,
+            reason = KernelSuProbe.REASON_READY,
+            degraded = false,
+            degradations = emptyList(),
+            suVersion = "3.1.0:KernelSU",
+        )
+        val bridge = DeviceBridgeServer(
+            shizuku = null,
+            runner = DeviceCommandRunner { _, _ -> },
+            token = token,
+            port = 0,
+            shellEnabled = { false },
+            rootStatusProvider = { strictRootStatus },
+            highRiskPermissionsProvider = { currentPermissions },
+        )
+        bridge.start()
+        try {
+            fun post(command: String, param: String): JSONObject {
+                val conn = URL("http://127.0.0.1:${bridge.localPort}/device-command").openConnection() as HttpURLConnection
+                conn.requestMethod = "POST"
+                conn.setRequestProperty("Content-Type", "application/json")
+                conn.setRequestProperty("Authorization", "Bearer $token")
+                conn.doOutput = true
+                val payload = JSONObject().put("command", command).put("param", param).toString().toByteArray(StandardCharsets.UTF_8)
+                conn.outputStream.use { it.write(payload) }
+                val body = conn.inputStream.bufferedReader(StandardCharsets.UTF_8).readText()
+                return JSONObject(body)
+            }
+
+            // 1. 开关关闭时，低风险 Root 命令仍经过 RootSecurityWrapper（含 unshare 沙箱包装）
+            val sandboxed = post("shell", "id -u")
+            assertTrue(sandboxed.getBoolean("ok"))
+            assertEquals(1, launched.size)
+            assertTrue("默认必须带 unshare 沙箱包装", launched.last().last().contains("unshare"))
+
+            // 2. 开启 ROOT_UNCONFINED_SANDBOX 后，直接以无沙箱 Base64 方式执行（不含 unshare/setpriv）
+            currentPermissions = HighRiskPermissions(
+                enabled = true,
+                categories = HighRiskCategory.entries.associateWith { it == HighRiskCategory.ROOT_UNCONFINED_SANDBOX },
+            )
+            val unconfined = post("shell", "id -u")
+            assertTrue(unconfined.getBoolean("ok"))
+            assertEquals(2, launched.size)
+            assertFalse("开启解除沙箱后不应再套 unshare", launched.last().last().contains("unshare"))
+            assertFalse("开启解除沙箱后不应再套 setpriv", launched.last().last().contains("setpriv"))
+
+            // 3. 仅开启 ROOT_SKIP_APP_CONFIRM 但未开启 DEVICE_POWER_CONTROL 时，reboot 仍硬拦截
+            currentPermissions = HighRiskPermissions(
+                enabled = true,
+                categories = HighRiskCategory.entries.associateWith { it == HighRiskCategory.ROOT_SKIP_APP_CONFIRM },
+            )
+            val blockedWithoutCategory = post("shell", "reboot")
+            assertFalse(blockedWithoutCategory.getBoolean("ok"))
+            assertEquals("ROOT_SECURITY_VIOLATION", blockedWithoutCategory.getString("errorCode"))
+            assertEquals(2, launched.size)
+
+            // 4. 同时开启 ROOT_SKIP_APP_CONFIRM + DEVICE_POWER_CONTROL 时，跳过应用警告页直通执行
+            currentPermissions = HighRiskPermissions(
+                enabled = true,
+                categories = HighRiskCategory.entries.associateWith {
+                    it == HighRiskCategory.ROOT_SKIP_APP_CONFIRM || it == HighRiskCategory.DEVICE_POWER_CONTROL
+                },
+            )
+            val autoAllowed = post("shell", "reboot")
+            assertTrue(autoAllowed.getBoolean("ok"))
+            assertEquals(3, launched.size)
+
+            // 5. 关闭 ROOT_SKIP_APP_CONFIRM（保留 DEVICE_POWER_CONTROL）后，立刻恢复强制应用警告页审批
+            currentPermissions = HighRiskPermissions(
+                enabled = true,
+                categories = HighRiskCategory.entries.associateWith { it == HighRiskCategory.DEVICE_POWER_CONTROL },
+            )
+            val restoredConfirm = post("shell", "reboot")
+            assertFalse(restoredConfirm.getBoolean("ok"))
+            assertEquals("ROOT_APPROVAL_REQUIRED", restoredConfirm.getString("errorCode"))
+            assertEquals("host_confirm", JSONObject(restoredConfirm.getString("text")).getString("route"))
+            assertEquals(3, launched.size)
+        } finally {
+            bridge.stop()
+            RootCommandRunner.processLauncher = prevLauncher
         }
     }
 

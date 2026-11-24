@@ -18,6 +18,7 @@ internal object AccessibilityAutomationPolicy {
 
     private val packagePattern = Regex("^[A-Za-z][A-Za-z0-9_]*(?:\\.[A-Za-z][A-Za-z0-9_]*){1,12}$")
     private val viewIdPattern = Regex("^([A-Za-z][A-Za-z0-9_]*(?:\\.[A-Za-z][A-Za-z0-9_]*){1,12}):id/[A-Za-z_][A-Za-z0-9_]{0,79}$")
+    private val androidViewIdPattern = Regex("^android:id/[A-Za-z_][A-Za-z0-9_]{0,79}$")
 
     /** 敏感系统组件：这些包名永远不能进白名单。本应用不在其中（见 [SELF_PACKAGE]）。 */
     private val reservedPackages = setOf(
@@ -47,17 +48,30 @@ internal object AccessibilityAutomationPolicy {
         val direction: String?,
     )
 
-    fun validPackage(packageName: String): Boolean =
-        packageName.length <= 160 && packagePattern.matches(packageName) &&
+    fun validPackage(packageName: String, allowReserved: Boolean = false): Boolean {
+        if (allowReserved && packageName in reservedPackages) return true
+        return packageName.length <= 160 && packagePattern.matches(packageName) &&
             packageName !in reservedPackages
+    }
 
     fun validPackages(packages: List<String>): Boolean =
         packages.distinct().size == packages.size &&
-            packages.all(::validPackage)
+            packages.all { validPackage(it, allowReserved = false) }
 
-    /** 关闭名单限制只放行普通应用，包名格式与受保护系统组件校验仍然生效。 */
-    fun packageAllowed(packageName: String, allowedPackages: Set<String>, whitelistEnabled: Boolean = true): Boolean =
-        validPackage(packageName) && (!whitelistEnabled || packageName in allowedPackages)
+    /**
+     * 关闭名单限制只放行普通应用，包名格式与受保护系统组件校验仍然生效；
+     * 仅当用户在启动器显式开启「无障碍操作受保护系统组件与权限弹窗」（[allowReserved]）时才放行系统组件。
+     */
+    fun packageAllowed(
+        packageName: String,
+        allowedPackages: Set<String>,
+        whitelistEnabled: Boolean = true,
+        allowReserved: Boolean = false,
+    ): Boolean {
+        if (!validPackage(packageName, allowReserved)) return false
+        if (allowReserved && packageName in reservedPackages) return true
+        return !whitelistEnabled || packageName in allowedPackages
+    }
 
     /**
      * 白名单的唯一规范化口径：`trim` → 去重 → 补上 [SELF_PACKAGE] → 排序。
@@ -83,22 +97,31 @@ internal object AccessibilityAutomationPolicy {
         return sensitiveText.containsMatchIn(value) || sensitiveText.containsMatchIn(normalized)
     }
 
-    fun parseAction(param: String): ActionRequest? {
+    fun parseAction(
+        param: String,
+        allowReserved: Boolean = false,
+        allowSensitiveText: Boolean = false,
+    ): ActionRequest? {
         if (param.length !in 2..2048) return null
         val json = try { JSONObject(param) } catch (_: Throwable) { return null }
         val packageName = json.opt("packageName") as? String ?: return null
         val action = json.opt("action") as? String ?: return null
         val selector = json.opt("selector") as? JSONObject ?: return null
         val viewId = selector.opt("viewId") as? String ?: return null
-        if (!validPackage(packageName) || selector.length() != 1 || json.length() !in 3..4) return null
-        if (viewId.length > 240 || viewIdPattern.matchEntire(viewId)?.groupValues?.get(1) != packageName) return null
+        if (!validPackage(packageName, allowReserved) || selector.length() != 1 || json.length() !in 3..4) return null
+        val viewIdMatches = if (allowReserved && packageName in reservedPackages && androidViewIdPattern.matches(viewId)) {
+            true
+        } else {
+            viewIdPattern.matchEntire(viewId)?.groupValues?.get(1) == packageName
+        }
+        if (viewId.length > 240 || !viewIdMatches) return null
         val text = json.opt("text") as? String
         val direction = json.opt("direction") as? String
         return when (action) {
             "click" -> if (json.length() == 3) ActionRequest(packageName, action, viewId, null, null) else null
             "setText" -> if (json.length() == 4 && json.has("text") && text != null &&
                 text.length <= MAX_INPUT_CHARS && text.none { it.code < 32 || it.code == 127 }
-                && !containsSensitiveText(text)
+                && (allowSensitiveText || !containsSensitiveText(text))
             ) ActionRequest(packageName, action, viewId, text, null) else null
             "scroll" -> if (json.length() == 4 && json.has("direction") && direction in setOf("forward", "backward"))
                 ActionRequest(packageName, action, viewId, null, direction) else null

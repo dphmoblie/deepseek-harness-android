@@ -534,6 +534,12 @@ class VirtualScreenService : Service() {
         if (verb == "follow" && !parameters.has(VirtualScreenPolicy.SELF_PACKAGE_FIELD)) {
             parameters.put(VirtualScreenPolicy.SELF_PACKAGE_FIELD, packageName)
         }
+        if (verb == "launch") {
+            val allowAnyScheme = io.deepseekharness.mobile.shizuku.HighRiskPermissionStore
+                .status(this)
+                .isAllowed(io.deepseekharness.mobile.shizuku.HighRiskCategory.VIRTUAL_SCREEN_UNRESTRICTED)
+            parameters.put(VirtualScreenPolicy.ALLOW_ANY_URI_SCHEME_FIELD, allowAnyScheme)
+        }
         if (verb == "stop") {
             main.post { stopSelf() }
             return JSONObject().put("stopping", true)

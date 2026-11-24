@@ -153,6 +153,25 @@ class VirtualScreenShellPolicyTest {
         assertEquals(once.toByteArray(Charsets.UTF_8).toList(), VirtualScreenShellPolicy.prefix(38).toByteArray(Charsets.UTF_8).toList())
     }
 
+    @Test fun `开启放开主屏开关后允许 displayId=0（即使无副屏会话），关闭即恢复拒绝`() {
+        val unlocked = VirtualScreenShellPolicy.plan(
+            script = tap,
+            requestedDisplayId = 0,
+            active = false,
+            sessionDisplayId = 0,
+            allowMainDisplay = true,
+        )
+        assertEquals(0, unlocked.displayId)
+        assertTrue(unlocked.command.contains("export DISPLAY_ID=0;"))
+
+        assertEquals(
+            VirtualScreenShellPolicy.DISPLAY_INVALID_CODE,
+            failureCode {
+                VirtualScreenShellPolicy.plan(tap, 0, active = true, sessionDisplayId = sessionDisplayId, allowMainDisplay = false)
+            },
+        )
+    }
+
     companion object {
         private val JSON_ESCAPED_NAMES = mapOf(" " to "单个空格", "\n\t" to "换行与制表符")
     }
