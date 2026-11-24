@@ -1,40 +1,40 @@
-# DeepSeek Harness 安卓版
+# DeepSeek Harness Android 版
 
 [English](README.en.md) · [简体中文](README.md) · [한국어](README.ko.md) · [日本語](README.ja.md)
 
 [![最新版本](https://img.shields.io/github/v/release/dphmoblie/deepseek-harness-android?label=%E6%9C%80%E6%96%B0%E7%89%88%E6%9C%AC&logo=github)](https://github.com/dphmoblie/deepseek-harness-android/releases)
-[![下载总量](https://img.shields.io/github/downloads/dphmoblie/deepseek-harness-android/total?label=%E4%B8%8B%E8%BD%BD%E6%80%BB%E9%87%8F&logo=github)](https://github.com/dphmoblie/deepseek-harness-android/releases)
-[![许可证](https://img.shields.io/github/license/dphmoblie/deepseek-harness-android?label=%E8%AE%B8%E5%8F%AF%E8%AF%81)](LICENSE)
+[![下載總量](https://img.shields.io/github/downloads/dphmoblie/deepseek-harness-android/total?label=%E4%B8%8B%E8%BC%89%E7%B8%BD%E9%87%8F&logo=github)](https://github.com/dphmoblie/deepseek-harness-android/releases)
+[![授權條款](https://img.shields.io/github/license/dphmoblie/deepseek-harness-android?label=%E6%8E%88%E6%AC%8A%E6%A2%9D%E6%AC%BE)](LICENSE)
 [![最近提交](https://img.shields.io/github/last-commit/dphmoblie/deepseek-harness-android?label=%E6%9C%80%E8%BF%91%E6%8F%90%E4%BA%A4)](https://github.com/dphmoblie/deepseek-harness-android/commits)
-[![欢迎 PR](https://img.shields.io/badge/PR-%E6%AC%A2%E8%BF%8E%E8%B4%A1%E7%8C%AE-brightgreen.svg)](https://github.com/dphmoblie/deepseek-harness-android/pulls)
+[![歡迎貢獻](https://img.shields.io/badge/PR-%E6%AD%A1%E8%BF%8E%E8%B2%A2%E7%8D%BB-brightgreen.svg)](https://github.com/dphmoblie/deepseek-harness-android/pulls)
 [![Android 8.0+](https://img.shields.io/badge/Android-8.0%2B-3DDC84?logo=android&logoColor=white)](https://developer.android.com/)
 [![arm64-v8a](https://img.shields.io/badge/ABI-arm64--v8a-3DDC84?logo=arm&logoColor=white)](https://developer.android.com/ndk/guides/abis)
 [![Kotlin](https://img.shields.io/badge/Kotlin-7F52FF?logo=kotlin&logoColor=white)](https://kotlinlang.org/)
 [![QQ群](https://img.shields.io/badge/QQ%E7%BE%A4-1108895375-12B7F5?style=for-the-badge)](#qq-group)
 
-<p align="center"><img src="docs/images/app-icon-512.png" width="256" alt="DeepSeek Harness 安卓版應用程式圖示"></p>
+<p align="center"><img src="docs/images/app-icon-512.png" width="256" alt="DeepSeek Harness Android 版應用程式圖示"></p>
 
-**專為 Android 打造的本機 AI 工作台。** 將 [DeepSeek Harness](https://github.com/deepseek-ai/dsh)、Ubuntu 執行環境、工作階段、外掛與檔案管理整合到手機中；開啟相應授權後，AI 還能透過 Shizuku 執行裝置 Shell（命令列）工作，或透過無障礙服務操作指定應用程式。
+**裝在手機裡的本機 AI 工作台。** 它將 [DeepSeek Harness](https://github.com/deepseek-ai/dsh)、Ubuntu 執行環境、對話工作階段、外掛系統與檔案管理整合到同一個 Android 應用程式中。在你主動授權後，AI 也能搭配 Shizuku 執行裝置端命令列工作，或透過無障礙服務輔助操作指定的應用程式。
 
-無需 Root（超級使用者權限）。Linux 環境透過 [PRoot](https://github.com/proot-me/proot) 在使用者空間執行，主控台由內建網頁檢視畫面呈現；模型推論使用你設定的服務。
+不需要 Root 權限。Ubuntu 環境透過 [PRoot](https://github.com/proot-me/proot) 直接在一般手機上執行，主控台由內建 WebView 呈現，模型推論則連線至你自行設定的模型服務或 DeepSeek 帳號。
 
-| | |
+| 項目 | 說明 |
 | --- | --- |
-| 應用程式套件名稱 | `io.deepseekharness.mobile` |
-| 最低系統版本 | Android 8.0（API 26）及以上 |
-| 目標應用程式副螢幕 | Android 10（API 29）及以上，需 Shizuku 與裝置驗證 |
-| 支援架構 | 僅 `arm64-v8a`（64 位元 ARM） |
-| 內建執行環境 | Ubuntu 24.04 ARM64 · Node.js 24.19 · `@deepseek-ai/dsh` 0.2.1-rc.1 |
-| 應用程式授權條款 | MIT（執行環境元件沿用各自授權條款，見[授權條款](#授權條款)） |
+| 套件名稱 | `io.deepseekharness.mobile` |
+| 系統需求 | Android 8.0（API 26）以上 |
+| 目標應用副螢幕 | Android 10（API 29）以上，需搭配 Shizuku 使用 |
+| CPU 架構 | 僅支援 `arm64-v8a`（64 位元 ARM） |
+| 內建環境 | Ubuntu 24.04 ARM64 · Node.js 24.19 · `@deepseek-ai/dsh` 0.2.1-rc.1 |
+| 開源授權 | MIT（內建執行環境元件沿用各自授權，見[授權條款](#授權條款)） |
 
 ## 目錄
 
-- [功能特性](#功能特性)
+- [功能特色](#功能特色)
 - [運作原理](#運作原理)
-- [安裝](#安裝)
+- [安裝與首次設定](#安裝與首次設定)
 - [模型供應商](#模型供應商)
-- [選用的 Shizuku 整合](#選用的-shizuku-整合)
-- [目標應用程式副螢幕（實驗功能）](#目標應用程式副螢幕實驗功能)
+- [選用的 Shizuku 與自動化整合](#選用的-shizuku-與自動化整合)
+- [目標應用副螢幕（實驗功能）](#目標應用副螢幕實驗功能)
 - [從原始碼建置](#從原始碼建置)
 - [安全與隱私](#安全與隱私)
 - [參與貢獻](#參與貢獻)
@@ -42,166 +42,173 @@
 - [授權條款](#授權條款)
 - [相關文件](#相關文件)
 
-## 功能特性
+## 功能特色
 
-- **手機上的完整 Linux 代理程式環境。** Ubuntu 24.04 完全在裝置本機透過 PRoot 執行，不依賴雲端伺服器、遠端桌面，也無需註冊帳號：代理程式執行環境與網頁主控台均在本機執行。
-- **為手機調適的 Harness 主控台。** 殼內以首頁、外掛、設定三個底部頁籤組織功能，並為窄螢幕、橫向與安全區域提供調適；工作階段管理整合到首頁。第三方網頁外掛的介面與相依性各不相同，相容性需依外掛與版本逐一驗證。
-- **外掛匯入、更新與復原。** 支援從 npm 套件名稱、HTTPS 壓縮檔連結或 `git+https` 儲存庫位址匯入，管理套件與子外掛的啟用與停用；更新時依支援的目錄規則保留資料，並可切回上一版。需要安裝腳本、原生編譯或不同核心 SDK 的套件有其限制，詳見[外掛管理](docs/design/插件管理.md)。
-- **檔案與外觀管理。** 投遞區支援資料夾分類；殼內可選圖片或影片背景，調整卡片顏色、通透度、模糊程度與強調色。
-- **免 Root 執行。** 在一般原廠裝置上即可透過 PRoot 實現使用者空間容器化。選用的 [Shizuku](https://shizuku.rikka.app/) 整合可在使用者主動授權後額外提供 Shell 層級的裝置終端機（`/system/bin/sh`）。Shizuku 提供的是安卓 Shell 權限，而非 Root 權限。
-- **開箱即用、支援離線安裝。** 正式版 APK 內建經過驗證的 `rootfs.bundle` 與資訊清單檔案，無網路環境也可完成執行環境安裝；同時也支援以摘要固定（digest-pinned）的遠端執行環境來源。
-- **防竄改的執行環境發布。** 每份資訊清單與根檔案系統映像在使用前均依精確長度與 SHA-256 驗證；下載僅接受 HTTPS 目標位址、拒絕指向私人位址的 DNS 解析結果，支援 HTTP 範圍要求續傳，解壓縮時具備路徑穿越與裝置節點防護。環境準備完成後以原子方式切換生效。
-- **內建與自訂模型供應商。** DeepSeek、OpenAI、Anthropic、Google Gemini、OpenRouter、Groq、xAI、Mistral 以及自建 OpenAI 相容端點的憑證均透過 Android Keystore 加密保存，且只會注入執行環境行程，絕不回傳至 WebView。
-- **本機主控台存取。** Harness 只繫結 `127.0.0.1`。每次啟動都會產生全新的 256 位元傳輸權杖，同時保護 HTTP 與 WebSocket 要求；權杖僅保存在行程記憶體中，不會持續保存，也不會寫入 URL。模型呼叫與使用者發起的下載、外掛安裝等仍可能存取網路。
-- **整合式終端機。** 可在同一介面中使用 PRoot 環境內的 Ubuntu 終端機，以及（選用）由 Shizuku 支援的安卓裝置終端機。
-- **應用程式內執行環境自我檢查。** 執行環境出問題時不必依賴 bash——自我檢查會逐項探測 shell、Node.js、沙盒啟動器（含執行位元）、Landlock 探測、真實沙盒內執行、PTY 的兩組煙霧測試（裸 PTY 與沙盒內 PTY）、訪客資料目錄與附件目錄的寫入、ripgrep 執行位元，並回報可用空間。發現執行位元遺失或目錄遺失時可以就地修復，不修改任何檔案內容。
-- **日誌隨需檢視與判讀。** 只含內部狀態碼與計數的診斷日誌可直接在應用程式內閱讀（尾端視窗 64 / 256 KB）；執行日誌視窗可選 8 / 64 / 256 KB 並支援關鍵字篩選與等級著色。命中已確診的錯誤特徵（缺少憑證、模組身分分裂、外掛載入失敗、連接埠被占用等）時，介面會給出結論與下一步，而不是丟一段原始文字讓人猜。
-- **背景保持與懸浮球（選用）。** 前景服務可提高執行環境行程在背景存活的優先順序——但**無法阻止**系統在記憶體、電量或廠商策略下結束行程；短按懸浮球可展開二級球捷徑選單（對話、目標副屏、回到應用、隱藏球、關閉無障礙），長按直接展開可拖曳的 AI 對話小視窗，球的位置會持續保存並在螢幕旋轉後回到可視範圍。
-- **首次設定把關。** 本機沒有保存過模型憑證時不會開啟 Harness（沒有金鑰時對話必然失敗），而是直接引導到「模型與金鑰」；同時保留「我已在 Harness 內設定過，仍要開啟」的明確略過入口。
+### 本機執行與行動端體驗
+
+- **免 Root 執行完整 Linux 環境**：透過 PRoot 在手機本機執行 Ubuntu 24.04，不需雲端伺服器或遠端桌面，也不強制註冊應用程式帳號。
+- **開箱即用、支援離線安裝**：官方發行版 APK 已內建經過驗證的 `rootfs.bundle` 映像檔，無網路也能完成環境安裝；同時支援經 SHA-256 驗證的遠端來源，並提供斷點續傳與版本切換。
+- **專為手機重新整理的介面**：底部以「首頁、外掛、設定」三大分頁組織功能，調適窄螢幕、橫向與安全區域，並將歷史工作階段管理整合至首頁。
+- **內建終端機與外部瀏覽器**：應用程式內可直接開啟 Ubuntu 終端機與（選用）Shizuku 裝置終端機；也能從診斷頁面將完整的 Harness 主控台交給 Chrome 等外部瀏覽器開啟使用。
+- **設定自動儲存與選用預先啟動**：變更一般設定後離開頁面即自動儲存；若希望點擊「開啟對話」時更快進入，可在設定中開啟「開啟應用程式時預先啟動服務」（預設關閉，不會自動跳轉畫面）。
+- **個人化外觀與主題同步**：支援自訂圖片或影片背景，自由調整卡片底色、透明度、模糊程度與強調色，並可將主題與背景同步至 DSH 主控台。
+
+### 模型、外掛與檔案管理
+
+- **多模型供應商與官方登入**：內建 DeepSeek、OpenAI、Anthropic、Google Gemini、OpenRouter、Groq、xAI、Mistral，同時支援任何 OpenAI 相容的自訂端點；DeepSeek 另支援直接登入官方帳號。
+- **彈性的外掛管理**：支援透過 npm 套件名稱、HTTPS 壓縮檔連結或 `git+https` 儲存庫匯入外掛，自由啟用或停用套件與子外掛；更新時會依規則保留資料，並支援一鍵還原至上一版本。涉及原生編譯或特殊相依性的外掛限制詳見[外掛管理](docs/design/插件管理.md)。
+- **整合式檔案管理與分享**：內建「檔案管理」頁面統一管理投遞區（inbox / outbox）與自訂共享資料夾，支援建立資料夾、工作區歸檔匯入匯出，以及直接將工作區檔案分享或交由其他應用程式開啟。
+- **加密資料備份**：支援備份與還原工作階段、設定、模型憑證、技能與附件，正式環境逐檔透過 Android Keystore 加密保護。
+
+### 背景體驗與排錯工具
+
+- **選用懸浮球與背景保活**：開啟前景保活服務可提升背景存活率（仍受系統記憶體、省電與各廠牌背景策略限制）。懸浮球預設貼邊收合為細線以免遮擋畫面，輕觸展開快捷選單，長按直接叫出可拖曳的 AI 對話小視窗；背景通知則會自動折疊成群組摘要，減少通知列干擾。
+- **17 項應用程式內自我檢查與一鍵修復**：不需手動輸入指令排錯，自檢涵蓋 bash、Node.js、Landlock 沙盒、PTY 終端機、目錄可寫性、ripgrep、C / Make / Python 編譯環境，以及手機端外掛連結、無障礙、懸浮視窗與系統 WebView 狀態；偵測到執行權限或目錄遺失時可就地修復，剩餘空間低於 512 MB 時也會主動提醒。
+- **易讀的日誌與錯誤指引**：可隨時在應用程式內檢視診斷日誌與執行日誌（支援關鍵字篩選與等級標色），遇到缺少憑證、連接埠被占用、外掛載入失敗等常見問題時直接提供原因與處理建議。
 
 ## 運作原理
 
-應用程式分為三層：
+應用程式整體分為三層：
 
-1. **管理介面（Capacitor + React）。** 原生安卓外殼，負責執行環境安裝、服務控制、模型供應商設定、終端機、執行環境來源與環境重設。
-2. **原生執行環境層（Kotlin）。** 負責根檔案系統的驗證與解壓縮、以原生函式庫形式隨套件提供的 PRoot 執行器與載入器管理、Harness 行程與 PTY 工作階段監督，以及在使用者授權後連線 Shizuku UserService。
-3. **Ubuntu 執行環境（PRoot）。** 透過固定的允許清單進入點在 Ubuntu 24.04 內啟動 `dsh web` 並僅監聽回送位址。Node.js 預載模組會在任何要求到達 Harness 之前驗證當次啟動權杖，內建 WebView 也被限制在同一回送來源內。
+1. **管理介面（Capacitor + React）**：負責環境安裝與版本管理、服務控制、模型設定、內建終端機與檔案管理。
+2. **原生執行層（Kotlin）**：負責映像檔驗證與解壓縮、PRoot 執行器管理、Harness 與終端機行程監督、權限與安全審批，以及授權後的 Shizuku 通道連線。
+3. **Ubuntu 執行環境（PRoot）**：於 Ubuntu 24.04 內透過固定入口啟動 `dsh web`，僅監聽本機回環位址 `127.0.0.1`。Node.js 預載模組會攔截並驗證每次啟動產生的臨時權杖，內建 WebView 亦限制在相同來源範圍內。
 
-完整架構與安全邊界見 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。
+完整架構與安全邊界說明見 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。
 
-## 安裝
+## 安裝與首次設定
 
-1. 從 [Releases](https://github.com/dphmoblie/deepseek-harness-android/releases) 頁面下載最新版 APK，並閱讀該版本的發行說明。
-2. 安裝 APK（依系統提示允許來自信任來源的安裝）。
-3. 開啟應用程式，等待內建執行環境完成讀取、驗證與安裝——官方自包含版本無需連網。
-4. 在**設定 → 模型與金鑰**中新增模型供應商與 API 金鑰，隨後啟動 Harness。
+1. 前往 [Releases](https://github.com/dphmoblie/deepseek-harness-android/releases) 頁面下載最新版 APK，並閱讀該版本的發行說明。
+2. 在手機上安裝 APK（依系統提示允許安裝來自可信來源的應用程式）。
+3. 首次開啟應用程式，依照三步驟引導完成設定：**免費聲明 → 設定模型 → 安裝執行環境**：
+   - **免費聲明**：本專案完全免費且開源，官方下載管道僅有本 GitHub Releases；沒有付費版或付費代裝，若遇收費請立即退款並檢舉。
+   - **設定模型**：貼上 DeepSeek API 金鑰並儲存（為避免輸入法誤改或貼上漏字，首次設定預設明文顯示金鑰，並自動清除前後空白、`Bearer ` 前綴與引號）。
+   - **安裝執行環境**：官方 APK 已內建映像檔，直接點擊「安裝執行環境」等待完成即可，無需連網；自行編譯且未打包映像檔的 APK 可點擊「安裝失敗？前往線上下載其他版本」至版本管理頁連網下載並切換。
+4. 設定完成後，回到首頁點擊**開啟對話**即可開始使用。
 
-執行環境就緒後，應用程式會直接開啟 Harness 主控台並還原最近一次工作階段。
+之後可在 **設定 → 模型與金鑰** 調整模型設定，在 **設定 → Ubuntu 執行環境 / 版本管理** 管理環境與版本。詳細步驟與排錯方式見 [首次設定指南](docs/operations/首次配置.md)。
 
-### 環境需求
+### 執行需求
 
-- Android 8.0 及以上、**arm64-v8a**（64 位元 ARM）處理器的裝置。
-- 數 GB 左右的可用儲存空間，用於存放解壓縮後的 Ubuntu 環境。
-- 至少一個受支援模型供應商的 API 金鑰，或一個相容的自訂端點。
+- Android 8.0 以上系統，**arm64-v8a**（64 位元 ARM）處理器裝置。
+- 約數 GB 可用儲存空間，用於存放解壓縮後的 Ubuntu 環境與工作階段資料。
+- 至少一組受支援模型供應商的 API 金鑰、DeepSeek 官方帳號，或相容的自訂模型端點。
+- 官方 APK 支援離線安裝執行環境；自行建置且未內建映像檔的 APK 首次安裝需連網下載。
 
 ## 模型供應商
 
-內建供應商：**DeepSeek、OpenAI、Anthropic、Google Gemini、OpenRouter、Groq、xAI、Mistral**。
+- **內建供應商**：DeepSeek、OpenAI、Anthropic、Google Gemini、OpenRouter、Groq、xAI、Mistral。
+- **自訂供應商**：支援新增任何 OpenAI 相容端點（自訂網址、API 金鑰與模型清單）。
+- **線上取得模型**：點擊「取得模型」可從上游拉取可用模型清單並自動帶入預設項目，同時保留你手動調整過的自訂模型設定與上下文長度。
 
-也可以將任意 OpenAI 相容端點設定為自訂供應商（基礎位址、API 金鑰與模型清單）。憑證透過 Android Keystore 靜態加密，僅以行程環境變數形式注入 Harness 執行環境；儲存設定時若 Harness 正在執行會自動重新啟動，確保執行環境狀態始終與介面顯示一致。
+API 金鑰在管理端透過 Android Keystore 加密保存，執行時寫入 Harness 私有憑證檔 `~/.dsh/.credentials.yaml`（權限 `0600`），絕不回傳給 WebView。儲存變更時若服務正在執行，應用程式會自動重啟 Harness 讓新設定立即生效。
 
-## 選用的 Shizuku 整合
+### DeepSeek 帳號登入
 
-Shizuku 完全為選用項目，且不會隨應用程式一同安裝：
+在 **設定 → 模型與金鑰** 點擊「登入 DeepSeek 帳號」後，應用程式會開啟 Harness，由側邊欄「更多」選單完成官方登入即可。授權完成返回設定頁會自動更新登入狀態，且不會遺失尚未儲存的 API 金鑰草稿；帳號登入與 API 金鑰彼此獨立。
 
-1. 自行安裝並啟動 [Shizuku](https://shizuku.rikka.app/)（透過無線偵錯或 Shizuku 官方指引的方式）。
-2. 在應用程式內授予權限。Shizuku 已執行且授權仍有效時，啟動或返回啟動器會自動連線；連線失敗可點選**連線 Shizuku**重試。
-3. 在「設定 → Shizuku 與裝置自動化」中連線成功後，開啟「允許 AI 呼叫 Shell」。一次開啟會持續生效，直到你關閉開關；不需要每條指令逐一確認。
+登入流程僅放行官方 `https://platform.deepseek.com/dsh/authorize` 開啟系統瀏覽器，回呼僅放行 `/oauth/callback`，應用程式本身不會讀取或轉傳你的帳號權杖。
 
-開啟後，模型可呼叫裝置 Shell 讀取、寫入、建立目錄、上傳、下載檔案，也可查詢指定應用程式的行程、服務與 Activity 摘要。Shell 使用 Shizuku 的實際 Android 權限，不等同於 Root；指令內容與輸出不會寫入診斷日誌。請不要讓模型讀取或回顯金鑰、簡訊、通訊錄、權杖等隱私資料。
+## 選用的 Shizuku 與自動化整合
 
-無障礙自動化需要你另外在系統設定中手動開啟服務，再在應用程式內從已安裝應用程式清單選擇目標套件名稱並儲存允許清單。允許清單數量不設上限；一般廠商應用程式可加入，系統設定、權限、付款、驗證碼與密碼頁面仍由原生服務拒絕。服務不能略過鎖定畫面，也不能保證廠商背景策略下的持續執行。
+Shizuku 完全選用，不會隨應用程式一同安裝：
 
-當 Shizuku 無法使用、未授權或連線中斷時，裝置工具會明確報錯；Ubuntu 執行環境與 Harness 不受影響。
+1. 先依 [Shizuku](https://shizuku.rikka.app/) 官方指引在手機上安裝並啟動服務（例如透過無線偵錯）。
+2. 開啟本應用程式並授予 Shizuku 權限；之後只要 Shizuku 正在執行且授權有效，應用程式會自動重連，失敗時也可手動點擊**連線 Shizuku**。
+3. 在 **設定 → Shizuku 與裝置自動化** 連線成功後，視需求開啟「允許 AI 呼叫 Shell」。開啟後將持續生效，直到你手動關閉。
 
-## 目標應用程式副螢幕（實驗功能）
+啟用後，AI 可透過 Shizuku 的 Android Shell 權限讀寫指定檔案、查詢應用程式行程與狀態。**Shizuku 提供的是標準 Shell 權限而非 Root 權限**；若你在已 Root 裝置上額外啟用進階根通道，高風險指令會受到分級審批與原生警告確認頁保護，應用程式內亦提供高風險檔案與指令防護總開關。指令內容與輸出不會寫入診斷日誌，仍請避免讓 AI 讀取簡訊、聯絡人、密碼或權杖等敏感資料。
 
-在 **設定 → AI Shell → 目標應用程式副螢幕（實驗功能）** 中選擇目標應用程式，可嘗試將其執行到獨立虛擬顯示器，並透過原生預覽頁面或可拖曳小視窗檢視與操作。此處顯示的是目標應用程式介面；AI 對話懸浮視窗是另一項功能。
+- **無障礙自動化**：需在系統設定中手動開啟無障礙服務，並在應用程式內將允許操作的應用程式加入白名單。系統設定、權限視窗、付款、驗證碼與密碼畫面均會被原生服務強制攔截，且無法略過鎖定畫面。
+- **故障隔離**：Shizuku 未啟動、未授權或斷線時，僅裝置工具會顯示錯誤，不影響 Ubuntu 執行環境與一般對話。
+- **Shizuku 更新後連線逾時**：更新 Shizuku 應用程式後，舊版背景服務可能仍在運作而導致連線逾時，只需在 Shizuku 內重啟服務（或重開機）再重試即可。此外，0.3.5 及更早版本與 Shizuku 13.6.0 有相容問題，升級至 **0.3.6 以上版本**即可解決。
 
-進入點要求 Android 10 及以上、已授權並連線 Shizuku，且使用者已開啟 AI Shell。鎖定畫面或螢幕關閉時，該副螢幕通道暫停讀取與輸入。AI 工具已涵蓋副螢幕狀態與效能讀數（目標影格率、畫面年齡、輸入後首幀間隔估計）、PNG 螢幕擷取畫面、副螢幕專用無障礙節點樹、點擊、滑動、返回、中文文字寫入（經無障礙聚焦寫入，失敗時回退系統剪貼簿貼上）、15/30/60 fps 檔位與結束工作階段；畫面仍是逐幀取 PNG，**不是視訊編碼串流。**
+## 目標應用副螢幕（實驗功能）
 
-截至 2026-10-02，已在 MuMu Android 15 中以一般 Shell 權限驗證測試應用程式的橫向與縱向螢幕擷取畫面、定向點擊與工作階段回收，並檢查 `363×800 dp` 與 `800×363 dp` 的原生選擇頁面版面配置；其後各版本另有 HONOR AAP-AN00 真機回執，逐條列在[目標應用副螢幕說明](docs/design/目标应用副屏.md)中，本段不重複。**尚未驗證完整 Shizuku 授權與繫結鏈路、真實第三方應用程式、小視窗互切、長時間背景執行與鎖定畫面還原**；上述新增能力多數也只有單元測試與編譯檢查，模擬器探測結果不能視為所有手機或所有應用程式的相容保證。
+在 **設定 → AI Shell → 目標應用副螢幕（實驗功能）** 中選擇目標應用程式，可嘗試將其啟動到獨立的虛擬顯示器中，並透過應用程式內預覽頁或可拖曳小視窗檢視與操作（此小視窗顯示的是目標應用程式畫面，與 AI 對話懸浮視窗互不干擾）。
 
-已有執行環境還需要更新或重新封裝 `dsh-mobile-shizuku` 外掛，才能使用新增的 AI 工具；僅安裝新 APK 不會改寫現有外掛資料。機制、工具介面與完整驗證範圍見[目標應用程式副螢幕說明](docs/design/目标应用副屏.md)。
+- **前置條件**：Android 10 以上、已授權並連線 Shizuku、已開啟 AI Shell；螢幕鎖定或關閉時會自動暫停讀取與輸入。
+- **支援能力**：檢視副螢幕狀態與效能指標、擷取 PNG 畫面、讀取副螢幕專屬無障礙節點樹與免截圖結構變化偵測、點擊／滑動／返回、中文文字輸入（無障礙寫入並支援剪貼簿備援）、15/30/60 fps 等影格率檔位切換與結束工作階段。畫面採逐幀擷取，並非視訊串流編碼。
+- **目前限制**：此功能仍屬實驗階段，不同機型、系統版本與第三方應用程式的相容性差異較大；升級 APK 後，既有的執行環境需同步更新或重新封裝 `dsh-mobile-shizuku` 外掛才能使用新增工具。詳細機制、介面與實機測試記錄見 [目標應用副螢幕說明](docs/design/目标应用副屏.md)。
 
 ## 從原始碼建置
 
-### 建置相依項目
+### 建置環境
 
 - Node.js `^22.19.0` 或 `>=24.0.0`，以及 [pnpm](https://pnpm.io/) 11
 - Android SDK 35、NDK、CMake 3.22.1、JDK 21、Gradle 8.11.1
-- 來自 Operit2 安卓執行環境工具鏈、與發行版本固定對應的 ARM64 PRoot 執行器與載入器（`libdsh_proot.so`、`libdsh_proot_loader.so`）——確切的上游版本號與雜湊見 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)
-- 自包含建置還需從同一原始碼版本產生的 `runtime-manifest.json` 與 `rootfs.bundle`
+- 來自 Operit2 工具鏈、與版本對應的 ARM64 PRoot 執行器與載入器（`libdsh_proot.so`、`libdsh_proot_loader.so`），確切版本與雜湊見 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)
+- 如需建置離線完整版 APK，另需準備同版本產生的 `runtime-manifest.json` 與 `rootfs.bundle`
 
-### Web 與安卓建置
+### 編譯 Web 與 Android 專案
 
 ```bash
 pnpm install --frozen-lockfile
-pnpm run build          # TypeScript 檢查 + Vite 正式版建置
-pnpm run android:sync   # 建置並同步到安卓專案
-pnpm run android:open   # 在 Android Studio 中開啟，或直接使用 Gradle 建置
+pnpm run build          # TypeScript 型別檢查 + Vite 正式建置
+pnpm run android:sync   # 同步前端產物至 Android 專案
+pnpm run android:open   # 使用 Android Studio 開啟，或直接以 Gradle 建置
 ```
 
-開發版建置可以不內建執行環境，改為同時設定 `DSH_RUNTIME_MANIFEST_URL` 與
-`DSH_RUNTIME_MANIFEST_SHA256` 以固定遠端資訊清單。完整建置說明與簽章策略見
-[docs/android.md](docs/android.md)。
+開發除錯時可省略內建映像檔，改為同時設定 `DSH_RUNTIME_MANIFEST_URL` 與 `DSH_RUNTIME_MANIFEST_SHA256` 指定遠端驗證清單。完整建置與簽章流程見 [docs/android.md](docs/android.md)。
 
-### 檢查與測試
+### 執行檢查與測試
 
 ```bash
 pnpm test          # Vitest 單元測試
-pnpm --dir scripts/runtime-profile install --frozen-lockfile --ignore-scripts # 外掛測試相依項目
+pnpm --dir scripts/runtime-profile install --frozen-lockfile --ignore-scripts  # 安裝外掛測試相依套件
 pnpm run test:scripts
-pnpm lint          # ESLint，零警告通過
+pnpm lint          # ESLint 檢查（須零警告通過）
 ```
 
 ## 安全與隱私
 
-- **模型資料去向。** 本機主控台不等於離線模型。對話、AI 工具回傳的檔案內容及螢幕擷取畫面可能進入目前工作階段並傳送至設定的模型服務；本機副螢幕預覽本身不會上傳影像。只授權與目前工作相關的應用程式與資料。
-- **僅監聽回送位址。** Harness 不會繫結任何非回送的網路介面；內建 WebView 封鎖存取回送來源以外的導覽與 HTTP 資源。
-- **臨時傳輸憑證。** 每次啟動 Harness 都會透過 `SecureRandom` 產生全新的 256 位元權杖。權杖不會持續保存、不會寫入日誌或 URL，也不會回傳給 JavaScript。
-- **憑證儲存。** 供應商 API 金鑰透過 Android Keystore 加密，離開管理介面時僅作為 PRoot 執行環境的行程環境變數存在。
-- **可驗證的執行環境供應鏈。** 資訊清單與根檔案系統映像均經過 schema 驗證與摘要固定，解壓縮時執行嚴格的封存檔邊界檢查；續傳遇到非法範圍或異常回應時採失敗即關閉（fail-closed）處理。
-- **稽核記錄。** 原生稽核日誌存放在應用程式私有的禁備份目錄中，檔案僅擁有者可讀寫，依 UTC 日期輪替並保留 90 天。記錄只包含固定的事件/結果列舉，絕不包含 URL、指令、權杖或終端機資料。
-- **無登入、無追蹤。** 應用程式不設帳號、不含廣告、不蒐集遙測資料。
+- **資料流向透明**：本機執行主控台不等於本機離線大型模型。你的對話、AI 工具讀取的檔案內容與截圖可能會傳送至所選的模型服務；單純在本機預覽副螢幕則不會上傳影像。請僅授權目前工作所需的權限與資料。
+- **僅限本機存取**：Harness 服務僅繫結 `127.0.0.1`，內建 WebView 會封鎖回環來源以外的導覽與資源請求。
+- **單次臨時權杖**：每次啟動 Harness 都會以 `SecureRandom` 產生全新的 256 位元隨機權杖保護 HTTP 與 WebSocket 請求；權杖僅存於記憶體，不寫入硬碟、URL 或日誌，也不回傳給前端腳本。
+- **憑證加密隔離**：管理端 API 金鑰由 Android Keystore 加密保存，執行時僅透過 `0600` 權限私有檔案提供給 Harness，絕不回傳 WebView。
+- **可驗證的執行環境供應鏈**：清單與映像檔均經 Schema 驗證與 SHA-256 摘要固定；下載僅允許 HTTPS 並攔截指向內網的 DNS 解析，解壓縮嚴格防範路徑穿越與非法裝置節點，遇到異常即直接中止而不使用殘缺檔案。
+- **兼顧隱私的稽核日誌**：原生稽核日誌存放於禁止備份的應用程式私有目錄，依 UTC 日期輪替並保留 90 天，僅記錄固定事件類型與結果狀態，絕不包含 URL、指令原文、權杖或終端機內容。
+- **零追蹤、無廣告**：不設應用程式自有帳號系統，不含廣告，也不蒐集任何遙測資料。
 
 ## 參與貢獻
 
-歡迎在 <https://github.com/dphmoblie/deepseek-harness-android> 提交 Issue 與 Pull Request。
+歡迎前往 <https://github.com/dphmoblie/deepseek-harness-android> 提交 Issue 與 Pull Request。
 
-提交前請保持變更聚焦、為新行為補充測試，並執行 `pnpm lint` 與 `pnpm test`。
-涉及安全的變更必須維護 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) 所述邊界，
-尤其不得削弱回送存取控制、摘要驗證、進入點允許清單或 Shizuku UserService 契約。
+送出變更前請盡量保持修改聚焦、為新行為補齊單元測試，並確認 `pnpm lint` 與 `pnpm test` 通過。涉及安全機制的異動必須維持 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) 定義的邊界，不得削弱回環存取控制、雜湊驗證、入口白名單或 Shizuku UserService 契約。
 
 ### 貢獻者
 
-[![贡献者](https://contrib.rocks/image?repo=dphmoblie/deepseek-harness-android)](https://github.com/dphmoblie/deepseek-harness-android/graphs/contributors)
+[![貢獻者](https://contrib.rocks/image?repo=dphmoblie/deepseek-harness-android)](https://github.com/dphmoblie/deepseek-harness-android/graphs/contributors)
 
-歡迎更多開發者參與，你的名字也可以出現在這裡。
+歡迎更多開發者加入，期待在這裡看見你的名字。
 
 <a id="qq-group"></a><a id="community-qq-group"></a>
 ### 交流社群
 
-- **QQ 交流群：1108895375**——歡迎入群提問、回饋建議、取得版本發行通知。
+- **QQ 交流群：1108895375** —— 歡迎加入提問交流、回報問題與接收新版本發布通知。
 
 ## 專案數據
 
 ![星標與下載量累計折線圖](docs/images/star-download-history.svg)
 
-黃線是 GitHub 星標累計數（依加星時間計入）；藍線是各 Release 資產的總下載次數——
-GitHub 只提供目前累計值，因此依發佈日計入、逐日累加成階梯線。圖由
-`pnpm run chart:stats` 重新產生，抓取日期會寫在圖內。
+黃線代表 GitHub Star 累計成長趨勢，藍線代表各版本 Release 資產的累計下載次數（依各版本發布日期累加繪製）。圖表由 `stats-chart` 工作流程每日自動更新，也可在本機執行 `pnpm run chart:stats` 重新產生。
 
 ## 授權條款
 
-本儲存庫中的應用程式程式碼依 [MIT 授權條款](LICENSE)發布。
+本儲存庫中的應用程式程式碼採 [MIT 授權條款](LICENSE) 開源。
 
-正式版 APK 還以各自授權條款再散布了第三方執行環境元件，包括 PRoot
-（GPL-2.0-or-later）、Operit2 執行環境工具鏈（AGPL-3.0）、Ubuntu 24.04
-軟體套件、Node.js，以及採用 MIT 授權條款的 DeepSeek Harness 執行環境與前端。
-元件來源、確切上游版本、製品雜湊及相應授權條款文字記錄於
-[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)，並隨 APK 內
-`assets/legal/` 目錄一併提供。
+官方發行版 APK 同時包含並依各自開源授權再散布第三方執行環境元件，包含 PRoot（GPL-2.0-or-later）、Operit2 執行環境工具鏈（AGPL-3.0）、Ubuntu 24.04 軟體套件、Node.js，以及採用 MIT 授權的 DeepSeek Harness 執行環境與前端。完整元件清單、上游版本、驗證雜湊與授權原文見 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)，並隨 APK 內建於 `assets/legal/` 目錄中。
 
 ## 相關文件
 
-- [目標應用程式副螢幕與驗證範圍](docs/design/目标应用副屏.md)
+- [首次設定（三步驟完成並開始對話）](docs/operations/首次配置.md)
+- [目標應用副螢幕與驗證範圍](docs/design/目标应用副屏.md)
 - [應用程式讀取與無障礙自動化](docs/design/应用自动化能力.md)
-- [外掛匯入、資料保留與復原](docs/design/插件管理.md)
+- [外掛匯入、資料保留與還原](docs/design/插件管理.md)
 - [投遞區與儲存權限](docs/design/存储权限与导入落点.md)
 - [架構與安全邊界](docs/ARCHITECTURE.md)
-- [行動裝置外掛相容性設計](docs/mobile-plugin-compat.md)
-- [專案狀態登記冊（已完成、未完成與真機讀數）](docs/项目状态.md)
+- [行動裝置外掛相容設計](docs/mobile-plugin-compat.md)
+- [專案狀態與實機測試記錄](docs/项目状态.md)
 - [發行檢查清單](docs/RELEASE_CHECKLIST.md)
-- [安卓平台建置說明](docs/android.md)
-- [第三方聲明](THIRD_PARTY_NOTICES.md)
+- [Android 平台建置說明](docs/android.md)
+- [第三方開源聲明](THIRD_PARTY_NOTICES.md)

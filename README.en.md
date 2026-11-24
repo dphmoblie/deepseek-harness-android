@@ -14,196 +14,201 @@
 
 <p align="center"><img src="docs/images/app-icon-512.png" width="256" alt="DeepSeek Harness for Android app icon"></p>
 
-**A local AI workbench for Android.** It brings [DeepSeek Harness](https://github.com/deepseek-ai/dsh), an Ubuntu runtime, sessions, plugins and file management onto your phone. Once you grant the relevant permissions, the AI can also run device shell commands through Shizuku or operate selected apps through the accessibility service.
+**A local AI workbench right on your Android phone.** It brings [DeepSeek Harness](https://github.com/deepseek-ai/dsh), an Ubuntu runtime, chat sessions, plugins, and file management into a single Android app. When you opt in and grant permissions, the AI can also run device shell tasks via Shizuku or assist with selected apps through Android's accessibility service.
 
-No root required. The Linux environment runs in userspace through [PRoot](https://github.com/proot-me/proot) and the console is rendered by a bundled web view; model inference uses whatever service you configure.
+No root access required. Ubuntu runs in userspace via [PRoot](https://github.com/proot-me/proot) on standard Android devices, the web console renders inside a bundled WebView, and model inference connects to whichever API provider or DeepSeek account you configure.
 
 | | |
 | --- | --- |
-| App package name | `io.deepseekharness.mobile` |
+| Package name | `io.deepseekharness.mobile` |
 | Minimum Android | Android 8.0 (API 26) or later |
-| Target-app virtual screen | Android 10 (API 29) or later; needs Shizuku and per-device verification |
-| Supported architecture | `arm64-v8a` only (64-bit ARM) |
+| Target-app virtual display | Android 10 (API 29) or later, requires Shizuku |
+| Architecture | `arm64-v8a` only (64-bit ARM) |
 | Bundled runtime | Ubuntu 24.04 ARM64 · Node.js 24.19 · `@deepseek-ai/dsh` 0.2.1-rc.1 |
-| App license | MIT (bundled runtime components keep their own licenses — see [License](#license)) |
+| License | MIT (bundled runtime components keep their own licenses; see [License](#license)) |
 
 ## Contents
 
 - [Features](#features)
-- [How it works](#how-it-works)
-- [Installation](#installation)
-- [Model providers](#model-providers)
-- [Optional Shizuku integration](#optional-shizuku-integration)
-- [Target-app virtual screen (experimental)](#target-app-virtual-screen-experimental)
-- [Building from source](#building-from-source)
-- [Security and privacy](#security-and-privacy)
+- [How It Works](#how-it-works)
+- [Installation and First-Time Setup](#installation-and-first-time-setup)
+- [Model Providers](#model-providers)
+- [Optional Shizuku and Automation](#optional-shizuku-and-automation)
+- [Target-App Virtual Display (Experimental)](#target-app-virtual-display-experimental)
+- [Building from Source](#building-from-source)
+- [Security and Privacy](#security-and-privacy)
 - [Contributing](#contributing)
-- [Project stats](#project-stats)
+- [Project Stats](#project-stats)
 - [License](#license)
-- [Related documents](#related-documents)
+- [Related Documentation](#related-documentation)
 
 ## Features
 
-- **A complete Linux agent environment on your phone.** Ubuntu 24.04 runs entirely on-device through PRoot — no cloud server, no remote desktop, no account: both the agent runtime and the web console execute locally.
-- **A console adapted to mobile.** The shell organizes everything under three bottom tabs — Home, Plugins and Settings — with layout adaptation for narrow screens, landscape and safe areas; session management is merged into Home. Third-party web plugins differ in UI and dependencies, so compatibility must be verified per plugin and version.
-- **Plugin import, update and rollback.** Import from an npm package name, an HTTPS archive URL or a `git+https` repository address, and enable/disable packages and sub-plugins. Updates preserve data under supported directory rules, and you can switch back to the previous version. Packages that need install scripts, native compilation or a different core SDK have limitations — see [plugin management](docs/design/插件管理.md).
-- **File and appearance management.** The inbox supports folder categories; the shell offers image or video backgrounds with adjustable card color, transparency, blur and accent color.
-- **Runs without root.** Userspace containerization through PRoot works on ordinary retail devices. The optional [Shizuku](https://shizuku.rikka.app/) integration additionally provides a shell-level device terminal (`/system/bin/sh`) after you grant it yourself. Shizuku grants Android shell privileges, not root.
-- **Works out of the box, installs offline.** Official APKs bundle a verified `rootfs.bundle` and manifest, so runtime installation completes without a network; digest-pinned remote runtime sources are also supported.
-- **Tamper-resistant runtime distribution.** Every manifest and root filesystem image is checked against an exact length and SHA-256 before use; downloads accept only HTTPS targets, reject DNS results pointing at private addresses, support HTTP range resumption, and extraction defends against path traversal and device nodes. A ready environment is switched into place atomically.
-- **Built-in and custom model providers.** Credentials for DeepSeek, OpenAI, Anthropic, Google Gemini, OpenRouter, Groq, xAI, Mistral and self-hosted OpenAI-compatible endpoints are encrypted with the Android Keystore and injected only into the runtime process — never returned to the WebView.
-- **Local console access.** Harness binds only to `127.0.0.1`. A fresh 256-bit transport token is generated on every start and protects both HTTP and WebSocket requests; the token lives only in process memory, is never persisted and never written into a URL. Model calls and user-initiated downloads or plugin installs may still reach the network.
-- **Integrated terminals.** Use the Ubuntu terminal inside the PRoot environment and, optionally, a Shizuku-backed Android device terminal from the same screen.
-- **In-app runtime self-check.** When the runtime misbehaves you don't need bash: the self-check probes the shell, Node.js, the sandbox launcher (including its execute bit), Landlock probing, real in-sandbox execution, two PTY smoke tests (bare PTY and in-sandbox PTY), writes to the guest data and attachment directories, the ripgrep execute bit, and reports free space. Missing execute bits or directories can be repaired in place without modifying any file contents.
-- **Logs on demand, with interpretation.** Diagnostic logs containing only internal status codes and counters can be read in-app (64 / 256 KB tail windows); the runtime log window offers 8 / 64 / 256 KB with keyword filtering and level coloring. When a known failure signature matches (missing credentials, split module identity, plugin load failure, occupied port, and so on), the UI states the conclusion and the next step instead of dropping raw text on you.
-- **Background keep-alive and floating ball (optional).** A foreground service raises the runtime process's priority for surviving in the background — but **cannot prevent** the system from ending it under memory, battery or vendor policies. A short tap on the floating ball opens a secondary shortcut menu (chat, virtual screen, return to app, hide ball, disable accessibility), a long press directly toggles the draggable AI chat mini window, and the ball's position is persisted and pulled back into view after a screen rotation.
-- **First-run configuration gate.** While no model credential is stored locally, Harness won't open (conversations are guaranteed to fail without a key) and the app routes you straight to "Models & keys" — while keeping an explicit "I already configured it inside Harness, open anyway" override.
+### Local Runtime and Mobile Experience
 
-## How it works
+- **Full Linux environment without root**: Runs Ubuntu 24.04 locally on your phone via PRoot—no cloud servers, remote desktop, or mandatory app account needed.
+- **Ready out of the box, offline-capable**: Official APKs ship with a verified `rootfs.bundle`, so setup finishes completely offline. SHA-256-verified remote runtime sources with resumable downloads and version switching are also supported.
+- **Designed for mobile screens**: Organized around three bottom tabs—Home, Plugins, and Settings—with layouts adapted for narrow screens, landscape orientation, and display cutouts, and session management built into Home.
+- **Built-in terminals and external browser mode**: Open both the Ubuntu terminal and an optional Shizuku device shell right in the app, or launch the full Harness console in an external browser such as Chrome from the Diagnostics screen.
+- **Auto-saved settings and optional prewarm**: General settings save automatically when you leave the screen. You can optionally enable service prewarming on app launch (off by default) so tapping **Open chat** feels nearly instant without switching pages for you.
+- **Custom themes and backgrounds**: Choose an image or video background, tweak card color, transparency, blur, and accent colors, and sync your theme and background directly to the DSH console.
 
-The app has three layers:
+### Models, Plugins, and Files
 
-1. **Management UI (Capacitor + React).** The native Android shell, responsible for runtime installation, service control, model provider settings, terminals, runtime sources and environment reset.
-2. **Native runtime layer (Kotlin).** Verifies and extracts the root filesystem, manages the PRoot runner and loader shipped as native libraries, supervises the Harness process and PTY sessions, and connects to the Shizuku UserService once you authorize it.
-3. **Ubuntu runtime (PRoot).** Starts `dsh web` inside Ubuntu 24.04 through a fixed allowlisted entry point, listening on loopback only. A Node.js preload module validates the launch token before any request reaches Harness, and the bundled WebView is confined to the same loopback origin.
+- **Multiple providers plus DeepSeek login**: Built-in support for DeepSeek, OpenAI, Anthropic, Google Gemini, OpenRouter, Groq, xAI, and Mistral, alongside any OpenAI-compatible custom endpoint and official DeepSeek account sign-in.
+- **Flexible plugin management**: Install plugins from npm package names, HTTPS archives, or `git+https` repositories, toggle packages and sub-plugins individually, preserve data across updates, and roll back to the previous version. See [Plugin Management](docs/design/插件管理.md) for limitations on native compilation and install scripts.
+- **Unified file management and sharing**: Browse the built-in transfer folders (`inbox` / `outbox`) and user-selected shared directories from one screen, create folders, import/export workspace archives, and share or open workspace files with other Android apps.
+- **Encrypted backups**: Back up and restore sessions, settings, model credentials, skills, and attachments, encrypted per file with Android Keystore in production builds.
 
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full architecture and security boundaries.
+### Background Experience and Diagnostics
 
-## Installation
+- **Optional floating shortcut and background keep-alive**: A foreground service improves background survival (though Android's memory, battery, and OEM policies still apply). The floating shortcut docks cleanly as a thin edge bar by default—tap to open quick actions, or long-press for a draggable AI chat window. Background notifications automatically collapse into a tidy group summary.
+- **17-point in-app self-check with one-tap repair**: Diagnose runtime issues without touching bash. Checks cover bash, Node.js, the Landlock sandbox, PTY terminals, writable guest directories, ripgrep, C/Make/Python build tools, and device checks (plugin links, accessibility, overlay permission, and system WebView). Missing execute bits or directories can be repaired in place, with a low-storage warning below 512 MB.
+- **Readable logs with actionable hints**: Inspect diagnostic and runtime logs in-app with keyword filtering and level highlighting. Common failures (missing credentials, port conflicts, plugin load errors, etc.) show clear explanations and next steps.
 
-1. Download the latest APK from the [Releases](https://github.com/dphmoblie/deepseek-harness-android/releases) page and read that version's release notes.
-2. Install the APK (allow installation from a trusted source when prompted).
-3. Open the app and wait for the bundled runtime to be read, verified and installed — official self-contained builds need no network.
-4. Add a model provider and API key under **Settings → Models & keys**, then start Harness.
+## How It Works
 
-Once the runtime is ready, the app opens the Harness console directly and restores the most recent session.
+The app is built in three layers:
+
+1. **Management UI (Capacitor + React)**: Handles runtime installation and versioning, service lifecycle, model settings, built-in terminals, and file management.
+2. **Native runtime layer (Kotlin)**: Verifies and extracts the rootfs archive, manages the PRoot runner, supervises Harness and PTY processes, enforces permission and command approvals, and connects to Shizuku when authorized.
+3. **Ubuntu runtime (PRoot)**: Launches `dsh web` inside Ubuntu 24.04 via a fixed allowlisted entry point, bound strictly to `127.0.0.1`. A Node.js preload script verifies a fresh per-launch access token on every request, and the bundled WebView stays confined to the same loopback origin.
+
+For full architectural and security details, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
+## Installation and First-Time Setup
+
+1. Download the latest APK from the [Releases](https://github.com/dphmoblie/deepseek-harness-android/releases) page and review its release notes.
+2. Install the APK (allow installation from trusted sources when prompted by Android).
+3. Open the app and follow the 3-step onboarding flow: **Free & Open-Source Notice → Model Setup → Runtime Setup**:
+   - **Notice**: This app is completely free and open source, distributed exclusively through GitHub Releases. There is no paid edition or paid installation service.
+   - **Model Setup**: Paste your DeepSeek API key and save it. The field stays unmasked during initial setup so you can verify your paste, and automatically strips stray whitespace, `Bearer ` prefixes, and quotes.
+   - **Runtime Setup**: Official APKs include the runtime bundle—just tap **Install runtime** and wait for it to finish offline. Self-built APKs without a bundled image can download and switch to a runtime online via **Version Management**.
+4. Once setup is complete, return to the Home screen and tap **Open chat** to start.
+
+You can adjust providers later under **Settings → Models & Keys**, and manage runtime versions under **Settings → Ubuntu Runtime / Version Management**. See the [First-Time Setup Guide](docs/operations/首次配置.md) for troubleshooting tips.
 
 ### Requirements
 
 - Android 8.0 or later on an **arm64-v8a** (64-bit ARM) device.
-- A few GB of free storage for the extracted Ubuntu environment.
-- An API key for at least one supported model provider, or a compatible custom endpoint.
+- Several GB of free storage for the extracted Ubuntu environment and session data.
+- An API key for at least one supported provider, a DeepSeek account, or a compatible custom endpoint.
+- No internet connection is required to install the runtime from an official APK; self-built APKs without a bundled rootfs require network access for the initial download.
 
-## Model providers
+## Model Providers
 
-Built-in providers: **DeepSeek, OpenAI, Anthropic, Google Gemini, OpenRouter, Groq, xAI, Mistral**.
+- **Built-in providers**: DeepSeek, OpenAI, Anthropic, Google Gemini, OpenRouter, Groq, xAI, and Mistral.
+- **Custom providers**: Add any OpenAI-compatible endpoint with its own base URL, API key, and model list.
+- **Fetch model lists**: Tap **Fetch models** to pull available models directly from the provider and populate a default choice while preserving any custom model parameters you already configured.
 
-Any OpenAI-compatible endpoint can also be configured as a custom provider (base URL, API key and model list). Credentials are encrypted at rest with the Android Keystore and injected into the Harness runtime only as process environment variables; saving settings while Harness is running restarts it automatically so the runtime state always matches what the UI shows.
+API keys are encrypted at rest via Android Keystore and written to Harness's private `~/.dsh/.credentials.yaml` (`0600`) at runtime—they are never exposed back to the WebView. Saving changes automatically restarts Harness if it is currently running.
 
-## Optional Shizuku integration
+### DeepSeek Account Sign-In
 
-Shizuku is entirely optional and is never bundled with the app:
+Tapping **Sign in with DeepSeek** under **Settings → Models & Keys** opens Harness so you can sign in through the sidebar **More** menu. Returning to Settings refreshes your login status without discarding unsaved API key drafts; account sign-in and API keys work independently.
 
-1. Install and start [Shizuku](https://shizuku.rikka.app/) yourself (via wireless debugging or however Shizuku's own documentation directs).
-2. Grant permission inside the app. Starting or returning to the launcher automatically connects when Shizuku is running and permission is still granted; tap **Connect Shizuku** to retry a failed connection.
-3. After connecting under "Settings → Shizuku & device automation", turn on "Allow AI to call the shell". One switch stays in effect until you turn it off; there is no per-command confirmation.
+Only the official `https://platform.deepseek.com/dsh/authorize` URL is handed off to the system browser, and only `/oauth/callback` is permitted for login completion. The app never reads or forwards your account tokens.
 
-Once enabled, the model can use the device shell to read, write, create directories, upload and download files, and to query the processes, services and activity summaries of a given app. The shell uses Shizuku's actual Android privileges and is not equivalent to root; command bodies and output are never written to diagnostic logs. Do not let the model read or echo secrets, SMS messages, contacts, tokens or similar private data.
+## Optional Shizuku and Automation
 
-Accessibility automation requires you to enable the service manually in system settings, then pick target package names from the installed-app list in the app and save a whitelist. There is no cap on whitelist size; ordinary vendor apps can be added, while system settings, permission, payment, verification-code and password screens are still refused by the native service. The service cannot bypass the lock screen and cannot guarantee continuous operation under vendor background policies.
+Shizuku is completely optional and is never bundled with the app:
 
-When Shizuku is unavailable, unauthorized or disconnected, device tools report a clear error; the Ubuntu runtime and Harness are unaffected.
+1. Install and start [Shizuku](https://shizuku.rikka.app/) by following its official instructions (for example, via Wireless Debugging).
+2. Grant Shizuku permission inside the app. Whenever Shizuku is running and authorized, the app reconnects automatically; you can also tap **Connect Shizuku** manually.
+3. Under **Settings → Shizuku & Device Automation**, enable **Allow AI to invoke Shell** if desired. Once enabled, it stays active until you turn it off.
 
-## Target-app virtual screen (experimental)
+With Shell enabled, the AI can read or write authorized files and inspect app processes and activity states using Shizuku's standard Android shell privileges—**not root**. If you separately enable the advanced root channel on a rooted device, high-risk actions are gated by tiered approvals and native confirmation dialogs, alongside dedicated guardrails for sensitive files and commands. Command text and output are never written to diagnostic logs; even so, avoid letting the AI read sensitive data such as SMS messages, contacts, passwords, or tokens.
 
-Under **Settings → AI Shell → Target-app virtual screen (experimental)** you can pick a target app, try running it on a separate virtual display, and view and interact with it through the native preview page or a draggable mini window. What you see there is the target app's screen; the AI chat mini window is a separate feature.
+- **Accessibility automation**: Enable the accessibility service manually in Android Settings, then add permitted apps to your allowlist in the app. System settings, permission prompts, payment screens, verification codes, and password fields are always blocked natively, and the service cannot bypass the lock screen.
+- **Failure isolation**: If Shizuku is stopped, unauthorized, or disconnected, only device tools report an error—the Ubuntu runtime and normal chat keep working unaffected.
+- **Timeout after updating Shizuku**: After upgrading the Shizuku app, the previous background service may still be running and cause connection timeouts. Restart the Shizuku service (or reboot your phone) and try again. Also note that app versions 0.3.5 and earlier had a compatibility issue with Shizuku 13.6.0, which is fixed in **0.3.6 and later**.
 
-The entry point requires Android 10 or later, an authorized and connected Shizuku, and AI Shell enabled by the user. Reading and input pause while the screen is locked or off. AI tools already cover virtual-screen state and performance readings (target frame rate, frame age, input-to-first-frame delay estimate), PNG screenshots, a virtual-screen-specific accessibility node tree, tap, swipe, back, Chinese text writing (focused accessibility write, falling back to a system clipboard paste), 15/30/60 fps tiers and ending the session; the picture is still grabbed frame by frame as PNG, **not a video-encoded stream**.
+## Target-App Virtual Display (Experimental)
 
-As of 2026-10-02, portrait and landscape screenshots, targeted taps and session teardown for a test app were verified under MuMu Android 15 with ordinary shell privileges, along with native picker layouts at `363×800 dp` and `800×363 dp`; later versions added HONOR AAP-AN00 device receipts, listed one by one in the [virtual screen guide](docs/design/目标应用副屏.md) and not repeated here. **The full Shizuku authorization and binding path, real third-party apps, mini-window switching, long-lived background operation and lock-screen recovery remain unverified**; most of the capabilities added above also have unit tests and compile checks only, and emulator probe results are not a compatibility guarantee for every phone or every app.
+Select an app under **Settings → AI Shell → Target-App Virtual Display (Experimental)** to run it on an isolated virtual display and interact with it through the in-app preview or a draggable mini window (separate from the AI chat floating window).
 
-An existing runtime also needs its `dsh-mobile-shizuku` plugin updated or repackaged before the new AI tools appear; installing a new APK alone does not rewrite existing plugin data. See the [virtual screen guide and verification record](docs/design/目标应用副屏.md) for the mechanism, tool interfaces and full verification scope.
+- **Requirements**: Android 10 or later, authorized and connected Shizuku, and AI Shell enabled. Reading and input automatically pause when the screen is locked or off.
+- **Capabilities**: Live status and performance metrics, PNG frame capture, virtual-display accessibility tree inspection with screenshot-free UI diffing, tap/swipe/back gestures, CJK/Unicode text input (via accessibility with clipboard fallback), selectable frame-rate tiers (15/30/60 fps and higher), and session teardown. Frames are captured individually rather than video-streamed.
+- **Current limitations**: This feature is still experimental, and behavior varies across devices, Android versions, and third-party apps. After updating the APK, existing runtimes must update or repackage the `dsh-mobile-shizuku` plugin to receive new tools. See the [Virtual Display Guide](docs/design/目标应用副屏.md) for architecture details and real-device test records.
 
-## Building from source
+## Building from Source
 
-### Build dependencies
+### Prerequisites
 
-- Node.js `^22.19.0` or `>=24.0.0`, plus [pnpm](https://pnpm.io/) 11
+- Node.js `^22.19.0` or `>=24.0.0`, and [pnpm](https://pnpm.io/) 11
 - Android SDK 35, NDK, CMake 3.22.1, JDK 21, Gradle 8.11.1
-- The ARM64 PRoot runner and loader pinned to the release version from the Operit2 Android runtime toolchain (`libdsh_proot.so`, `libdsh_proot_loader.so`) — exact upstream versions and hashes are in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)
-- Self-contained builds additionally need `runtime-manifest.json` and `rootfs.bundle` generated from the same source version
+- Pinned ARM64 PRoot runner and loader binaries from the Operit2 toolchain (`libdsh_proot.so`, `libdsh_proot_loader.so`)—see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for exact versions and hashes
+- For offline self-contained APKs: `runtime-manifest.json` and `rootfs.bundle` built from the same commit
 
-### Web and Android builds
+### Web and Android Builds
 
 ```bash
 pnpm install --frozen-lockfile
 pnpm run build          # TypeScript check + Vite production build
-pnpm run android:sync   # build and sync into the Android project
-pnpm run android:open   # open in Android Studio, or build directly with Gradle
+pnpm run android:sync   # Build and sync web assets into the Android project
+pnpm run android:open   # Open in Android Studio, or build directly with Gradle
 ```
 
-Development builds can skip the bundled runtime and instead pin a remote manifest by
-setting both `DSH_RUNTIME_MANIFEST_URL` and `DSH_RUNTIME_MANIFEST_SHA256`. See
-[docs/android.md](docs/android.md) for the full build guide and signing policy.
+For development builds without a bundled runtime, set both `DSH_RUNTIME_MANIFEST_URL` and `DSH_RUNTIME_MANIFEST_SHA256` to pin a remote manifest. See [docs/android.md](docs/android.md) for complete build and signing instructions.
 
-### Checks and tests
+### Checks and Tests
 
 ```bash
 pnpm test          # Vitest unit tests
-pnpm --dir scripts/runtime-profile install --frozen-lockfile --ignore-scripts # plugin test dependencies
+pnpm --dir scripts/runtime-profile install --frozen-lockfile --ignore-scripts  # Install plugin test dependencies
 pnpm run test:scripts
-pnpm lint          # ESLint, must pass with zero warnings
+pnpm lint          # ESLint (zero warnings allowed)
 ```
 
-## Security and privacy
+## Security and Privacy
 
-- **Where model data goes.** The local console is not an offline model. Conversations, file contents returned by AI tools and screenshots may enter the current session and be sent to the configured model service; local virtual-screen preview itself uploads no images. Grant only the apps and data a task actually needs.
-- **Loopback only.** Harness never binds a non-loopback network interface, and the bundled WebView blocks navigation and HTTP resources outside the loopback origin.
-- **Ephemeral transport credential.** Every Harness start generates a fresh 256-bit token via `SecureRandom`. The token is never persisted, never written to logs or URLs, and never handed back to JavaScript.
-- **Credential storage.** Provider API keys are encrypted with the Android Keystore and exist only as process environment variables of the PRoot runtime once they leave the management UI.
-- **Verifiable runtime supply chain.** Manifests and root filesystem images pass schema validation and are digest-pinned, and extraction performs strict archive boundary checks; range resumption on an illegal range or abnormal response fails closed.
-- **Audit records.** Native audit logs live in a backup-excluded private app directory, readable and writable only by their owner, rotated by UTC date and retained for 90 days. Entries contain only fixed event/result enumerations — never URLs, commands, tokens or terminal data.
-- **No login, no tracking.** The app has no account, no ads and collects no telemetry.
+- **Clear data boundaries**: Running the console locally does not mean the AI model runs offline. Conversations, files read by AI tools, and screenshots may be sent to your configured model provider; simply viewing the local virtual-display preview does not upload images. Grant only the permissions and data each task needs.
+- **Loopback-only binding**: Harness binds exclusively to `127.0.0.1`, and the bundled WebView blocks navigation and HTTP resources outside the loopback origin.
+- **Per-launch ephemeral tokens**: Every launch generates a fresh 256-bit token via `SecureRandom` to authenticate HTTP and WebSocket traffic. It stays in memory only—never saved to disk, logged, placed in URLs, or exposed to JavaScript.
+- **Encrypted credential isolation**: API keys are protected with Android Keystore and supplied to Harness only through `0600` private files, never returned to the WebView.
+- **Verified runtime supply chain**: Manifests and rootfs archives undergo schema validation and SHA-256 pinning. Downloads enforce HTTPS, block DNS resolution to private IP ranges, guard archive extraction against path traversal and device nodes, and abort cleanly on malformed range responses.
+- **Privacy-preserving audit logs**: Native audit logs are stored in a private, backup-excluded directory, rotated daily (UTC) for 90 days, and record only fixed event/result codes—never URLs, command bodies, tokens, or terminal output.
+- **No app accounts, no ads, no telemetry**: The app requires no proprietary account, shows no ads, and collects no analytics.
 
 ## Contributing
 
 Issues and pull requests are welcome at <https://github.com/dphmoblie/deepseek-harness-android>.
 
-Keep changes focused, add tests for new behavior, and run `pnpm lint` and `pnpm test` before submitting.
-Changes touching security must preserve the boundaries described in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) —
-in particular, do not weaken loopback access control, digest verification, the entry-point allowlist or the Shizuku UserService contract.
+Please keep pull requests focused, add tests for new behavior, and verify that `pnpm lint` and `pnpm test` pass before submitting. Security-sensitive changes must preserve the boundaries defined in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)—in particular loopback isolation, hash verification, entry-point allowlists, and the Shizuku UserService contract.
 
 ### Contributors
 
 [![Contributors](https://contrib.rocks/image?repo=dphmoblie/deepseek-harness-android)](https://github.com/dphmoblie/deepseek-harness-android/graphs/contributors)
 
-More developers are welcome — your name can appear here too.
+More contributors are always welcome—we'd love to see your name here too.
 
 <a id="qq-group"></a><a id="community-qq-group"></a>
 ### Community
 
-- **QQ group: 1108895375** — ask questions, send feedback and get release notifications.
+- **QQ Group: 1108895375** — Ask questions, share feedback, and get release updates.
 
-## Project stats
+## Project Stats
 
 ![Cumulative stars and downloads](docs/images/star-download-history.svg)
 
-The amber line is GitHub stars accumulated over time (counted by starred time); the
-blue line is total downloads across all release assets — GitHub only exposes the
-current total, so each release's count is pinned to its publish date and
-cumulative-summed into a step line. Regenerate with `pnpm run chart:stats`; the fetch
-date is stamped inside the image.
+The yellow line tracks cumulative GitHub stars over time, while the blue line shows cumulative release asset downloads grouped by each release's publish date. The chart refreshes daily via the `stats-chart` workflow and can also be regenerated locally with `pnpm run chart:stats`.
 
 ## License
 
-The application code in this repository is released under the [MIT license](LICENSE).
+The application source code in this repository is licensed under the [MIT License](LICENSE).
 
-Official APKs additionally redistribute third-party runtime components under their own licenses, including PRoot
-(GPL-2.0-or-later), the Operit2 runtime toolchain (AGPL-3.0), Ubuntu 24.04
-packages, Node.js, and the MIT-licensed DeepSeek Harness runtime and frontend.
-Component sources, exact upstream versions, artifact hashes and the corresponding license texts are recorded in
-[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) and shipped inside the APK's
-`assets/legal/` directory.
+Official release APKs also redistribute third-party runtime components under their respective licenses, including PRoot (GPL-2.0-or-later), the Operit2 runtime toolchain (AGPL-3.0), Ubuntu 24.04 packages, Node.js, and the MIT-licensed DeepSeek Harness runtime and frontend. Full component origins, pinned versions, artifact hashes, and license texts are documented in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) and bundled inside the APK under `assets/legal/`.
 
-## Related documents
+## Related Documentation
 
-- [Target-app virtual screen and verification scope](docs/design/目标应用副屏.md)
-- [App reading and accessibility automation](docs/design/应用自动化能力.md)
-- [Plugin import, data retention and rollback](docs/design/插件管理.md)
-- [Inbox and storage permissions](docs/design/存储权限与导入落点.md)
-- [Architecture and security boundaries](docs/ARCHITECTURE.md)
-- [Mobile plugin compatibility design](docs/mobile-plugin-compat.md)
-- [Project status register (done, open, on-device readings)](docs/项目状态.md)
-- [Release checklist](docs/RELEASE_CHECKLIST.md)
-- [Android build guide](docs/android.md)
-- [Third-party notices](THIRD_PARTY_NOTICES.md)
+- [First-Time Setup Guide](docs/operations/首次配置.md)
+- [Target-App Virtual Display & Testing Scope](docs/design/目标应用副屏.md)
+- [App Inspection & Accessibility Automation](docs/design/应用自动化能力.md)
+- [Plugin Import, Data Retention & Rollback](docs/design/插件管理.md)
+- [File Transfer & Storage Permissions](docs/design/存储权限与导入落点.md)
+- [Architecture & Security Boundaries](docs/ARCHITECTURE.md)
+- [Mobile Plugin Compatibility](docs/mobile-plugin-compat.md)
+- [Project Status & On-Device Verification](docs/项目状态.md)
+- [Release Checklist](docs/RELEASE_CHECKLIST.md)
+- [Android Build Guide](docs/android.md)
+- [Third-Party Notices](THIRD_PARTY_NOTICES.md)
