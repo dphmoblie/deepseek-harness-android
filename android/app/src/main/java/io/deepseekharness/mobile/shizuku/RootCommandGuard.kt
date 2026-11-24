@@ -95,26 +95,51 @@ object RootCommandGuard {
         val unconfinedCaps: Boolean = false,
     )
 
-    /** 核心分区：这些路径改可写等于绕过只读重挂。 */
+    /** 核心分区：这些路径改可写或删改等于突破只读保护。 */
     private const val CORE_PARTITIONS = "(system|vendor|product|system_ext|odm|apex|system_root)"
+
+    /** 系统核心数据目录（保留 `/data/local/tmp` 与 `/data/adb/modules/` 供常规运维）。 */
+    private const val CORE_DATA_SUBDIRS =
+        "(?:system|misc|vendor|apex|property|app|dalvik-cache|ota[^/\\s]*|adb(?!\\s*/modules/))"
+
+    /** 共享存储路径前缀（含全部常见别名）。 */
+    private const val SHARED_STORAGE_PREFIX =
+        "(?:sdcard|storage/emulated/0|storage/self/primary|data/media/0)"
+
+    /** 应用私有数据路径前缀（含内部 data/user/user_de 与外部 Android/data、obb 全部别名）。 */
+    private const val APP_PRIVATE_PREFIX =
+        "(?:data/(?:data|user/\\d+|user_de/\\d+)|$SHARED_STORAGE_PREFIX/android/(?:data|obb))"
+
+    /** 可选尾部重定向（避免 `cp /tmp/a /system/b 2>/dev/null` 绕过末尾目标锚定）。 */
+    private const val TRAILING_REDIRS = """(?:\s+\d*(?:>>?|>&|<&|<)\s*[^\s;|&)]+)*\s*(?:$|[;|&)])"""
+
+    /** 常见二进制路径前缀（含 SAR `/bin`、`/sbin`、`/system/vendor/bin`、`/apex/.../bin` 等）。 */
+    private const val BIN_DIR =
+        """(?:/(?:(?:system/)?(?:system_ext|vendor|product|odm)/(?:bin|xbin)|system/(?:bin|xbin)|apex/[a-z0-9._-]+/bin|bin|sbin|usr/(?:local/)?bin|data/adb/(?:ksu|magisk|ap)/bin)/)?"""
+
+    /** 命令前缀：绝对路径及 busybox/toybox 包装。 */
+    private const val COMMAND_PREFIX =
+        """$BIN_DIR(?:(?:busybox|toybox)(?:\s+--)?\s+)?"""
 
     /** 行内环境变量赋值前缀（如 `A=1 reboot`、`PATH=/system/bin rm -rf /data`）。 */
     private const val ENV_ASSIGN = """[a-z_][a-z0-9_]*=[^\s;|&)]*\s+"""
 
-    /** 常见 shell 关键字与命令包装器（允许带短横线选项，如 `env -i`、`nice -n 10`、`timeout 5`）。 */
+    /** 命令前允许出现的重定向前缀（POSIX/mksh 合法语法，如 `</dev/null reboot`、`2>/dev/null rm -rf /data`）。 */
+    private const val LEADING_REDIR = """\d*(?:>>?|<<?|<>|>&|<&)\s*[^\s;|&()]+\s+"""
+
+    /** 常见 shell 关键字与命令包装器（支持绝对路径前缀、`env -u VAR`、带参 `nice`/`timeout`/`xargs` 等）。 */
     private const val WRAPPER_WORD =
-        """(?:(?:then|else|do|if|elif|while|until|in|time|nohup|setsid|command|builtin|env|xargs|watch|nice|ionice|chrt|taskset|stdbuf)(?:\s+-[a-z0-9-]+(?:\s+\d+)?){0,4}|timeout(?:\s+-[a-z0-9-]+|\s+\d+[smhd]?){0,4})\s+"""
+        """(?:(?:then|else|do|if|elif|while|until|in)|${COMMAND_PREFIX}env(?:\s+(?:-(?:u|c)\s+[^\s;|&)]+|-[a-z0-9-]+(?:=[^\s;|&)]*)?|[a-z_][a-z0-9_]*=[^\s;|&)]*)){0,6}|${COMMAND_PREFIX}command(?:\s+(?:-p|--)){0,2}|${COMMAND_PREFIX}(?:time|nohup|setsid|builtin|xargs|watch|nice|ionice|chrt|taskset|stdbuf|timeout)(?:\s+(?:-(?:n|s|k|p|l|d|t)\s+[^\s;|&)]+|-[a-z0-9-]+(?:=[^\s;|&)]*)?|\d+[smhd]?)){0,5})\s+"""
 
-    /** 一条命令的起点：行首、分隔符或 find `-exec`/`-ok` 之后，可带多层行内变量赋值与包装命令。 */
+    /** 一条命令的起点：行首、分隔符或 find `-exec`/`-ok` 之后，可带多层行内赋值、前置重定向与包装命令。 */
     private const val COMMAND_START =
-        """(?:^|[;|&({!]\s*|-(?:exec|execdir|ok)\s+)(?:$ENV_ASSIGN|$WRAPPER_WORD){0,6}"""
-
-    /** 命令前缀：绝对路径（含 Android SAR 常见 `/bin`、`/sbin`、`/system/xbin`）及 busybox/toybox 包装。 */
-    private const val COMMAND_PREFIX =
-        """(?:/(?:(?:system|system_ext|vendor|product|odm)/(?:bin|xbin)|bin|sbin|usr/bin|data/adb/(?:ksu|magisk|ap)/bin)/)?(?:(?:busybox|toybox)(?:\s+--)?\s+)?"""
+        """(?:^|[;|&({!]\s*|-(?:exec|execdir|ok|okdir)\s+)(?:$ENV_ASSIGN|$LEADING_REDIR|$WRAPPER_WORD){0,6}"""
 
     /** 拼一个「命令位置 + 前缀 + 命令名」的正则片段。 */
     private fun command(name: String): String = COMMAND_START + COMMAND_PREFIX + name + """\b"""
+
+    /** 原始脚本里的 ANSI-C 转义（`$'\x72\x65\x62\x6f\x6f\x74'`），必须在 `normalize()` 去引号前探测。 */
+    private val ANSI_C_QUOTE = Regex("""\$'[^'\r\n]{1,64}'""")
 
     /**
      * Tier 3 · 不可逆变砖 / 数据销毁红线：未开启对应细分权限时由硬编码规则直接拦截；
@@ -189,22 +214,29 @@ object RootCommandGuard {
             HighRiskCategory.BLOCK_FLASH_MEMORY_RAW,
             Regex(
                 command("(?:cat|dd|cp|mv|install|base64|strings|xxd|hexdump|debugfs|e2fsck|fsck|resize2fs|lpmake)") +
-                    """[^|;&]*\s/dev/(?:block|disk|mmcblk|nvme|sd[a-z]|ufs)\b""",
+                    """[^|;&]*(?:\s|=)/dev/(?:block|disk|mmcblk|nvme|sd[a-z]|ufs)\b""",
             ),
             unconfinedCaps = true,
         ),
         Rule(
             "高风险操作使用不确定路径",
             HighRiskCategory.SYSTEM_DATA_DESTRUCTION,
-            // 变量、命令替换、路径穿越、重斜杠，以及落在工作区/共享存储之外的通配符都可能解析到核心目录；
-            // 明确停留在 `/data/local/tmp/`、`/data/adb/modules/` 或共享存储内的无穿越通配符分别放行或归入共享存储规则。
+            // 变量（含无前导斜杠的 `rm -rf $p`、`> $p`）、命令替换、路径穿越、重斜杠，以及落在工作区/共享存储之外的通配符
+            // 都可能解析到核心目录；明确停留在 `/data/local/tmp/`、`/data/adb/modules/` 或共享存储内的无穿越通配符分别放行或归入共享存储规则。
             Regex(
                 command("(?:rm|unlink|rmdir|cp|mv|install|shred|truncate|dd|tee)") +
-                    """[^|;&]*\s/(?:[^\s|;&]*(?:\$|`|/\.\.(?:/|$)|/\.(?:/|$)|/{2,})|(?!(?:data/local/tmp/|data/adb/modules/|sdcard/|storage/emulated/0/|storage/self/primary/|data/media/0/))[^\s|;&]*(?:[*?]|\[))""",
+                    """[^|;&]*\s(?:[^\s|;&]*(?:\$|`)|/(?:[^\s|;&]*(?:/\.\.(?:/|$)|/\.(?:/|$)|/{2,})|(?!(?:data/local/tmp/|data/adb/modules/|sdcard/|storage/emulated/0/|storage/self/primary/|data/media/0/))[^\s|;&]*(?:[*?]|\[)))""" +
+                    """|(?:>|>>)\s*[^\s|;&]*(?:\$|`)""",
             ),
             unconfinedCaps = true,
         ),
-        // ---- 数据销毁：保护数据根与系统关键目录；/data/local/tmp 与模块目录仍可常规操作 ----
+        // ---- 数据销毁：保护根文件系统、数据根与系统关键目录；/data/local/tmp 与模块目录仍可常规操作 ----
+        Rule(
+            "删除根文件系统",
+            HighRiskCategory.SYSTEM_DATA_DESTRUCTION,
+            Regex(command("(?:rm|unlink|rmdir)") + """[^|;&]*\s/+(?:\s|$|[;|&)])"""),
+            unconfinedCaps = true,
+        ),
         Rule(
             "删除数据根",
             HighRiskCategory.SYSTEM_DATA_DESTRUCTION,
@@ -219,10 +251,10 @@ object RootCommandGuard {
             "删除时使用不确定路径",
             HighRiskCategory.SYSTEM_DATA_DESTRUCTION,
             // 变量、命令替换、通配符和路径穿越无法在静态分类时可靠解析，按极危处理，
-            // 防止 `rm -rf /$name`、`rm -rf /d*` 或 `/data/../data` 绕过数据根规则。
+            // 防止 `rm -rf $p`、`rm -rf /$name`、`rm -rf /d*` 或 `/data/../data` 绕过数据根规则。
             Regex(
                 command("(?:rm|unlink|rmdir)") +
-                    """[^|;&]*\s/(?:\$|`|[*?]|\[|data/(?:\.\.?(?:/|$)|/{2,}))""",
+                    """[^|;&]*\s(?:\$|`|/(?:\$|`|[*?]|\[|data/(?:\.\.?(?:/|$)|/{2,})))""",
             ),
         ),
         Rule(
@@ -230,46 +262,54 @@ object RootCommandGuard {
             HighRiskCategory.SYSTEM_DATA_DESTRUCTION,
             Regex(
                 command("(?:rm|unlink|rmdir)") +
-                    """[^|;&]*\s/data/(?:system|misc|vendor|apex|property|app|dalvik-cache|ota[^/\s]*|adb(?!\s*/modules/))(?:\s|/|$|[;|&)])""",
+                    """[^|;&]*\s/data/$CORE_DATA_SUBDIRS(?:\s|/|$|[;|&)])""",
             ),
         ),
         Rule(
             "删除内置存储根",
             HighRiskCategory.SHARED_STORAGE_DELETE,
-            Regex(command("(?:rm|unlink|rmdir)") + """[^|;&]*\s/(?:sdcard|storage/emulated/0|storage/self/primary|data/media/0)/?\s*(?:$|[;|&)])"""),
+            Regex(command("(?:rm|unlink|rmdir)") + """[^|;&]*\s/$SHARED_STORAGE_PREFIX/?\s*(?:$|[;|&)])"""),
         ),
         Rule(
             "删除内置存储关键目录或通配",
             HighRiskCategory.SHARED_STORAGE_DELETE,
             Regex(
                 command("(?:rm|unlink|rmdir|shred|truncate)") +
-                    """[^|;&]*\s/(?:sdcard|storage/emulated/0|storage/self/primary|data/media/0)/(?:[^\s|;&]*(?:[*?]|\[)|(?:dcim|pictures|download|documents|movies|music)\b)""",
+                    """[^|;&]*\s/$SHARED_STORAGE_PREFIX/(?:[^\s|;&]*(?:[*?]|\[)|(?:dcim|pictures|download|documents|movies|music)\b)""",
             ),
         ),
         Rule(
             "批量删除",
             HighRiskCategory.SYSTEM_DATA_DESTRUCTION,
-            Regex(command("find") + """[^|;&]*\s/data\b[^|;&]*\s-(?:delete\b|exec(?:dir)?\s+(?:\S+/)?(?:rm|unlink|rmdir|shred|truncate)\b)"""),
+            // 排除 `/data/local/tmp` 与 `/data/adb/modules` 常规工作目录，避免误杀合法清理；覆盖 `-delete`/`-exec`/`-execdir`/`-ok`/`-okdir`。
+            Regex(
+                command("find") +
+                    """[^|;&]*\s/data(?!/local/tmp(?:/|\s|$|[;|&)])|/adb/modules(?:/|\s|$|[;|&)]))\b[^|;&]*\s-(?:delete\b|(?:exec|ok)(?:dir)?\s+(?:\S+/)?(?:rm|unlink|rmdir|shred|truncate)\b)""",
+            ),
         ),
         Rule(
             "批量删除",
             HighRiskCategory.SHARED_STORAGE_DELETE,
-            Regex(command("find") + """[^|;&]*\s/(?:sdcard|storage/emulated/0|storage/self/primary|data/media/0)\b[^|;&]*\s-(?:delete\b|exec(?:dir)?\s+(?:\S+/)?(?:rm|unlink|rmdir|shred|truncate)\b)"""),
+            Regex(
+                command("find") +
+                    """[^|;&]*\s/$SHARED_STORAGE_PREFIX\b[^|;&]*\s-(?:delete\b|(?:exec|ok)(?:dir)?\s+(?:\S+/)?(?:rm|unlink|rmdir|shred|truncate)\b)""",
+            ),
         ),
         Rule(
             "覆写系统数据",
             HighRiskCategory.SYSTEM_DATA_DESTRUCTION,
             Regex(
                 command("(?:shred|truncate)") +
-                    """[^|;&]*\s/data/(?:system|misc|vendor|apex|property|app|dalvik-cache|adb(?!\s*/modules/))\b""",
+                    """[^|;&]*\s/data/$CORE_DATA_SUBDIRS\b""" +
+                    """|(?:>|>>|tee\s+)[^|;&]*/data/$CORE_DATA_SUBDIRS(?:/|\s|$|[;|&)])""",
             ),
         ),
         Rule(
             "覆盖系统数据",
             HighRiskCategory.SYSTEM_DATA_DESTRUCTION,
             Regex(
-                command("(?:cp|mv|install|dd)") +
-                    """[^|;&]*(?:\s|=)/(?:data/(?:system|misc|vendor|apex|property|app|dalvik-cache|adb(?!\s*/modules/)))(?:\s|/|$|[;|&)])""",
+                command("(?:cp|mv|install|dd|ln)") +
+                    """[^|;&]*(?:\s|=)/data/$CORE_DATA_SUBDIRS(?:\s|/|$|[;|&)])""",
             ),
         ),
         // ---- 物理内存 ----
@@ -305,8 +345,12 @@ object RootCommandGuard {
             "写核心分区",
             HighRiskCategory.CORE_PARTITION_WRITE,
             Regex(
-                command("(?:tee|truncate|sed)") +
-                    """[^|;&]*\s/(?:system|vendor|product|system_ext|odm|apex|system_root)(?:/|\s|$|[;|&)])""",
+                command("(?:tee|truncate|rm|unlink|rmdir|shred)") +
+                    """[^|;&]*\s/$CORE_PARTITIONS(?:/|\s|$|[;|&)])""" +
+                    """|""" + command("sed") +
+                    """[^|;&]*\s-i\b[^|;&]*\s/$CORE_PARTITIONS(?:/|\s|$|[;|&)])""" +
+                    """|""" + command("tar") +
+                    """[^|;&]*\s-[a-z]*x[a-z]*[^|;&]*\s(?:-c|--directory(?:=|\s+))\s*/$CORE_PARTITIONS(?:/|\s|$|[;|&)])""",
             ),
             unconfinedCaps = true,
         ),
@@ -314,15 +358,19 @@ object RootCommandGuard {
             "写核心分区",
             HighRiskCategory.CORE_PARTITION_WRITE,
             Regex(
-                command("(?:cp|mv|install)") +
-                    """[^|;&]*\s/(?:system|vendor|product|system_ext|odm|apex|system_root)(?:/[^\s;|&]*)?\s*(?:$|[;|&)])""",
+                command("(?:cp|mv|install|ln)") +
+                    """[^|;&]*(?:\s(?:-t|--target-directory(?:=|\s+))\s*/$CORE_PARTITIONS(?:/[^\s;|&]*)?|\s/$CORE_PARTITIONS(?:/[^\s;|&]*)?$TRAILING_REDIRS)""",
             ),
             unconfinedCaps = true,
         ),
         Rule(
             "关闭 SELinux 强制模式",
             HighRiskCategory.SELINUX_SECURITY_POLICY,
-            Regex("""\bsetenforce\s+(0|permissive)\b"""),
+            Regex(
+                """\bsetenforce\s+(0|permissive)\b|""" +
+                    command("(?:setsebool|supolicy|magiskpolicy)") +
+                    """|""" + command("ksud") + """[^|;&]*\bsepolicy\b""",
+            ),
             unconfinedCaps = true,
         ),
         Rule(
@@ -398,14 +446,16 @@ object RootCommandGuard {
             HighRiskCategory.SYSTEM_SERVICE_PRIVILEGE,
             Regex(
                 command("(?:stop|start)") +
-                    """\s+(?:zygote|zygote_secondary|system_server|surfaceflinger|servicemanager)\b""",
+                    """\s+(?:zygote|zygote_secondary|system_server|surfaceflinger|servicemanager)\b""" +
+                    """|""" + command("(?:killall|pkill)") +
+                    """[^|;&]*\b(?:init|zygote|zygote_secondary|system_server|surfaceflinger|servicemanager|vold|netd|lmkd)\b""",
             ),
             unconfinedCaps = true,
         ),
         Rule(
             "嵌套 su 执行",
             HighRiskCategory.SYSTEM_SERVICE_PRIVILEGE,
-            Regex(command("su") + """[^|;&]*\s-c\b"""),
+            Regex(command("su")),
             unconfinedCaps = true,
         ),
         Rule(
@@ -427,12 +477,22 @@ object RootCommandGuard {
         Rule(
             "动态 Shell 展开",
             HighRiskCategory.DYNAMIC_SHELL_EVAL,
-            Regex("""(`|\$\(|\$\{?ifs\b)""", RegexOption.IGNORE_CASE),
+            Regex(
+                """(`|\$\(|\$\{?ifs\b)|""" +
+                    COMMAND_START + """\$\{?[a-z_0-9@*#?!-]|""" +
+                    COMMAND_START + """(?!\[\[?(?:\s|$))[^\s;|&()=]*(?:[*?]|\[[^\s;|&()\]]+\])[^\s;|&()=]*""",
+                RegexOption.IGNORE_CASE,
+            ),
         ),
         Rule(
             "二次 Shell 解释",
             HighRiskCategory.DYNAMIC_SHELL_EVAL,
-            Regex("""\b(eval|exec|source)\b|(?:^|[;&|\s])\.\s+|\b(sh|bash|mksh)\s+-c\b"""),
+            Regex(
+                command("(?:eval|exec|source|alias|sh|bash|mksh|ash|dash|ksh|zsh)") +
+                    """|(?:^|[;|&({!]\s*)\.\s+""" +
+                    """|""" + command("awk") + """[^|;&]*\bsystem\s*\(""" +
+                    """|""" + command("(?:python|python3|perl|ruby|node|lua|php)") + """[^|;&]*\s-(?:c|e|r)\b""",
+            ),
         ),
         Rule(
             "挂载或卸载",
@@ -472,27 +532,35 @@ object RootCommandGuard {
             unconfinedCaps = true,
         ),
         Rule(
-            "修改 Android 系统属性",
+            "修改 Android 系统属性或系统设置",
             HighRiskCategory.SYSTEM_PROPERTIES_WRITE,
-            Regex(command("(?:setprop|resetprop)")),
+            Regex(
+                command("(?:setprop|resetprop)") +
+                    """|""" + command("settings") + """\s+(?:put|delete|reset)\b""",
+            ),
         ),
         Rule(
             "修改或删除应用私有数据",
             HighRiskCategory.APP_PRIVATE_DATA_MODIFY,
             Regex(
                 command("(?:rm|unlink|rmdir|shred|truncate)") +
-                    """[^|;&]*\s/(?:data/(?:data|user/\d+|user_de/\d+)|(?:sdcard|storage/emulated/0|storage/self/primary)/android/(?:data|obb))(?:/|\s|$|[;|&)])""" +
-                    """|(?:>|>>|tee\s+|of\s*=)[^|;&]*/(?:data/(?:data|user/\d+|user_de/\d+)|(?:sdcard|storage/emulated/0|storage/self/primary)/android/(?:data|obb))/""" +
-                    """|""" + command("(?:cp|mv|install)") +
-                    """[^|;&]*\s/(?:data/(?:data|user/\d+|user_de/\d+)|(?:sdcard|storage/emulated/0|storage/self/primary)/android/(?:data|obb))(?:/[^\s;|&]*)?\s*(?:$|[;|&)])""" +
+                    """[^|;&]*\s/$APP_PRIVATE_PREFIX(?:/|\s|$|[;|&)])""" +
+                    """|(?:>|>>|tee\s+|of\s*=)[^|;&]*/$APP_PRIVATE_PREFIX/""" +
+                    """|""" + command("(?:cp|mv|install|ln)") +
+                    """[^|;&]*(?:\s(?:-t|--target-directory(?:=|\s+))\s*/$APP_PRIVATE_PREFIX(?:/[^\s;|&]*)?|\s/$APP_PRIVATE_PREFIX(?:/[^\s;|&]*)?$TRAILING_REDIRS)""" +
                     """|""" + command("sed") +
-                    """[^|;&]*\s-i\b[^|;&]*/(?:data/(?:data|user/\d+|user_de/\d+)|(?:sdcard|storage/emulated/0|storage/self/primary)/android/(?:data|obb))/""",
+                    """[^|;&]*\s-i\b[^|;&]*/$APP_PRIVATE_PREFIX/""",
             ),
         ),
         Rule(
-            "安装卸载或禁用应用",
+            "安装卸载、授权变更或禁用应用",
             HighRiskCategory.PACKAGE_INSTALL_REMOVE,
-            Regex(command("(?:pm|cmd\\s+package)") + """\s+(?:uninstall|install|clear|disable|disable-user|hide|suspend)\b"""),
+            Regex(
+                command("(?:pm|cmd\\s+package)") +
+                    """\s+(?:uninstall|install|clear|disable|disable-user|disable-until-used|enable|hide|unhide|suspend|unsuspend|grant|revoke)\b""" +
+                    """|""" + command("(?:appops|cmd\\s+appops)") + """\s+(?:set|reset)\b""" +
+                    """|""" + command("dpm") + """\s+(?:set-|remove-|clear-)""",
+            ),
         ),
     )
 
@@ -502,10 +570,20 @@ object RootCommandGuard {
      * 多条规则同时命中时按最高风险档定级（`CRITICAL > HIGH > ELEVATED > LOW`）。
      */
     fun classify(script: String, profile: Profile = Profile.STRICT): Assessment {
-        val normalized = normalize(script)
-        val criticalMatches = matchRules(normalized, CRITICAL_RULES)
-        val highMatches = matchRules(normalized, HIGH_RULES)
-        val elevatedMatches = matchRules(normalized, ELEVATED_RULES)
+        val normalized = canonicalizeInlineAbsolutePaths(normalize(script))
+        val effective = expandCdRelativePaths(normalized)
+        val criticalMatches = matchRules(effective, CRITICAL_RULES)
+        val highMatches = matchRules(effective, HIGH_RULES)
+        val elevatedMatches = matchRules(effective, ELEVATED_RULES).toMutableList()
+        ANSI_C_QUOTE.find(script)?.let { hit ->
+            elevatedMatches.add(
+                Rule(
+                    "动态 Shell 展开（ANSI-C 转义）",
+                    HighRiskCategory.DYNAMIC_SHELL_EVAL,
+                    ANSI_C_QUOTE,
+                ) to hit.value,
+            )
+        }
 
         val (tier, primaryMatches) = when {
             criticalMatches.isNotEmpty() -> RiskTier.CRITICAL to criticalMatches
@@ -639,7 +717,244 @@ object RootCommandGuard {
         return out.toString().replace(WHITESPACE, " ").lowercase(Locale.ROOT)
     }
 
+    /**
+     * 规范化脚本里直接写出的绝对路径中的 `..`、`.` 与 `//`（如 `rm -rf /data/local/tmp/../../../system`、
+     * `echo evil > /data/adb/modules/../service.d/a.sh`、`rm -rf //data`），不影响 `https://` 等 URI。
+     */
+    internal fun canonicalizeInlineAbsolutePaths(normalized: String): String {
+        if (!normalized.contains("/.") && !normalized.contains("//")) return normalized
+        return INLINE_ABSOLUTE_PATH.replace(normalized) { match ->
+            val prefix = match.groupValues[1]
+            val path = match.groupValues[2]
+            if (path.contains("/.") || path.contains("//")) {
+                prefix + canonicalizePosixPath(path)
+            } else {
+                match.value
+            }
+        }
+    }
+
+    /**
+     * 轻量 `cd` / `pushd` 相对路径追踪展开：防止 `cd /data && rm -rf system`、
+     * `cd /sys/fs/selinux && echo 0 > enforce`、`cd /dev/block && cat sda` 等切换工作目录后
+     * 用相对路径绕过全部绝对路径规则。
+     *
+     * 仅追踪受保护路径语义（读写/删除/权限/块设备读取），保留原文并追加展开后的虚拟语句，
+     * 不会破坏 `cd /data && ls -la` 或 `cd /data/local/tmp && rm -rf build` 等合法命令。
+     */
+    internal fun expandCdRelativePaths(normalized: String): String {
+        if (!CD_HINT.containsMatchIn(normalized)) return normalized
+        val clauses = CLAUSE_SPLIT.split(normalized)
+        var cwd: String? = null
+        val expanded = mutableListOf<String>()
+        for (rawClause in clauses) {
+            val clause = rawClause.trim()
+            if (clause.isEmpty()) continue
+            val tokens = clause.split(' ').filter { it.isNotEmpty() }
+            if (tokens.isEmpty()) continue
+            val cmdIndex = findBaseCommandIndex(tokens)
+            val baseCmd = if (cmdIndex in tokens.indices) stripCommandName(tokens[cmdIndex]) else ""
+            if (baseCmd == "cd" || baseCmd == "pushd") {
+                val target = tokens.drop(cmdIndex + 1).firstOrNull { !it.startsWith("-") }
+                cwd = when {
+                    target == null -> null
+                    target.startsWith("/") -> canonicalizePosixPath(target)
+                    cwd != null -> canonicalizePosixPath("${cwd.trimEnd('/')}/$target")
+                    else -> null
+                }
+                continue
+            }
+            val currentDir = cwd ?: continue
+            val rewritten = rewriteClauseWithCwd(tokens, cmdIndex, baseCmd, currentDir)
+            if (rewritten != null) expanded += rewritten
+        }
+        return if (expanded.isEmpty()) normalized else normalized + "; " + expanded.joinToString("; ")
+    }
+
+    private fun findBaseCommandIndex(tokens: List<String>): Int {
+        var i = 0
+        while (i < tokens.size) {
+            val tok = tokens[i]
+            if (ENV_ASSIGN_TOKEN.matches(tok)) {
+                i++
+                continue
+            }
+            if (LEADING_REDIR_TOKEN.matches(tok)) {
+                i += if (REDIR_ONLY_TOKEN.matches(tok)) 2 else 1
+                continue
+            }
+            val name = stripCommandName(tok)
+            if (name in CD_SKIP_WRAPPERS) {
+                i++
+                while (i < tokens.size && tokens[i].startsWith("-")) i++
+                continue
+            }
+            if (name == "busybox" || name == "toybox") {
+                i++
+                if (i < tokens.size && tokens[i] == "--") i++
+                continue
+            }
+            return i
+        }
+        return tokens.size
+    }
+
+    private fun stripCommandName(token: String): String =
+        token.trimStart('(', '{', '!').substringAfterLast('/')
+
+    private fun resolveRelativeArg(cwd: String, arg: String): String {
+        if (arg.isEmpty() || arg.startsWith("/")) return arg
+        if (arg == ".") return cwd
+        val joined = "${cwd.trimEnd('/')}/$arg"
+        return if (arg.contains('$') || arg.contains('`') || arg.contains('*') || arg.contains('?') || arg.contains('[')) {
+            joined
+        } else {
+            canonicalizePosixPath(joined)
+        }
+    }
+
+    private fun canonicalizePosixPath(path: String): String {
+        if (path.contains('$') || path.contains('`') || path.contains('*') || path.contains('?') || path.contains('[')) {
+            return path
+        }
+        val stack = ArrayDeque<String>()
+        for (part in path.split('/')) {
+            when {
+                part.isEmpty() || part == "." -> Unit
+                part == ".." -> if (stack.isNotEmpty()) stack.removeLast()
+                else -> stack.addLast(part)
+            }
+        }
+        return if (stack.isEmpty()) "/" else "/" + stack.joinToString("/")
+    }
+
+    private fun rewriteClauseWithCwd(
+        tokens: List<String>,
+        cmdIndex: Int,
+        baseCmd: String,
+        cwd: String,
+    ): String? {
+        val out = tokens.toMutableList()
+        var changed = false
+
+        // 1. 任何命令（含 echo/printf）上的输出重定向相对目标均须按当前目录解析（如 `cd /sys/fs/selinux && echo 0 > enforce`）。
+        var i = 0
+        while (i < out.size) {
+            val tok = out[i]
+            val inlineMatch = INLINE_OUT_REDIR.matchEntire(tok)
+            if (inlineMatch != null) {
+                val op = inlineMatch.groupValues[1]
+                val target = inlineMatch.groupValues[2]
+                if (!target.startsWith("/") && !target.startsWith("&")) {
+                    out[i] = op + resolveRelativeArg(cwd, target)
+                    changed = true
+                }
+            } else if (OUT_REDIR_OP.matches(tok) && i + 1 < out.size) {
+                val target = out[i + 1]
+                if (!target.startsWith("/") && !target.startsWith("&")) {
+                    out[i + 1] = resolveRelativeArg(cwd, target)
+                    changed = true
+                }
+                i++
+            }
+            i++
+        }
+
+        // 2. 路径敏感命令的相对路径操作数按当前目录解析。
+        if (baseCmd in CD_PATH_COMMANDS && cmdIndex < out.size) {
+            val isSedInPlace = baseCmd == "sed" && out.drop(cmdIndex + 1).any { it == "-i" || it.startsWith("-i") }
+            val isTarExtract = baseCmd == "tar" && out.drop(cmdIndex + 1).any { it.startsWith("-") && 'x' in it }
+            var sedHasScriptFlag = false
+            var nonFlagSeen = 0
+            var j = cmdIndex + 1
+            while (j < out.size) {
+                val tok = out[j]
+                if (OUT_REDIR_OP.matches(tok)) {
+                    j += 2
+                    continue
+                }
+                if (INLINE_OUT_REDIR.matches(tok)) {
+                    j++
+                    continue
+                }
+                if (baseCmd == "find" && tok.startsWith("-")) break
+                if (baseCmd == "dd") {
+                    if (tok.startsWith("if=") && !tok.startsWith("if=/")) {
+                        out[j] = "if=" + resolveRelativeArg(cwd, tok.removePrefix("if="))
+                        changed = true
+                    } else if (tok.startsWith("of=") && !tok.startsWith("of=/")) {
+                        out[j] = "of=" + resolveRelativeArg(cwd, tok.removePrefix("of="))
+                        changed = true
+                    }
+                    j++
+                    continue
+                }
+                if (baseCmd == "tar") {
+                    if (isTarExtract && (tok == "-c" || tok == "--directory") && j + 1 < out.size) {
+                        val dir = out[j + 1]
+                        if (!dir.startsWith("/")) {
+                            out[j + 1] = resolveRelativeArg(cwd, dir)
+                            changed = true
+                        }
+                        j += 2
+                        continue
+                    }
+                    j++
+                    continue
+                }
+                if (tok.startsWith("-")) {
+                    if (baseCmd == "sed" && (tok == "-e" || tok == "-f")) {
+                        sedHasScriptFlag = true
+                        j += 2
+                    } else {
+                        j++
+                    }
+                    continue
+                }
+                if (baseCmd == "sed") {
+                    if (!isSedInPlace) break
+                    nonFlagSeen++
+                    if (!sedHasScriptFlag && nonFlagSeen == 1) {
+                        j++
+                        continue
+                    }
+                }
+                if (baseCmd in CD_SKIP_FIRST_OPERAND_COMMANDS) {
+                    nonFlagSeen++
+                    if (nonFlagSeen == 1) {
+                        j++
+                        continue
+                    }
+                }
+                if (!tok.startsWith("/") && tok != "{}" && tok != "+") {
+                    out[j] = resolveRelativeArg(cwd, tok)
+                    changed = true
+                }
+                j++
+            }
+        }
+        return if (changed) out.joinToString(" ") else null
+    }
+
     private const val MAX_SNIPPET_CHARS = 48
     private const val MAX_REPORTED_ACTIONS = 6
     private val WHITESPACE = Regex("""\s+""")
+    private val INLINE_ABSOLUTE_PATH = Regex("""(^|[\s=><;|&(])(/[^\s;|&)'"]+)""")
+    private val CD_HINT = Regex("""(?:^|[;|&({!]\s*)(?:cd|pushd)\b""")
+    private val CLAUSE_SPLIT = Regex("""(?:&&|\|\||[;|])""")
+    private val ENV_ASSIGN_TOKEN = Regex("""^[a-z_][a-z0-9_]*=.*$""")
+    private val LEADING_REDIR_TOKEN = Regex("""^\d*(?:>>?|<<?|<>|>&|<&).*$""")
+    private val REDIR_ONLY_TOKEN = Regex("""^\d*(?:>>?|<<?|<>|>&|<&)$""")
+    private val OUT_REDIR_OP = Regex("""^\d*>>?$""")
+    private val INLINE_OUT_REDIR = Regex("""^(\d*>>?)([^\s;|&)]+)$""")
+    private val CD_SKIP_WRAPPERS = setOf(
+        "then", "else", "do", "if", "elif", "while", "until", "in",
+        "time", "nohup", "setsid", "command", "builtin", "env",
+    )
+    private val CD_SKIP_FIRST_OPERAND_COMMANDS = setOf("chmod", "chown", "chgrp", "chcon")
+    private val CD_PATH_COMMANDS = setOf(
+        "rm", "unlink", "rmdir", "shred", "truncate", "cp", "mv", "install", "ln", "tee",
+        "sed", "find", "chmod", "chown", "chgrp", "setfacl", "chcon", "restorecon",
+        "cat", "dd", "base64", "strings", "xxd", "hexdump", "debugfs", "e2fsck", "fsck", "resize2fs", "tar",
+    )
 }

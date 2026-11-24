@@ -20,11 +20,47 @@ internal object AccessibilityAutomationPolicy {
     private val viewIdPattern = Regex("^([A-Za-z][A-Za-z0-9_]*(?:\\.[A-Za-z][A-Za-z0-9_]*){1,12}):id/[A-Za-z_][A-Za-z0-9_]{0,79}$")
     private val androidViewIdPattern = Regex("^android:id/[A-Za-z_][A-Za-z0-9_]{0,79}$")
 
-    /** 敏感系统组件：这些包名永远不能进白名单。本应用不在其中（见 [SELF_PACKAGE]）。 */
+    /**
+     * 敏感系统组件、权限/安装器及特权管理器（KernelSU/Magisk/APatch/Shizuku/国产 ROM 安全中心）：
+     * 这些包名默认不能进白名单或被 AI 副屏拉起，仅在显式开启 `ACCESSIBILITY_SYSTEM_APPS` 后才放行。
+     * 本应用不在其中（见 [SELF_PACKAGE]），本应用高危权限页与 Root 确认页另由不可绕过的自我提权护栏保护。
+     */
     private val reservedPackages = setOf(
-        "android", "com.android.settings", "com.android.systemui", "com.android.packageinstaller",
-        "com.google.android.packageinstaller", "com.google.android.permissioncontroller",
+        "android",
+        "com.android.settings",
+        "com.android.systemui",
+        "com.android.packageinstaller",
+        "com.google.android.packageinstaller",
+        "com.google.android.permissioncontroller",
         "com.android.permissioncontroller",
+        // Root / Shizuku 提权管理器
+        "me.weishu.kernelsu",
+        "com.rifsxd.ksunext",
+        "me.bmax.apatch",
+        "com.topjohnwu.magisk",
+        "io.github.vvb2060.magisk",
+        "moe.shizuku.privileged.api",
+        // 主流 OEM 安全中心、权限管理与安装器
+        "com.miui.securitycenter",
+        "com.miui.packageinstaller",
+        "com.oplus.securitypermission",
+        "com.coloros.securitypermission",
+        "com.oplus.appdetail",
+        "com.vivo.permissionmanager",
+        "com.iqoo.secure",
+        "com.huawei.systemmanager",
+        "com.hihonor.systemmanager",
+        "com.samsung.android.packageinstaller",
+        "com.samsung.android.lool",
+    )
+
+    private val selfPrivilegeGuardText = Regex(
+        "高危文件与命令权限|高危檔案與命令權限|high-risk\\s*file\\s*&\\s*command\\s*permissions|" +
+            "高リスクファイル・コマンド権限|고위험\\s*파일\\s*및\\s*명령\\s*권한|" +
+            "允许ai申请高危文件与命令权限|允許ai申請高危檔案與命令權限|" +
+            "allow\\s*ai\\s*to\\s*request\\s*high-risk|" +
+            "根通道高危命令|极危\\s*root\\s*命令|高风险\\s*root\\s*命令|critical\\s*root\\s*command",
+        RegexOption.IGNORE_CASE,
     )
     private val sensitiveText = Regex(
         "密码|口令|验证码|验证代码|动态码|支付|付款|收款|转账|转帐|银行卡|银行账户|授权|权限申请|" +
@@ -47,6 +83,8 @@ internal object AccessibilityAutomationPolicy {
         val text: String?,
         val direction: String?,
     )
+
+    fun isReservedPackage(packageName: String): Boolean = packageName in reservedPackages
 
     fun validPackage(packageName: String, allowReserved: Boolean = false): Boolean {
         if (allowReserved && packageName in reservedPackages) return true
@@ -95,6 +133,16 @@ internal object AccessibilityAutomationPolicy {
         val normalized = allWhitespace.replace(zeroWidthChars.replace(value, ""), "")
         // 保留原文匹配，避免归一化移除单词边界后漏报「Enter OTP」等提示。
         return sensitiveText.containsMatchIn(value) || sensitiveText.containsMatchIn(normalized)
+    }
+
+    /**
+     * 本应用高危权限开关页与 Root 警告确认页防 AI 自我提权文本识别（覆盖五种语言）。
+     * 该拦截不受 `accessibility_sensitive_windows` 开关放宽，防止 AI 自行打开高危开关或点击确认页。
+     */
+    fun containsSelfPrivilegeGuardText(value: CharSequence?): Boolean {
+        if (value == null) return false
+        val normalized = allWhitespace.replace(zeroWidthChars.replace(value, ""), "")
+        return selfPrivilegeGuardText.containsMatchIn(value) || selfPrivilegeGuardText.containsMatchIn(normalized)
     }
 
     fun parseAction(

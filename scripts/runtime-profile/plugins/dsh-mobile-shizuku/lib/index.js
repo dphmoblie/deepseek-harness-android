@@ -68,6 +68,7 @@ const VIRTUAL_ERROR_HINTS = {
   VIRTUAL_SCREEN_TEXT_UNSUPPORTED: '本次文字输入未能完成，可能已有部分写入；先观察输入框，不要重复整段输入，可请用户手动输入。',
   VIRTUAL_SCREEN_INJECTION_FAILED: '本次输入注入未完成；先观察当前界面确认状态，不要直接重复补点。',
   VIRTUAL_SCREEN_NODE_NOT_FOUND: '当前副屏窗口未找到匹配控件；先用 mobile_virtual_screen_tree（建议 compact=true）查看最新控件，再调整选择器或滚动后重试。',
+  VIRTUAL_SCREEN_TARGET_FORBIDDEN: '该目标受宿主防自我提权规则保护：禁止将本应用拉入副屏；若为系统设置或 Root/Shizuku 管理器，请由用户在高危权限设置中手动开启对应细分开关后再试。',
 }
 // 任务台账的固定恢复建议：与副屏那张表同形——只讲「下一步做什么」，不含任何设备文本，
 // 也不允许自动重放。拒绝与参数错误都会走到这里，所以模型看到的是码加上这句，而不是光秃秃一个码。

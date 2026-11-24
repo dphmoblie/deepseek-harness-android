@@ -534,7 +534,22 @@ class VirtualScreenService : Service() {
         if (verb == "follow" && !parameters.has(VirtualScreenPolicy.SELF_PACKAGE_FIELD)) {
             parameters.put(VirtualScreenPolicy.SELF_PACKAGE_FIELD, packageName)
         }
+        val allowSystemApps = io.deepseekharness.mobile.shizuku.HighRiskPermissionStore
+            .status(this)
+            .isAllowed(io.deepseekharness.mobile.shizuku.HighRiskCategory.ACCESSIBILITY_SYSTEM_APPS)
+        if (verb == "target") {
+            val targetPkg = parameters.optString("packageName").trim()
+            if (targetPkg.isNotEmpty()) {
+                VirtualScreenPolicy.requireAgentTargetAllowed(targetPkg, allowSystemApps)
+            }
+        }
         if (verb == "launch") {
+            val launchPkg = parameters.optString("package").trim().ifEmpty {
+                parameters.optString("component").trim().substringBefore('/', "")
+            }
+            if (launchPkg.isNotEmpty()) {
+                VirtualScreenPolicy.requireAgentTargetAllowed(launchPkg, allowSystemApps)
+            }
             val allowAnyScheme = io.deepseekharness.mobile.shizuku.HighRiskPermissionStore
                 .status(this)
                 .isAllowed(io.deepseekharness.mobile.shizuku.HighRiskCategory.VIRTUAL_SCREEN_UNRESTRICTED)

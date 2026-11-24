@@ -1607,6 +1607,119 @@ class RootSecurityTest {
         }
     }
 
+    @Test
+    fun `红队绕过回归：变量命令、通配符、ANSI-C、alias、管道Shell、cd相对路径、前置重定向、高危缺口与误伤修正`() {
+        val redTeamCases: List<Pair<String, HighRiskCategory>> = listOf(
+            // 1. 变量展开、通配符、ANSI-C 转义、mksh alias、管道与二次 Shell
+            "a=reb; b=oot; \$a\$b" to HighRiskCategory.DYNAMIC_SHELL_EVAL,
+            "c=rm; p=/data; \$c -rf \$p" to HighRiskCategory.DYNAMIC_SHELL_EVAL,
+            "/system/bin/reboo?" to HighRiskCategory.DYNAMIC_SHELL_EVAL,
+            "/system/bin/r[e]boot" to HighRiskCategory.DYNAMIC_SHELL_EVAL,
+            "/bin/r? -rf /data" to HighRiskCategory.DYNAMIC_SHELL_EVAL,
+            "\$'\\x72\\x65\\x62\\x6f\\x6f\\x74'" to HighRiskCategory.DYNAMIC_SHELL_EVAL,
+            "alias x=reboot; x" to HighRiskCategory.DYNAMIC_SHELL_EVAL,
+            "echo cmVib290 | base64 -d | sh" to HighRiskCategory.DYNAMIC_SHELL_EVAL,
+            "printf 'rm -rf /data' | /system/bin/sh -s" to HighRiskCategory.DYNAMIC_SHELL_EVAL,
+            "sh -e -c 'echo x'" to HighRiskCategory.DYNAMIC_SHELL_EVAL,
+            "sh -xc 'id'" to HighRiskCategory.DYNAMIC_SHELL_EVAL,
+            "sh /data/local/tmp/a.sh" to HighRiskCategory.DYNAMIC_SHELL_EVAL,
+            "busybox ash -c id" to HighRiskCategory.DYNAMIC_SHELL_EVAL,
+            "awk 'BEGIN{system(\"reboot\")}'" to HighRiskCategory.DYNAMIC_SHELL_EVAL,
+            "python3 -c 'import os; os.system(\"reboot\")'" to HighRiskCategory.DYNAMIC_SHELL_EVAL,
+            // 2. 无前导斜杠的不确定路径
+            "p=/data; rm -rf \$p" to HighRiskCategory.SYSTEM_DATA_DESTRUCTION,
+            "p=/system/etc/hosts; echo x > \$p" to HighRiskCategory.SYSTEM_DATA_DESTRUCTION,
+            // 3. cd / pushd 相对路径绕过全链路
+            "cd / && rm -rf data" to HighRiskCategory.SYSTEM_DATA_DESTRUCTION,
+            "cd /data && rm -rf system" to HighRiskCategory.SYSTEM_DATA_DESTRUCTION,
+            "cd /data && cd system && rm -rf locksettings.db" to HighRiskCategory.SYSTEM_DATA_DESTRUCTION,
+            "cd /data/local/tmp/../../system && rm -f build.prop" to HighRiskCategory.SYSTEM_DATA_DESTRUCTION,
+            "cd /data/local/tmp/../../../system && rm -f build.prop" to HighRiskCategory.CORE_PARTITION_WRITE,
+            "rm -rf /data/local/tmp/../../../system/bin" to HighRiskCategory.CORE_PARTITION_WRITE,
+            "echo evil > /data/adb/modules/../service.d/backdoor.sh" to HighRiskCategory.SYSTEM_DATA_DESTRUCTION,
+            "rm -rf //data" to HighRiskCategory.SYSTEM_DATA_DESTRUCTION,
+            "command reboot" to HighRiskCategory.DEVICE_POWER_CONTROL,
+            "command -p reboot" to HighRiskCategory.DEVICE_POWER_CONTROL,
+            "cd /sdcard && rm -rf DCIM" to HighRiskCategory.SHARED_STORAGE_DELETE,
+            "cd /sdcard && find . -delete" to HighRiskCategory.SHARED_STORAGE_DELETE,
+            "cd /sys/fs/selinux && echo 0 > enforce" to HighRiskCategory.SELINUX_SECURITY_POLICY,
+            "cd /proc && echo b > sysrq-trigger" to HighRiskCategory.DEVICE_POWER_CONTROL,
+            "cd /dev/block && cat sda" to HighRiskCategory.BLOCK_FLASH_MEMORY_RAW,
+            "cd /dev/block && dd if=sda of=/data/local/tmp/dump" to HighRiskCategory.BLOCK_FLASH_MEMORY_RAW,
+            "cd /data/data/com.example.app && rm -rf shared_prefs" to HighRiskCategory.APP_PRIVATE_DATA_MODIFY,
+            "cd /data/adb/service.d && echo evil > pwn.sh" to HighRiskCategory.SYSTEM_DATA_DESTRUCTION,
+            "cd /system && sed -i -e 's/a/b/' build.prop" to HighRiskCategory.CORE_PARTITION_WRITE,
+            // 4. 前置重定向与包装器路径/选项变体
+            "</dev/null reboot" to HighRiskCategory.DEVICE_POWER_CONTROL,
+            "2>/dev/null rm -rf /data" to HighRiskCategory.SYSTEM_DATA_DESTRUCTION,
+            "2>/dev/null pm uninstall com.example.app" to HighRiskCategory.PACKAGE_INSTALL_REMOVE,
+            "</dev/null su -c id" to HighRiskCategory.SYSTEM_SERVICE_PRIVILEGE,
+            "/system/bin/env reboot" to HighRiskCategory.DEVICE_POWER_CONTROL,
+            "busybox env -i -u PATH reboot" to HighRiskCategory.DEVICE_POWER_CONTROL,
+            "/system/vendor/bin/reboot" to HighRiskCategory.DEVICE_POWER_CONTROL,
+            // 5. 高危文件与命令补全
+            "rm -rf /" to HighRiskCategory.SYSTEM_DATA_DESTRUCTION,
+            "rm -rf --no-preserve-root /" to HighRiskCategory.SYSTEM_DATA_DESTRUCTION,
+            "rm -rf /system/bin" to HighRiskCategory.CORE_PARTITION_WRITE,
+            "unlink /vendor/etc/hosts" to HighRiskCategory.CORE_PARTITION_WRITE,
+            "echo evil > /data/adb/service.d/backdoor.sh" to HighRiskCategory.SYSTEM_DATA_DESTRUCTION,
+            "echo x > /data/system/locksettings.db" to HighRiskCategory.SYSTEM_DATA_DESTRUCTION,
+            "cp /data/local/tmp/evil /system/etc/hosts 2>/dev/null" to HighRiskCategory.CORE_PARTITION_WRITE,
+            "cp -t /system/etc /data/local/tmp/hosts" to HighRiskCategory.CORE_PARTITION_WRITE,
+            "tar -xf /data/local/tmp/p.tar -C /system" to HighRiskCategory.CORE_PARTITION_WRITE,
+            "cp /data/local/tmp/x /data/data/com.example.app/shared_prefs/a.xml 2>/dev/null" to HighRiskCategory.APP_PRIVATE_DATA_MODIFY,
+            "rm -rf /data/media/0/Android/data/com.example.app" to HighRiskCategory.APP_PRIVATE_DATA_MODIFY,
+            "find /data/system -ok rm -rf {} +" to HighRiskCategory.SYSTEM_DATA_DESTRUCTION,
+            "echo reboot | su" to HighRiskCategory.SYSTEM_SERVICE_PRIVILEGE,
+            "su 0 reboot" to HighRiskCategory.SYSTEM_SERVICE_PRIVILEGE,
+            "killall system_server" to HighRiskCategory.SYSTEM_SERVICE_PRIVILEGE,
+            "pkill -9 zygote" to HighRiskCategory.SYSTEM_SERVICE_PRIVILEGE,
+            "settings put secure enabled_accessibility_services com.evil/.Svc" to HighRiskCategory.SYSTEM_PROPERTIES_WRITE,
+            "pm grant com.example.app android.permission.READ_SMS" to HighRiskCategory.PACKAGE_INSTALL_REMOVE,
+            "appops set com.example.app RUN_IN_BACKGROUND ignore" to HighRiskCategory.PACKAGE_INSTALL_REMOVE,
+            "dpm set-device-owner com.example.app/.Admin" to HighRiskCategory.PACKAGE_INSTALL_REMOVE,
+            "magiskpolicy --live \"allow untrusted_app * * *\"" to HighRiskCategory.SELINUX_SECURITY_POLICY,
+            "ksud sepolicy check \"allow untrusted_app * * *\"" to HighRiskCategory.SELINUX_SECURITY_POLICY,
+            "dd if=/dev/block/sda of=/data/local/tmp/x" to HighRiskCategory.BLOCK_FLASH_MEMORY_RAW,
+        )
+        for ((script, expectedCategory) in redTeamCases) {
+            val assessment = RootCommandGuard.classify(script, RootCommandGuard.Profile.MAXIMUM)
+            assertTrue(
+                "红队样例必须命中 $expectedCategory: $script（实际命中 ${assessment.categories}）",
+                expectedCategory in assessment.categories,
+            )
+            try {
+                RootCommandGuard.verifyPermitted(script, RootCommandGuard.Profile.MAXIMUM, HighRiskPermissions.ALL_DISABLED)
+                fail("红队样例在总开关关闭时必须被硬拦截: $script")
+            } catch (e: RuntimeFailure) {
+                assertEquals("ROOT_SECURITY_VIOLATION", e.code)
+            }
+        }
+
+        // 误伤修正：合法只读与临时工作目录命令必须保持 LOW（不拦截）
+        val safeRegressions = listOf(
+            "sed -n '1,5p' /system/build.prop",
+            "find /data/local/tmp/build -delete",
+            "find /data/adb/modules/demo -delete",
+            "cd /data && ls -la",
+            "cd /data/local/tmp && rm -rf build",
+            "cd /system && sed -n '1,5p' build.prop",
+            "settings get global adb_enabled",
+            "[ -f /data/local/tmp/a ] && echo ok",
+            "find . -name '*.txt'",
+            "command -v su >/dev/null 2>&1",
+            "command -V reboot",
+        )
+        for (cmd in safeRegressions) {
+            val assessment = RootCommandGuard.verifyPermitted(
+                cmd,
+                RootCommandGuard.Profile.STRICT,
+                HighRiskPermissions.ALL_DISABLED,
+            )
+            assertTrue("合法只读/工作区命令不应被误杀: $cmd（实际命中 ${assessment.categories}）", assessment.categories.isEmpty())
+        }
+    }
+
     // ---------------------------------------------------------------- 辅助
 
     private fun decodeInner(wrapped: String): String {

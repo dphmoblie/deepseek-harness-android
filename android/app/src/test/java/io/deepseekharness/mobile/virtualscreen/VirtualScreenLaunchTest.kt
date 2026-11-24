@@ -71,6 +71,26 @@ class VirtualScreenLaunchTest {
         }
     }
 
+    @Test fun `副屏防自我提权门控：始终禁止本应用，系统与Root管理器受开关控制`() {
+        // 本应用无论开关开合都禁止拉入 AI 副屏
+        for (allowSystem in listOf(false, true)) {
+            val err = assertThrows(io.deepseekharness.mobile.runtime.RuntimeFailure::class.java) {
+                VirtualScreenPolicy.requireAgentTargetAllowed("io.deepseekharness.mobile", allowSystem)
+            }
+            assertEquals(VirtualScreenPolicy.TARGET_FORBIDDEN_CODE, err.code)
+        }
+        // 受保护系统组件与 Root/Shizuku 管理器：关则拒、开则放行
+        for (pkg in listOf("com.android.settings", "me.weishu.kernelsu", "moe.shizuku.privileged.api", "com.miui.securitycenter")) {
+            val err = assertThrows(io.deepseekharness.mobile.runtime.RuntimeFailure::class.java) {
+                VirtualScreenPolicy.requireAgentTargetAllowed(pkg, allowSystemApps = false)
+            }
+            assertEquals(VirtualScreenPolicy.TARGET_FORBIDDEN_CODE, err.code)
+            VirtualScreenPolicy.requireAgentTargetAllowed(pkg, allowSystemApps = true)
+        }
+        // 普通第三方应用始终放行
+        VirtualScreenPolicy.requireAgentTargetAllowed("com.tencent.mm", allowSystemApps = false)
+    }
+
     @Test fun `包名与组件规则沿用既有校验`() {
         assertEquals("com.tencent.mm", VirtualScreenPolicy.launchPackage("com.tencent.mm"))
         for (value in listOf("com", "1com.a", "com.tencent.mm/", "", "com..a")) {

@@ -764,6 +764,32 @@ object VirtualScreenPolicy {
         data class Uri(val uri: String) : LaunchRequest()
     }
 
+    const val TARGET_FORBIDDEN_CODE = "VIRTUAL_SCREEN_TARGET_FORBIDDEN"
+
+    /**
+     * AI 主动拉起、切换或跳转副屏目标应用时的防自我提权门控：
+     *  - 始终禁止将本应用（`io.deepseekharness.mobile`）拉入副屏，防止 AI 通过副屏截图+点击自行开启高危开关或确认页；
+     *  - 默认禁止拉起系统设置、权限控制器、安装器及 Root/Shizuku 管理器（与 `AccessibilityAutomationPolicy.reservedPackages` 同源），
+     *    仅在显式开启「无障碍操作受保护系统组件与权限弹窗」（[allowSystemApps]）时才放行。
+     */
+    fun requireAgentTargetAllowed(packageName: String, allowSystemApps: Boolean) {
+        val normalized = packageName.trim()
+        if (normalized == io.deepseekharness.mobile.accessibility.AccessibilityAutomationPolicy.SELF_PACKAGE) {
+            throw io.deepseekharness.mobile.runtime.RuntimeFailure(
+                TARGET_FORBIDDEN_CODE,
+                "禁止将 DeepSeek Harness 本应用拉入 AI 副屏，防止自我提权操作",
+            )
+        }
+        if (!allowSystemApps &&
+            io.deepseekharness.mobile.accessibility.AccessibilityAutomationPolicy.isReservedPackage(normalized)
+        ) {
+            throw io.deepseekharness.mobile.runtime.RuntimeFailure(
+                TARGET_FORBIDDEN_CODE,
+                "目标应用属于受保护系统组件或特权管理器；如需在副屏操作，请先在「AI 高危文件与命令权限」中开启对应开关",
+            )
+        }
+    }
+
     /**
      * launch 入参校验（纯函数）：`component`、`package`、`uri` 必须且只能给一个。
      * 同时给两个也拒绝：无法判断 AI 想要哪一个，猜一个等于替调用方做决定。

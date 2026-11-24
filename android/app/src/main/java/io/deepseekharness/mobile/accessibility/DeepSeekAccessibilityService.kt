@@ -166,6 +166,14 @@ class DeepSeekAccessibilityService : AccessibilityService() {
             if (!AccessibilityAutomationStore.packageAllowed(this, packageName)) {
                 return failure("ACCESSIBILITY_PACKAGE_DENIED", "当前应用不在无障碍自动化白名单中")
             }
+            // 防 AI 自我提权（硬底线，不受 `accessibility_sensitive_windows` 开关放宽）：
+            // 禁止无障碍在 Root 警告确认页激活期间、或本应用高危权限开关页面上执行任何读取与操作。
+            if (io.deepseekharness.mobile.RootCommandApprovalActivity.activeApprovalWindowOpen) {
+                return failure("ACCESSIBILITY_SENSITIVE_WINDOW", "Root 高危命令警告确认页正在显示，禁止自动化操作")
+            }
+            if (packageName == AccessibilityAutomationPolicy.SELF_PACKAGE && containsSelfPrivilegeGuardWindow(root)) {
+                return failure("ACCESSIBILITY_SENSITIVE_WINDOW", "检测到本应用高危权限或根通道确认界面，禁止 AI 自行操作")
+            }
             if (!allowSensitiveWindows() && containsSensitiveWindow(root)) return failure("ACCESSIBILITY_SENSITIVE_WINDOW", "检测到密码、验证码、支付或权限窗口，已拒绝自动化")
             when (command) {
                 "accessibilityTree" -> if (param.isBlank()) tree(root, packageName)
@@ -526,6 +534,34 @@ class DeepSeekAccessibilityService : AccessibilityService() {
         return found
     }
 
+    /** 扫描本应用窗口是否处于高危权限设置或 Root 确认页（有界遍历，不可被开关放开）。 */
+    private fun containsSelfPrivilegeGuardWindow(root: AccessibilityNodeInfo): Boolean {
+        var found = false
+        var scanned = 0
+        fun visit(node: AccessibilityNodeInfo?, depth: Int) {
+            if (node == null || found) return
+            if (depth > MAX_TREE_DEPTH || ++scanned > MAX_SENSITIVE_SCAN_NODES) return
+            if (AccessibilityAutomationPolicy.containsSelfPrivilegeGuardText(node.viewIdResourceName) ||
+                AccessibilityAutomationPolicy.containsSelfPrivilegeGuardText(node.text) ||
+                AccessibilityAutomationPolicy.containsSelfPrivilegeGuardText(node.hintText) ||
+                AccessibilityAutomationPolicy.containsSelfPrivilegeGuardText(node.contentDescription)
+            ) {
+                found = true
+                return
+            }
+            for (index in 0 until node.childCount) {
+                val child = node.getChild(index) ?: continue
+                try {
+                    visit(child, depth + 1)
+                } finally {
+                    child.recycle()
+                }
+            }
+        }
+        visit(root, 0)
+        return found
+    }
+
     private fun isLockedOrScreenOff(): Boolean {
         val keyguard = getSystemService(KeyguardManager::class.java)
         val power = getSystemService(PowerManager::class.java)
@@ -560,6 +596,13 @@ class DeepSeekAccessibilityService : AccessibilityService() {
         }
         val root = displayWindowRoot(displayId)
             ?: return denied("ACCESSIBILITY_WINDOW_UNAVAILABLE", "显示编号 $displayId 上没有可读取的窗口（窗口可能正在切换或刚重建，可稍后重试或先用截图）")
+        val displayPkg = root.packageName?.toString().orEmpty()
+        if (io.deepseekharness.mobile.RootCommandApprovalActivity.activeApprovalWindowOpen ||
+            (displayPkg == AccessibilityAutomationPolicy.SELF_PACKAGE && containsSelfPrivilegeGuardWindow(root))
+        ) {
+            root.recycle()
+            return denied("ACCESSIBILITY_SENSITIVE_WINDOW", "检测到本应用高危权限或根通道确认界面，禁止 AI 自行操作")
+        }
         if (!allowSensitiveWindows() && containsSensitiveWindow(root)) {
             root.recycle()
             return denied("ACCESSIBILITY_SENSITIVE_WINDOW", "检测到密码、验证码、支付或权限窗口，已拒绝读取")
