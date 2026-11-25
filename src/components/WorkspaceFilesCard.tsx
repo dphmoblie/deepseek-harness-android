@@ -35,7 +35,10 @@ export function WorkspaceFilesCard() {
   const [actionError, setActionError] = useState<string | null>(null)
   const activeRef = useRef(true)
 
-  useEffect(() => () => { activeRef.current = false }, [])
+  useEffect(() => {
+    activeRef.current = true
+    return () => { activeRef.current = false }
+  }, [])
 
   const load = useCallback((): void => {
     setState({ status: 'loading' })

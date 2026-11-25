@@ -21,8 +21,8 @@ class RuntimeWorkspaceFilesTest {
     @JvmField
     val temporaryFolder = TemporaryFolder()
 
-    private fun manager(root: Path) = RuntimeWorkspaceFiles(
-        root.resolve("runtime/current/root/1").toFile(),
+    private fun manager(root: Path) = RuntimeWorkspaceFiles.forDefaultWorkspace(
+        root.resolve("runtime/current").toFile(),
         root.resolve("cache").toFile(),
         root.toFile(),
     )
@@ -35,7 +35,7 @@ class RuntimeWorkspaceFilesTest {
     @Test
     fun rejectsInvalidRelativePathsBeforeAccess() {
         val files = manager(temporaryFolder.root.toPath())
-        for (path in listOf("", "/file", "../file", "nested/../file", "nested//file", "nested/./file", "nested\\file", "bad\u0000file", "bad\nfile", "x".repeat(241))) {
+        for (path in listOf("", "/file", "../file", "nested/../file", "nested//file", "nested/./file", "nested\\file", "bad\u0000file", "bad\nfile", "bad\tfile", "x".repeat(241))) {
             assertEquals("WORKSPACE_PATH_INVALID", assertThrows(RuntimeFailure::class.java) { files.delete(path) }.code)
             assertEquals("WORKSPACE_PATH_INVALID", assertThrows(RuntimeFailure::class.java) { files.copyForSharing(path) }.code)
         }
@@ -44,6 +44,7 @@ class RuntimeWorkspaceFilesTest {
     @Test
     fun reportsWhenWorkspaceListingIsTruncated() {
         val root = temporaryFolder.root.toPath()
+        assumeTrue(supportsSecureStreams(root))
         val workspace = workspace(root)
         Files.write(workspace.resolve("b.txt"), "b".toByteArray())
         Files.write(workspace.resolve("a.txt"), "a".toByteArray())
@@ -53,11 +54,33 @@ class RuntimeWorkspaceFilesTest {
     }
 
     @Test
+    fun defaultWorkspaceListsItsFilesAndNeverSharesOrDeletesGuestHomeSiblings() {
+        val root = temporaryFolder.root.toPath()
+        assumeTrue(supportsSecureStreams(root))
+        val workspace = workspace(root)
+        Files.write(workspace.resolve("report.md"), "report".toByteArray())
+        val privateDir = Files.createDirectory(workspace.resolveSibling(".dsh"))
+        val privateFile = Files.write(privateDir.resolve("settings.yaml"), "private".toByteArray())
+        val files = manager(root)
+
+        assertEquals(listOf("report.md"), files.list().files)
+        assertEquals("report", files.copyForSharing("report.md").readText())
+        assertEquals("WORKSPACE_FILE_UNAVAILABLE", assertThrows(RuntimeFailure::class.java) {
+            files.copyForSharing(".dsh/settings.yaml")
+        }.code)
+        assertEquals("WORKSPACE_FILE_UNAVAILABLE", assertThrows(RuntimeFailure::class.java) {
+            files.delete(".dsh/settings.yaml")
+        }.code)
+        assertEquals("private", privateFile.toFile().readText())
+    }
+
+    @Test
     fun refusesUnsafeFallbackWhenSecureStreamsAreUnavailable() {
         val root = temporaryFolder.root.toPath()
         assumeFalse(supportsSecureStreams(root))
         val source = Files.write(workspace(root).resolve("file.txt"), "keep".toByteArray())
         val files = manager(root)
+        assertEquals("WORKSPACE_SECURE_ACCESS_UNAVAILABLE", assertThrows(RuntimeFailure::class.java) { files.list() }.code)
         assertEquals("WORKSPACE_SECURE_ACCESS_UNAVAILABLE", assertThrows(RuntimeFailure::class.java) { files.delete("file.txt") }.code)
         assertEquals("WORKSPACE_SECURE_ACCESS_UNAVAILABLE", assertThrows(RuntimeFailure::class.java) { files.copyForSharing("file.txt") }.code)
         assertTrue(Files.exists(source))
@@ -86,10 +109,15 @@ class RuntimeWorkspaceFilesTest {
         val workspace = workspace(root)
         Files.createSymbolicLink(workspace.resolve("linked"), outside)
         val files = manager(root)
+        assertTrue(files.list().files.isEmpty())
         assertThrows(RuntimeFailure::class.java) { files.copyForSharing("linked/file.txt") }
         assertThrows(RuntimeFailure::class.java) { files.delete("linked/file.txt") }
-        Files.move(workspace, workspace.resolveSibling("saved"))
-        Files.createSymbolicLink(workspace, outside)
+        val guestHome = workspace.parent
+        Files.createDirectory(outside.resolve("1"))
+        Files.write(outside.resolve("1/outside.txt"), "private".toByteArray())
+        Files.move(guestHome, guestHome.resolveSibling("saved"))
+        Files.createSymbolicLink(guestHome, outside)
+        assertThrows(RuntimeFailure::class.java) { files.list() }
         assertThrows(RuntimeFailure::class.java) { files.copyForSharing("file.txt") }
         assertThrows(RuntimeFailure::class.java) { files.delete("file.txt") }
         assertEquals("keep", String(Files.readAllBytes(marker)))

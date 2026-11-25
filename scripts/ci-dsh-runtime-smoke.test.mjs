@@ -24,6 +24,11 @@ test('detectBootOutputFailures 命中 Issue #31 的 Cordis 注入错误、插件
   assert.ok(hits.includes('cordis-missing-inject'), `expected cordis-missing-inject, got ${hits}`)
 
   assert.deepEqual(
+    detectBootOutputFailures('dsh: warning: 2 entries did not activate\nfirst: pending\nsecond: pending'),
+    ['plugin-not-activated'],
+  )
+
+  assert.deepEqual(
     detectBootOutputFailures('dsh: patch: entry "sandbox" not found'),
     ['patch-entry-missing'],
   )

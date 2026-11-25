@@ -40,7 +40,7 @@ const EXPECTED_MOBILE_TOOLS = [
 ]
 
 export const BOOT_FORBIDDEN_OUTPUT_PATTERNS = [
-  { id: 'plugin-not-activated', pattern: /entry did not activate/iu },
+  { id: 'plugin-not-activated', pattern: /\bentr(?:y|ies) did not activate\b/iu },
   { id: 'bundle-skipped', pattern: /skipping profile bundle/iu },
   { id: 'cordis-missing-inject', pattern: /without inject/iu },
   { id: 'patch-entry-missing', pattern: /patch:\s*entry\b[^\n]*\bnot found/iu },

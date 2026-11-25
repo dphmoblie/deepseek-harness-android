@@ -3052,16 +3052,20 @@ class MobileRuntimePlugin : Plugin() {
         }
     }
 
+    private fun workspaceFileManager() = controller.store.let { store ->
+        RuntimeWorkspaceFiles.forDefaultWorkspace(store.currentRoot, context.cacheDir, store.runtimeParent.parentFile!!)
+    }
+
     @PluginMethod
     fun listRuntimeWorkspaceFiles(call: PluginCall) {
         execute(call) {
-            val snapshot = RuntimeWorkspaceFiles(controller.store, context.cacheDir).list()
+            val snapshot = workspaceFileManager().list()
             JSObject().put("files", org.json.JSONArray(snapshot.files)).put("truncated", snapshot.truncated)
         }
     }
 
     private fun shareWorkspaceFile(relative: String, open: Boolean) {
-        val manager = RuntimeWorkspaceFiles(controller.store, context.cacheDir)
+        val manager = workspaceFileManager()
         val target = manager.copyForSharing(relative)
         val uri = FileProvider.getUriForFile(context, "${context.packageName}.diagnostics", target)
         val intent = Intent(if (open) Intent.ACTION_VIEW else Intent.ACTION_SEND).apply {
@@ -3091,7 +3095,7 @@ class MobileRuntimePlugin : Plugin() {
         execute(call) {
             val path = call.getString("path")
                 ?: throw RuntimeFailure("WORKSPACE_PATH_INVALID", "工作区文件路径缺失")
-            RuntimeWorkspaceFiles(controller.store, context.cacheDir).delete(path)
+            workspaceFileManager().delete(path)
             null
         }
     }

@@ -1,4 +1,5 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { StrictMode } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { RuntimeWorkspaceFileList } from '../platform/types'
 
@@ -46,6 +47,14 @@ describe('工作区文件卡片', () => {
     expect(await screen.findByText('reports/summary.md')).toBeInTheDocument()
     expect(screen.getByText('result.json')).toBeInTheDocument()
     expect(listFiles).toHaveBeenCalledTimes(1)
+  })
+
+  it('StrictMode 重挂载后仍能完成读取', async () => {
+    render(<StrictMode><WorkspaceFilesCard /></StrictMode>)
+
+    fireEvent.click(screen.getByRole('button', { name: '读取工作区文件' }))
+
+    expect(await screen.findByText('reports/summary.md')).toBeInTheDocument()
   })
 
   it('分享与打开都把原生给的相对路径原样回传', async () => {

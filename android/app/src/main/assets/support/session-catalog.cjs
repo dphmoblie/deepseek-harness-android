@@ -541,7 +541,7 @@ function byRecency(left, right) {
 
 /**
  * 主流程：列目录 → 按最近更新排序 → **未归档取 `limit` 条、归档取 [MAX_ARCHIVED] 条** →
- * 合并回最近更新顺序 → 逐条读标题与分组元数据。`hooks` 仅供单测观察（见 `readSession`）。
+ * 分配日志扫描时间 → 合并回最近更新顺序。`hooks` 仅供单测观察（见 `readSession`）。
  */
 async function buildCatalog(limit, root, hooks = null, workspaceStatePath = defaultWorkspaceStatePath(root)) {
   const started = Date.now()
@@ -557,34 +557,45 @@ async function buildCatalog(limit, root, hooks = null, workspaceStatePath = defa
   candidates.sort(byRecency)
   // 归档会话单独留名额：只按「最近更新」截前 N 条时，旧归档会话会被在用的会话整批挤掉，
   // 界面上的「已归档」因此永远是空的。两侧各取各的，再合回最近更新顺序。
-  const unarchived = candidates.filter((candidate) => !archivedIds.has(candidate.id))
-  const archived = candidates.filter((candidate) => archivedIds.has(candidate.id))
-  const selected = [...unarchived.slice(0, limit), ...archived.slice(0, MAX_ARCHIVED)].sort(byRecency)
+  const unarchived = candidates.filter((candidate) => !archivedIds.has(candidate.id)).slice(0, limit)
+  const archived = candidates.filter((candidate) => archivedIds.has(candidate.id)).slice(0, MAX_ARCHIVED)
   // 有项目目录无法读取时，返回的候选列表只是可见子集，必须显式告诉调用方存在遗漏。
-  let truncated = candidates.length > selected.length || unreadable > 0
+  const selectedCount = unarchived.length + archived.length
+  let truncated = candidates.length > selectedCount || unreadable > 0
   const sessions = []
-  for (const candidate of selected) {
-    let detail = { depth: 0, title: '' }
-    try {
-      detail = await readSession(candidate.log, deadline, hooks)
-    } catch (error) {
-      if (error !== null && typeof error === 'object' && error.code === 'SESSION_CATALOG_ZSTD_UNSUPPORTED') throw error
-      // 单个会话读不动（权限、损坏）：仍然列出它的 id 与时间，只是没有标题、按主会话处理。
-      detail = { depth: 0, title: '' }
+
+  async function scan(group, cutoff, start = 0) {
+    let index = start
+    for (; index < group.length && Date.now() <= cutoff; index += 1) {
+      const candidate = group[index]
+      let detail = { depth: 0, title: '' }
+      try {
+        detail = await readSession(candidate.log, cutoff, hooks)
+      } catch (error) {
+        if (error !== null && typeof error === 'object' && error.code === 'SESSION_CATALOG_ZSTD_UNSUPPORTED') throw error
+        // 单个会话读不动（权限、损坏）：仍然列出它的 id 与时间，只是没有标题、按主会话处理。
+      }
+      const session = { id: candidate.id, title: detail.title, updatedAt: candidate.updatedAt, depth: detail.depth }
+      // 归档状态来自 dsh 的 workspace 注册表；只有真的在归档集合里才写这个键。
+      if (archivedIds.has(candidate.id)) session.archived = true
+      // 可选字段只在真实存在时出现：界面据此区分「子代理」与「没有父的子代理」。
+      if (detail.parentId !== undefined) session.parentId = detail.parentId
+      if (detail.agentName !== undefined) session.agentName = detail.agentName
+      sessions.push(session)
+      if (Date.now() > cutoff) truncated = true
     }
-    const session = { id: candidate.id, title: detail.title, updatedAt: candidate.updatedAt, depth: detail.depth }
-    // 归档状态来自 dsh 的 workspace 注册表；只有真的在归档集合里才写这个键。
-    if (archivedIds.has(candidate.id)) session.archived = true
-    // 可选字段只在真实存在时出现：界面据此区分「子代理」与「没有父的子代理」。
-    if (detail.parentId !== undefined) session.parentId = detail.parentId
-    if (detail.agentName !== undefined) session.agentName = detail.agentName
-    sessions.push(session)
-    if (Date.now() > deadline) {
-      truncated = true
-      break
-    }
+    return index
   }
-  return { sessions, truncated }
+
+  // 为归档保留一半剩余时间；归档提前读完时，把剩下的时间归还给未归档会话。
+  const firstCutoff = archived.length > 0 ? Math.min(deadline, (Date.now() + deadline) / 2) : deadline
+  const firstCount = await scan(unarchived, firstCutoff)
+  await scan(archived, deadline)
+  await scan(unarchived, deadline, firstCount)
+  return {
+    sessions: sessions.sort(byRecency),
+    truncated: truncated || sessions.length < selectedCount,
+  }
 }
 
 /** 参数解析：条数上限夹到 `[1, MAX_LIMIT]`，根目录必须是绝对路径（应用从不传它）。 */

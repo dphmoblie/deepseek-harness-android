@@ -543,3 +543,31 @@ test('归档会话单独占 20 条名额，不会被在用的会话挤掉', asyn
   const times = report.sessions.map((session) => session.updatedAt)
   assert.deepEqual(times, [...times].sort((left, right) => right - left))
 })
+
+test('在用会话日志耗掉时间片时仍给归档会话留扫描时间', async (context) => {
+  const root = createRoot()
+  const stateDirectory = join(root, 'storages')
+  mkdirSync(stateDirectory, { recursive: true })
+  const stateFile = join(stateDirectory, 'workspace.json')
+  addSession(root, {
+    directory: 'session-live',
+    updatedAt: BASE_TIME + 10_000,
+    lines: [title('在用的会话'), ...Array.from({ length: 4 }, () => toolResult('耗时输出'))],
+  })
+  const archivedId = 'session-archived'
+  addSession(root, {
+    directory: archivedId,
+    updatedAt: BASE_TIME,
+    lines: [title('归档的会话')],
+  })
+  writeFileSync(stateFile, JSON.stringify({ global: { archivedSessionIds: [archivedId] } }))
+
+  let now = BASE_TIME
+  context.mock.method(Date, 'now', () => now)
+  const report = await buildCatalog(50, root, { onScanned: () => { now += 550 } }, stateFile)
+  assert.deepEqual(report.sessions.map(session => session.id), ['session-live', archivedId])
+  assert.equal(report.sessions[0].title, '在用的会话')
+  assert.equal(report.sessions[1].archived, true)
+  assert.equal(report.sessions[1].title, '归档的会话')
+  assert.equal(report.truncated, true)
+})
