@@ -54,7 +54,7 @@ class RuntimeWorkspaceFiles internal constructor(
         Snapshot(sorted.take(limit), sorted.size > limit)
     }
 
-    internal fun <T> withFile(relative: String, action: (SecureDirectoryStream<Path>, Path) -> T): T {
+    internal fun <T> withFile(relative: String, action: (SecureDirectoryStream<Path>, Path, BasicFileAttributes) -> T): T {
         if (!isValidRelativePath(relative)) {
             throw RuntimeFailure("WORKSPACE_PATH_INVALID", "工作区文件路径无效")
         }
@@ -65,10 +65,10 @@ class RuntimeWorkspaceFiles internal constructor(
                 return parent.newDirectoryStream(name, LinkOption.NOFOLLOW_LINKS).use { visit(it, index + 1) }
             }
             val attributes = attributesNoFollow(parent, name)
-            if (attributes == null || !attributes.isRegularFile || attributes.size() > MAX_FILE_BYTES) {
+            if (attributes == null || !attributes.isRegularFile) {
                 throw RuntimeFailure("WORKSPACE_FILE_UNAVAILABLE", "工作区文件不可用")
             }
-            return action(parent, name)
+            return action(parent, name, attributes)
         }
         return withWorkspace({ throw RuntimeFailure("WORKSPACE_FILE_UNAVAILABLE", "工作区文件不可用") }) {
             visit(it, 0)
@@ -116,7 +116,8 @@ class RuntimeWorkspaceFiles internal constructor(
             path.none { it.code <= 31 || it.code == 127 } &&
             path.split('/').none { it.isEmpty() || it == "." || it == ".." }
 
-    fun copyForSharing(relative: String): File = withFile(relative) { parent, name ->
+    fun copyForSharing(relative: String): File = withFile(relative) { parent, name, attributes ->
+        checkShareSize(attributes.size())
         val directory = RuntimeShareCache.prepare(cacheDir, RuntimeCacheEntries.WORKSPACE_SHARE)
         if (directory == null) {
             throw RuntimeFailure("WORKSPACE_EXPORT_FAILED", "无法准备文件分享目录")
@@ -137,9 +138,7 @@ class RuntimeWorkspaceFiles internal constructor(
                         val read = input.read(buffer)
                         if (read < 0) break
                         total += read
-                        if (total > MAX_FILE_BYTES) {
-                            throw RuntimeFailure("WORKSPACE_FILE_UNAVAILABLE", "工作区文件超过大小限制")
-                        }
+                        checkShareSize(total)
                         output.write(buffer, 0, read)
                     }
                 }
@@ -151,8 +150,14 @@ class RuntimeWorkspaceFiles internal constructor(
         }
     }
 
+    private fun checkShareSize(bytes: Long) {
+        if (bytes > MAX_SHARE_FILE_BYTES) {
+            throw RuntimeFailure(SHARE_FILE_TOO_LARGE, "工作区文件超过 64 MiB，无法打开或分享")
+        }
+    }
+
     fun delete(relative: String) {
-        withFile(relative) { parent, name ->
+        withFile(relative) { parent, name, _ ->
             try {
                 parent.deleteFile(name)
             } catch (error: IOException) {
@@ -169,7 +174,8 @@ class RuntimeWorkspaceFiles internal constructor(
         internal fun forDefaultWorkspace(currentRoot: File, cacheDir: File, trustedParent: File) =
             RuntimeWorkspaceFiles(File(currentRoot, RuntimePreservePolicy.DEFAULT_WORKSPACE_ROOT), cacheDir, trustedParent)
 
-        private const val MAX_FILE_BYTES = 64L * 1024 * 1024
+        internal const val SHARE_FILE_TOO_LARGE = "WORKSPACE_SHARE_FILE_TOO_LARGE"
+        private const val MAX_SHARE_FILE_BYTES = 64L * 1024 * 1024
         private const val MAX_RELATIVE_PATH_CHARS = 240
     }
 }

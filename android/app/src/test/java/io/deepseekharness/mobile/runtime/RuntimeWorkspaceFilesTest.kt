@@ -9,6 +9,7 @@ import org.junit.Assume.assumeTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
+import java.io.RandomAccessFile
 import java.nio.channels.Channels
 import java.nio.file.Files
 import java.nio.file.LinkOption
@@ -101,6 +102,30 @@ class RuntimeWorkspaceFilesTest {
     }
 
     @Test
+    fun oversizedFileReportsTheShareLimitAndCanStillBeDeleted() {
+        val root = temporaryFolder.root.toPath()
+        assumeTrue(supportsSecureStreams(root))
+        val source = workspace(root).resolve("large.bin")
+        RandomAccessFile(source.toFile(), "rw").use { it.setLength(64L * 1024 * 1024 + 1) }
+        val files = manager(root)
+
+        val failure = assertThrows(RuntimeFailure::class.java) {
+            files.copyForSharing("large.bin")
+        }
+        assertEquals(RuntimeWorkspaceFiles.SHARE_FILE_TOO_LARGE, failure.code)
+        assertEquals("工作区文件超过 64 MiB，无法打开或分享", failure.message)
+        val previewFailure = assertThrows(RuntimeFailure::class.java) {
+            WorkspaceFileSharing.copyFirstAvailable(files, listOf("missing.bin", "large.bin"))
+        }
+        assertEquals(failure.code, previewFailure.code)
+        assertTrue(Files.exists(source))
+        assertFalse(Files.exists(root.resolve("cache")))
+
+        files.delete("large.bin")
+        assertFalse(Files.exists(source))
+    }
+
+    @Test
     fun refusesSymbolicLinksAtEveryGuestControlledParent() {
         val root = temporaryFolder.root.toPath()
         assumeTrue(supportsSecureStreams(root))
@@ -144,7 +169,7 @@ class RuntimeWorkspaceFilesTest {
         val outside = Files.createDirectory(root.resolve("outside"))
         val marker = Files.write(outside.resolve("file.txt"), "outside".toByteArray())
         val saved = workspace.resolve("saved")
-        manager(root).withFile("nested/file.txt") { parent, name ->
+        manager(root).withFile("nested/file.txt") { parent, name, _ ->
             Files.move(directory, saved)
             Files.createSymbolicLink(directory, outside)
             val content = Channels.newInputStream(parent.newByteChannel(name, setOf(StandardOpenOption.READ, LinkOption.NOFOLLOW_LINKS)))

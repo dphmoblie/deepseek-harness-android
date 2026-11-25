@@ -18,6 +18,7 @@
     <string name="harness_file_action_failed">ファイル操作に失敗しました</string>
     <!-- 共有失敗の詳細分類：アドレス解決は通ったがワークスペース内にファイルがない（パス表記の不一致を含む）場合、汎用の失敗と区別する。 -->
     <string name="harness_file_share_unavailable">このファイルはワークスペースにないため、共有できません</string>
+    <string name="harness_file_share_too_large">ワークスペースのファイルが 64 MiB を超えているため、開いたり共有したりできません</string>
     <string name="harness_session_failed">ローカル Harness セッションを確立できません</string>
     <string name="harness_page_failed">Harness を開けません。設定から再試行してください</string>
     <string name="shizuku_missing">Shizuku を先にインストールして起動してください</string>

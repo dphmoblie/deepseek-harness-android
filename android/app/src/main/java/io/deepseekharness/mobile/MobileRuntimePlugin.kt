@@ -3066,7 +3066,13 @@ class MobileRuntimePlugin : Plugin() {
 
     private fun shareWorkspaceFile(relative: String, open: Boolean) {
         val manager = workspaceFileManager()
-        val target = manager.copyForSharing(relative)
+        val target = try {
+            manager.copyForSharing(relative)
+        } catch (failure: RuntimeFailure) {
+            if (failure.code != RuntimeWorkspaceFiles.SHARE_FILE_TOO_LARGE) throw failure
+            val message = AppLanguage.localizedContext(context).getString(R.string.harness_file_share_too_large)
+            throw RuntimeFailure(failure.code, message, failure)
+        }
         val uri = FileProvider.getUriForFile(context, "${context.packageName}.diagnostics", target)
         val intent = Intent(if (open) Intent.ACTION_VIEW else Intent.ACTION_SEND).apply {
             val mime = manager.mimeType(relative)

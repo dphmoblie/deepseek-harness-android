@@ -6,6 +6,9 @@ import android.content.res.Configuration
 import android.net.Uri
 import android.os.Bundle
 import android.provider.OpenableColumns
+import android.system.ErrnoException
+import android.system.Os
+import android.system.OsConstants
 import android.widget.Toast
 import android.webkit.WebViewDatabase
 import androidx.activity.OnBackPressedCallback
@@ -20,9 +23,7 @@ import java.io.FileNotFoundException
 import java.io.IOException
 import java.io.InputStream
 import java.nio.file.Files
-import java.nio.file.LinkOption
 import java.nio.file.StandardCopyOption
-import java.nio.file.StandardOpenOption
 import java.util.UUID
 import java.util.concurrent.Executors
 
@@ -220,6 +221,7 @@ class MainActivity : BridgeActivity() {
                         val failure = when (result.status) {
                             ImportResult.PERMISSION_DENIED -> "其余无读取权限"
                             ImportResult.DESTINATION_UNAVAILABLE -> "其余无法保存"
+                            ImportResult.NO_SPACE -> "存储空间不足，其余文件无法保存"
                             else -> "其余来源不可读"
                         }
                         // 已接收的文件不再用选择器整批重试，避免用户误以为全部失败而重复导入。
@@ -228,13 +230,18 @@ class MainActivity : BridgeActivity() {
                     }
                     when (result.status) {
                         ImportResult.SUCCESS -> showImportToast("文件已导入应用收件箱")
-                        ImportResult.STAGED -> showImportToast("文件已安全暂存，运行时准备完成后可在工作区 inbox 中使用")
+                        ImportResult.STAGED -> showImportToast(when (result.delivery) {
+                            RuntimeSharedInbox.Delivery.NO_SPACE -> "文件已暂存，存储空间不足，无法投递到工作区"
+                            RuntimeSharedInbox.Delivery.UNAVAILABLE -> "文件已暂存，暂时无法投递到工作区"
+                            else -> "文件已安全暂存，运行时准备完成后可在工作区 inbox 中使用"
+                        })
                         ImportResult.PERMISSION_DENIED -> {
                             if (allowPermissionFallback) launchPermissionFallback()
                             else showImportToast("无法读取所选文件，请更换文件提供方")
                         }
                         ImportResult.SOURCE_UNREADABLE -> showImportToast("文件来源不可读，请重新选择")
                         ImportResult.DESTINATION_UNAVAILABLE -> showImportToast("应用收件箱不可写，导入失败")
+                        ImportResult.NO_SPACE -> showImportToast("存储空间不足，无法导入文件")
                     }
                 }
             }
@@ -288,12 +295,12 @@ class MainActivity : BridgeActivity() {
         return try {
             input.use { source ->
                 try {
-                    Files.newOutputStream(
-                        target.toPath(),
-                        StandardOpenOption.TRUNCATE_EXISTING,
-                        StandardOpenOption.WRITE,
-                        LinkOption.NOFOLLOW_LINKS,
-                    ).use { output ->
+                    val output = Os.open(
+                        target.absolutePath,
+                        OsConstants.O_WRONLY or OsConstants.O_TRUNC or OsConstants.O_NOFOLLOW or OsConstants.O_CLOEXEC,
+                        0,
+                    )
+                    try {
                         val buffer = ByteArray(COPY_BUFFER_BYTES)
                         while (true) {
                             if (Thread.currentThread().isInterrupted) return ImportResult.SOURCE_UNREADABLE
@@ -305,15 +312,22 @@ class MainActivity : BridgeActivity() {
                                 return ImportResult.SOURCE_UNREADABLE
                             }
                             if (read < 0) break
-                            try {
-                                output.write(buffer, 0, read)
-                            } catch (_: IOException) {
-                                return ImportResult.DESTINATION_UNAVAILABLE
+                            var offset = 0
+                            while (offset < read) {
+                                val written = Os.write(output, buffer, offset, read - offset)
+                                if (written <= 0) return ImportResult.DESTINATION_UNAVAILABLE
+                                offset += written
                             }
                         }
+                        Os.fsync(output)
+                    } finally {
+                        Os.close(output)
                     }
-                } catch (_: FileNotFoundException) {
-                    return ImportResult.DESTINATION_UNAVAILABLE
+                } catch (error: ErrnoException) {
+                    return when (error.errno) {
+                        OsConstants.ENOSPC, OsConstants.EDQUOT -> ImportResult.NO_SPACE
+                        else -> ImportResult.DESTINATION_UNAVAILABLE
+                    }
                 } catch (_: SecurityException) {
                     return ImportResult.DESTINATION_UNAVAILABLE
                 } catch (_: IOException) {

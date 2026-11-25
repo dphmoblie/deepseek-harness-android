@@ -18,6 +18,7 @@
     <string name="harness_file_action_failed">파일 작업에 실패했습니다</string>
     <!-- 공유 실패 세분화: 주소는 풀렸지만 워크스페이스에서 파일을 못 찾은 경우(경로口径 불일치 포함). 일반 실패와 구분. -->
     <string name="harness_file_share_unavailable">워크스페이스에서 이 파일을 찾을 수 없어 공유할 수 없습니다</string>
+    <string name="harness_file_share_too_large">워크스페이스 파일이 64 MiB를 초과하여 열거나 공유할 수 없습니다</string>
     <string name="harness_session_failed">로컬 Harness 세션을 만들 수 없습니다</string>
     <string name="harness_page_failed">Harness 화면을 지금 열 수 없습니다. 설정에서 다시 시도하세요.</string>
     <string name="shizuku_missing">먼저 Shizuku를 설치하고 실행하세요</string>

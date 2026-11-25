@@ -6,8 +6,8 @@ import java.nio.channels.FileChannel
 import java.nio.file.Files
 import java.nio.file.LinkOption
 import java.nio.file.Path
-import java.nio.file.SecureDirectoryStream
 import java.nio.file.StandardOpenOption
+import java.nio.file.attribute.BasicFileAttributes
 import java.util.UUID
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -17,7 +17,6 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
-import org.junit.Assume.assumeFalse
 import org.junit.Assume.assumeTrue
 import org.junit.Rule
 import org.junit.Test
@@ -26,13 +25,39 @@ import org.junit.rules.TemporaryFolder
 class RuntimeSharedInboxTest {
     @Rule @JvmField val temporaryFolder = TemporaryFolder()
 
-    private fun manager(root: Path): RuntimeSharedInbox {
+    private fun manager(
+        root: Path,
+        publish: (Path, Path, Path, List<String>, Path) -> RuntimeSharedInbox.Delivery = ::publishForTest,
+    ): RuntimeSharedInbox {
         Files.createDirectories(root.resolve("files"))
         Files.createDirectories(root.resolve("no-backup"))
-        return RuntimeSharedInbox(root.resolve("files").toFile(), root.resolve("no-backup").toFile(), root.resolve("no-backup/runtime/current").toFile())
+        return RuntimeSharedInbox(root.resolve("files").toFile(), root.resolve("no-backup").toFile(), current(root).toFile(), publish)
     }
 
-    private fun supportsSecureStreams(root: Path) = Files.newDirectoryStream(root).use { it is SecureDirectoryStream<*> }
+    private fun publishForTest(
+        source: Path,
+        name: Path,
+        anchor: Path,
+        directories: List<String>,
+        targetName: Path,
+    ): RuntimeSharedInbox.Delivery {
+        if (java.lang.Boolean.getBoolean("dsh.test.nativeInbox")) {
+            return RuntimeSharedFilePublisher.publish(source, name, anchor, directories, targetName)
+        }
+        val file = source.resolve(name)
+        if (!Files.isRegularFile(file, LinkOption.NOFOLLOW_LINKS)) return RuntimeSharedInbox.Delivery.UNAVAILABLE
+        var target = anchor
+        for (directory in directories) {
+            target = target.resolve(directory)
+            if (!Files.exists(target, LinkOption.NOFOLLOW_LINKS)) return RuntimeSharedInbox.Delivery.STAGED
+            if (!Files.isDirectory(target, LinkOption.NOFOLLOW_LINKS)) return RuntimeSharedInbox.Delivery.UNAVAILABLE
+        }
+        Files.createLink(target.resolve(targetName), file)
+        Files.delete(file)
+        return RuntimeSharedInbox.Delivery.DELIVERED
+    }
+
+    private fun supportsPosix(root: Path) = Files.getFileStore(root).supportsFileAttributeView("posix")
     private fun current(root: Path) = root.resolve("no-backup/runtime/current")
     private fun destination(root: Path) = current(root).resolve("root/1/inbox")
 
@@ -109,7 +134,7 @@ class RuntimeSharedInboxTest {
     @Test
     fun pendingCleanupDoesNotFollowSymbolicLinks() {
         val root = temporaryFolder.root.toPath()
-        assumeTrue(supportsSecureStreams(root))
+        assumeTrue(supportsPosix(root))
         val inbox = manager(root)
         val outside = Files.write(root.resolve("outside.txt"), "keep-outside".toByteArray())
         val link = inbox.stagingDirectory().toPath().resolve(".pending-${UUID.randomUUID()}")
@@ -124,7 +149,7 @@ class RuntimeSharedInboxTest {
     @Test
     fun batchDeliversPublishedFileBeforeTheNextSourceFails() {
         val root = temporaryFolder.root.toPath()
-        assumeTrue(supportsSecureStreams(root))
+        assumeTrue(supportsPosix(root))
         val inbox = manager(root)
         Files.createDirectories(current(root))
         inbox.prepareWorkspace()
@@ -153,29 +178,28 @@ class RuntimeSharedInboxTest {
     @Test
     fun retainsPreInstallFilesAndDeliversAfterWorkspaceIsPrepared() {
         val root = temporaryFolder.root.toPath()
-        assumeTrue(supportsSecureStreams(root))
+        assumeTrue(supportsPosix(root))
         val inbox = manager(root)
         val source = File(inbox.stagingDirectory(), "shared.txt")
         source.writeText("before-install")
-        assertFalse(inbox.deliver())
+        assertEquals(RuntimeSharedInbox.Delivery.STAGED, inbox.deliver())
         assertTrue(source.exists())
         Files.createDirectories(current(root))
         inbox.prepareWorkspace()
-        assertTrue(inbox.deliver())
+        assertEquals(RuntimeSharedInbox.Delivery.DELIVERED, inbox.deliver())
         assertEquals("before-install", destination(root).resolve("shared.txt").toFile().readText())
         assertFalse(source.exists())
     }
 
     @Test
-    fun unavailableSecureStreamsNeverConsumeTheSource() {
+    fun insufficientSpaceKeepsTheSourceAndPublishesNothing() {
         val root = temporaryFolder.root.toPath()
-        assumeFalse(supportsSecureStreams(root))
-        val inbox = manager(root)
+        val inbox = manager(root) { _, _, _, _, _ -> RuntimeSharedInbox.Delivery.NO_SPACE }
         val source = File(inbox.stagingDirectory(), "shared.txt")
         source.writeText("keep")
         Files.createDirectories(current(root))
         inbox.prepareWorkspace()
-        assertFalse(inbox.deliver())
+        assertEquals(RuntimeSharedInbox.Delivery.NO_SPACE, inbox.deliver())
         assertEquals("keep", source.readText())
         assertFalse(Files.exists(destination(root).resolve("shared.txt")))
     }
@@ -183,7 +207,7 @@ class RuntimeSharedInboxTest {
     @Test
     fun doesNotOverwriteFilesAndDoesNotPublishIncompleteImports() {
         val root = temporaryFolder.root.toPath()
-        assumeTrue(supportsSecureStreams(root))
+        assumeTrue(supportsPosix(root))
         val inbox = manager(root)
         val staging = inbox.stagingDirectory().toPath()
         val source = Files.write(staging.resolve("shared.txt"), "new".toByteArray())
@@ -191,7 +215,7 @@ class RuntimeSharedInboxTest {
         Files.createDirectories(current(root))
         inbox.prepareWorkspace()
         val existing = Files.write(destination(root).resolve("shared.txt"), "existing".toByteArray())
-        assertTrue(inbox.deliver())
+        assertEquals(RuntimeSharedInbox.Delivery.DELIVERED, inbox.deliver())
         assertEquals("existing", existing.toFile().readText())
         assertFalse(Files.exists(source))
         assertTrue(Files.exists(pending))
@@ -203,7 +227,7 @@ class RuntimeSharedInboxTest {
     @Test
     fun refusesLinksInGuestParentsOrStagedFilesAndPreservesBothSides() {
         val root = temporaryFolder.root.toPath()
-        assumeTrue(supportsSecureStreams(root))
+        assumeTrue(supportsPosix(root))
         val inbox = manager(root)
         val staging = inbox.stagingDirectory().toPath()
         val source = Files.write(staging.resolve("shared.txt"), "keep-source".toByteArray())
@@ -214,13 +238,13 @@ class RuntimeSharedInboxTest {
         Files.delete(destination(root))
         Files.createSymbolicLink(destination(root), outside)
         assertThrows(RuntimeFailure::class.java) { inbox.prepareWorkspace() }
-        assertFalse(inbox.deliver())
+        assertEquals(RuntimeSharedInbox.Delivery.UNAVAILABLE, inbox.deliver())
         assertEquals("keep-source", source.toFile().readText())
         assertEquals("keep-outside", marker.toFile().readText())
         Files.delete(destination(root))
         inbox.prepareWorkspace()
         Files.createSymbolicLink(staging.resolve("linked.txt"), marker)
-        assertFalse(inbox.deliver())
+        assertEquals(RuntimeSharedInbox.Delivery.UNAVAILABLE, inbox.deliver())
         assertTrue(Files.exists(staging.resolve("linked.txt"), LinkOption.NOFOLLOW_LINKS))
         assertEquals("keep-outside", marker.toFile().readText())
     }
@@ -228,7 +252,7 @@ class RuntimeSharedInboxTest {
     @Test
     fun interruptedTransferKeepsTheOriginalAndCanBeRetried() {
         val root = temporaryFolder.root.toPath()
-        assumeTrue(supportsSecureStreams(root))
+        assumeTrue(supportsPosix(root))
         val inbox = manager(root)
         val bytes = ByteArray(64 * 1024) { (it % 251).toByte() }
         val source = Files.write(inbox.stagingDirectory().toPath().resolve("shared.bin"), bytes)
@@ -236,39 +260,37 @@ class RuntimeSharedInboxTest {
         inbox.prepareWorkspace()
         try {
             Thread.currentThread().interrupt()
-            assertFalse(inbox.deliver())
+            assertEquals(RuntimeSharedInbox.Delivery.UNAVAILABLE, inbox.deliver())
             assertTrue(Thread.currentThread().isInterrupted)
         } finally {
             Thread.interrupted()
         }
         assertArrayEquals(bytes, Files.readAllBytes(source))
-        val failedCopy = destination(root).resolve("shared.bin")
-        assertEquals(0L, Files.size(failedCopy))
-        assertTrue(inbox.deliver())
+        val target = destination(root).resolve("shared.bin")
+        assertFalse(Files.exists(target))
+        assertEquals(RuntimeSharedInbox.Delivery.DELIVERED, inbox.deliver())
         assertFalse(Files.exists(source))
-        // 失败目标可能已被访客接管；重试另起新名字，不能删除或覆盖该目标。
-        assertEquals(0L, Files.size(failedCopy))
-        val retries = Files.list(destination(root)).use { paths -> paths.filter { it != failedCopy }.toList() }
-        assertEquals(1, retries.size)
-        assertArrayEquals(bytes, Files.readAllBytes(retries.single()))
+        assertArrayEquals(bytes, Files.readAllBytes(target))
     }
 
     @Test
     fun deliversFilesLargerThanTheFormer64MiBLimit() {
         val root = temporaryFolder.root.toPath()
-        assumeTrue(supportsSecureStreams(root))
+        assumeTrue(supportsPosix(root))
         val inbox = manager(root)
         val source = inbox.stagingDirectory().toPath().resolve("large.bin")
         FileChannel.open(source, StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE).use { channel ->
             channel.position(64L * 1024 * 1024)
             channel.write(ByteBuffer.wrap(byteArrayOf(0x42)))
         }
+        val sourceIdentity = Files.readAttributes(source, BasicFileAttributes::class.java).fileKey()
         Files.createDirectories(current(root))
         inbox.prepareWorkspace()
 
-        assertTrue(inbox.deliver())
+        assertEquals(RuntimeSharedInbox.Delivery.DELIVERED, inbox.deliver())
         assertFalse(Files.exists(source))
         val copied = destination(root).resolve("large.bin")
+        assertEquals(sourceIdentity, Files.readAttributes(copied, BasicFileAttributes::class.java).fileKey())
         assertEquals(64L * 1024 * 1024 + 1, Files.size(copied))
         FileChannel.open(copied, StandardOpenOption.READ).use { channel ->
             channel.position(64L * 1024 * 1024)
@@ -281,20 +303,20 @@ class RuntimeSharedInboxTest {
     @Test
     fun pendingImportIsDeliveredAfterAtomicPublication() {
         val root = temporaryFolder.root.toPath()
-        assumeTrue(supportsSecureStreams(root))
+        assumeTrue(supportsPosix(root))
         val inbox = manager(root)
         val staging = inbox.stagingDirectory().toPath()
         val pending = Files.write(staging.resolve(".pending-import"), "complete".toByteArray())
         Files.createDirectories(current(root))
         inbox.prepareWorkspace()
-        assertTrue(inbox.deliver())
+        assertEquals(RuntimeSharedInbox.Delivery.DELIVERED, inbox.deliver())
         assertTrue(Files.exists(pending))
         assertEquals(0L, Files.list(destination(root)).use { it.count() })
         val published = staging.resolve("shared.txt")
         RuntimeSharedInbox.withLock {
             Files.move(pending, published, java.nio.file.StandardCopyOption.ATOMIC_MOVE)
         }
-        assertTrue(inbox.deliver())
+        assertEquals(RuntimeSharedInbox.Delivery.DELIVERED, inbox.deliver())
         assertFalse(Files.exists(published))
         assertEquals("complete", destination(root).resolve("shared.txt").toFile().readText())
     }

@@ -15,7 +15,7 @@ class SharedFileImportBatchTest {
             if (name == "first") SharedFileImportBatch.Status.SUCCESS else SharedFileImportBatch.Status.SOURCE_UNREADABLE
         }, deliver = {
             operations += "deliver"
-            true
+            RuntimeSharedInbox.Delivery.DELIVERED
         })
         assertEquals(listOf("import:first", "deliver", "import:unreadable"), operations)
         assertEquals(SharedFileImportBatch.Status.SOURCE_UNREADABLE, result.status)
@@ -27,7 +27,7 @@ class SharedFileImportBatchTest {
     fun sourceFailureReportsWhenAcceptedFilesRemainStaged() {
         val result = SharedFileImportBatch.run(listOf("first", "unreadable"), importOne = { _, name ->
             if (name == "first") SharedFileImportBatch.Status.SUCCESS else throw IOException("unavailable")
-        }, deliver = { false })
+        }, deliver = { RuntimeSharedInbox.Delivery.STAGED })
         assertEquals(SharedFileImportBatch.Status.SOURCE_UNREADABLE, result.status)
         assertEquals(1, result.acceptedCount)
         assertFalse(result.deliveryComplete)
@@ -42,7 +42,7 @@ class SharedFileImportBatchTest {
                 SharedFileImportBatch.Status.SUCCESS
             }, deliver = {
                 Thread.currentThread().interrupt()
-                true
+                RuntimeSharedInbox.Delivery.DELIVERED
             })
         } finally {
             Thread.interrupted()
@@ -55,17 +55,27 @@ class SharedFileImportBatchTest {
 
     @Test
     fun successfulBatchCanFinishWithAllFilesSafelyStaged() {
-        val result = SharedFileImportBatch.run(listOf("first"), importOne = { _, _ -> SharedFileImportBatch.Status.SUCCESS }, deliver = { false })
+        val result = SharedFileImportBatch.run(listOf("first"), importOne = { _, _ -> SharedFileImportBatch.Status.SUCCESS }, deliver = { RuntimeSharedInbox.Delivery.STAGED })
         assertEquals(SharedFileImportBatch.Status.STAGED, result.status)
         assertEquals(1, result.acceptedCount)
         assertFalse(result.deliveryComplete)
     }
 
     @Test
+    fun preservesTheReasonWhenAcceptedFilesCannotBeDelivered() {
+        val result = SharedFileImportBatch.run(listOf("first"), importOne = { _, _ ->
+            SharedFileImportBatch.Status.SUCCESS
+        }, deliver = { RuntimeSharedInbox.Delivery.NO_SPACE })
+        assertEquals(SharedFileImportBatch.Status.STAGED, result.status)
+        assertEquals(RuntimeSharedInbox.Delivery.NO_SPACE, result.delivery)
+        assertEquals(1, result.acceptedCount)
+    }
+
+    @Test
     fun errorFailureStillKeepsTheAcceptedCount() {
         val result = SharedFileImportBatch.run(listOf("first", "broken"), importOne = { _, name ->
             if (name == "first") SharedFileImportBatch.Status.SUCCESS else throw OutOfMemoryError("simulated")
-        }, deliver = { true })
+        }, deliver = { RuntimeSharedInbox.Delivery.DELIVERED })
         assertEquals(SharedFileImportBatch.Status.SOURCE_UNREADABLE, result.status)
         assertEquals(1, result.acceptedCount)
         assertTrue(result.deliveryComplete)

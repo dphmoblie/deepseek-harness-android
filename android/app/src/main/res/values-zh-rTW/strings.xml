@@ -18,6 +18,7 @@
     <string name="harness_file_action_failed">檔案操作失敗</string>
     <!-- 分享失敗細分：網址解析成功，但工作區裡找不到檔案（含路徑口徑不一致），與通用失敗區分。 -->
     <string name="harness_file_share_unavailable">工作區裡找不到這個檔案，無法分享</string>
+    <string name="harness_file_share_too_large">工作區檔案超過 64 MiB，無法開啟或分享</string>
     <string name="harness_session_failed">無法建立本機 Harness 工作階段</string>
     <string name="harness_page_failed">Harness 頁面暫時無法開啟，請在設定中重試</string>
     <string name="shizuku_missing">請先安裝並啟動 Shizuku</string>

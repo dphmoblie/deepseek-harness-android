@@ -37,6 +37,7 @@ import io.deepseekharness.mobile.runtime.HarnessAccess
 import io.deepseekharness.mobile.runtime.PageNetworkAccess
 import io.deepseekharness.mobile.runtime.RuntimeFailure
 import io.deepseekharness.mobile.runtime.RuntimeStore
+import io.deepseekharness.mobile.runtime.RuntimeWorkspaceFiles
 import io.deepseekharness.mobile.runtime.WorkspaceFileSharing
 import java.io.ByteArrayInputStream
 import java.net.URI
@@ -414,10 +415,10 @@ class HarnessActivity : AppCompatActivity() {
                 val chooser = result.getOrNull()
                 if (chooser == null) {
                     val code = (result.exceptionOrNull() as? RuntimeFailure)?.code
-                    val message = if (code == WorkspaceFileSharing.NOT_IN_WORKSPACE) {
-                        R.string.harness_file_share_unavailable
-                    } else {
-                        R.string.harness_file_action_failed
+                    val message = when (code) {
+                        WorkspaceFileSharing.NOT_IN_WORKSPACE -> R.string.harness_file_share_unavailable
+                        RuntimeWorkspaceFiles.SHARE_FILE_TOO_LARGE -> R.string.harness_file_share_too_large
+                        else -> R.string.harness_file_action_failed
                     }
                     Toast.makeText(app, message, Toast.LENGTH_SHORT).show()
                     return@runOnUiThread

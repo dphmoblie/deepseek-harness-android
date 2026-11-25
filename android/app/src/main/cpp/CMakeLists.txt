@@ -8,7 +8,7 @@ if(CCACHE_PROGRAM)
     set(CMAKE_CXX_COMPILER_LAUNCHER "${CCACHE_PROGRAM}")
 endif()
 
-add_library(dsh_pty SHARED pty_bridge.c)
+add_library(dsh_pty SHARED pty_bridge.c shared_inbox.c)
 target_compile_features(dsh_pty PRIVATE c_std_17)
 set_target_properties(dsh_pty PROPERTIES
     C_VISIBILITY_PRESET hidden
