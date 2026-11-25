@@ -300,6 +300,32 @@ describe('会话管理页', () => {
     expect(screen.getByText('会话较多，这里只列出最近更新的一部分。')).toBeInTheDocument()
   })
 
+  it.each([false, true])('列表未读全且当前没有结果时可以重试（有未归档会话：%s）', async hasLiveSession => {
+    const updatedAt = Date.UTC(2026, 0, 2)
+    listSessions
+      .mockResolvedValueOnce({
+        status: 'ready',
+        truncated: true,
+        sessions: hasLiveSession ? [{ id: 'live', title: '在用的会话', updatedAt }] : [],
+      })
+      .mockResolvedValueOnce({
+        status: 'ready',
+        truncated: false,
+        sessions: [{ id: 'archived', title: '重试读到的归档会话', updatedAt, archived: true }],
+      })
+
+    render(<SessionManager onBack={vi.fn()} onOpenHarness={vi.fn()} />)
+    if (hasLiveSession) await screen.findByText('在用的会话')
+    else await screen.findByText('会话列表读取不完整')
+    fireEvent.click(screen.getByRole('tab', { name: '已归档' }))
+
+    expect(screen.getByText('会话列表读取不完整')).toBeInTheDocument()
+    expect(screen.queryByText('暂无会话')).not.toBeInTheDocument()
+    expect(screen.queryByText('没有已归档的会话')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '重试' }))
+    expect(await screen.findByText('重试读到的归档会话')).toBeInTheDocument()
+  })
+
   it('只渲染元数据：正文片段不进 DOM，也不写任何浏览器存储', async () => {
     const localSet = vi.spyOn(window.localStorage, 'setItem')
     const sessionSet = vi.spyOn(window.sessionStorage, 'setItem')

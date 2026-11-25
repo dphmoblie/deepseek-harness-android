@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { test } from 'node:test'
@@ -8,9 +9,40 @@ import {
   detectBootOutputFailures,
   EXPECTED_AUTH_CHALLENGE,
   resolveNodePtyDir,
+  verifyAuthenticatedLaunch,
 } from './ci-dsh-runtime-smoke.mjs'
 
 const appRoot = resolve(import.meta.dirname, '..')
+
+test('鉴权冒烟跟随 DSH 的 303 并验证同源会话首页', async t => {
+  let location = './'
+  let homeStatus = 200
+  const requests = []
+  const server = createServer((request, response) => {
+    requests.push({ url: request.url, cookie: request.headers.cookie, auth: request.headers.authorization })
+    if (request.url === '/?token=fixture') {
+      response.writeHead(303, { Location: location, 'Set-Cookie': 'dsh_session=fixture; Path=/; HttpOnly' })
+    } else {
+      response.writeHead(homeStatus)
+    }
+    response.end()
+  })
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
+  t.after(() => new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve())))
+  const launchUrl = `http://127.0.0.1:${server.address().port}/?token=fixture`
+  const authorization = 'Basic fixture'
+
+  await verifyAuthenticatedLaunch(launchUrl, authorization)
+  assert.deepEqual(requests, [
+    { url: '/?token=fixture', cookie: undefined, auth: authorization },
+    { url: '/', cookie: 'dsh_session=fixture', auth: authorization },
+  ])
+
+  homeStatus = 401
+  await assert.rejects(verifyAuthenticatedLaunch(launchUrl, authorization), /status=401/u)
+  location = 'http://127.0.0.1:1/'
+  await assert.rejects(verifyAuthenticatedLaunch(launchUrl, authorization), /必须与启动页同源/u)
+})
 
 test('detectBootOutputFailures 命中 Issue #31 的 Cordis 注入错误、插件未激活、缺模块与补丁未命中告警', () => {
   const issue31Output = [

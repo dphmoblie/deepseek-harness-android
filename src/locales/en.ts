@@ -203,6 +203,7 @@ export const english: Readonly<Record<string, string>> = {
   "正在读取会话…": "Reading sessions…",
   "只读取标题与更新时间，不会读取会话正文。": "Only titles and update times are read; session content is never read.",
   "读不到会话列表": "Session list unavailable",
+  "会话列表读取不完整": "The session list is incomplete",
   "运行环境还没安装，读不到会话列表；这不代表没有会话。": "The runtime is not installed yet, so the session list cannot be read. This does not mean there are no sessions.",
   "读取会话列表超时；这不代表没有会话。": "Reading the session list timed out. This does not mean there are no sessions.",
   "暂时读不到会话列表；这不代表没有会话。": "The session list cannot be read right now. This does not mean there are no sessions.",

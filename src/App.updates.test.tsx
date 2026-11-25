@@ -138,6 +138,33 @@ describe('应用更新入口与缓存交互', () => {
     expect(screen.getByRole('button', { name: '下载更新' })).toBeDisabled()
   })
 
+  it('离线重新检查时采用最新安装权限，并保留同频道缓存', async () => {
+    render(<App />)
+    await openVersions()
+    await screen.findByText('0.3.0 · 4.0 KB')
+    expect(screen.getByRole('button', { name: '去系统设置允许安装' })).toBeVisible()
+
+    bridge.getAppUpdateLocalState.mockResolvedValueOnce({
+      installedVersion: cachedUpdate.installedVersion,
+      installedVersionCode: cachedUpdate.installedVersionCode,
+      channel: cachedUpdate.channel,
+      installAllowed: true,
+    })
+    let failRefresh!: (error: Error) => void
+    bridge.getAppUpdateState.mockImplementationOnce(() => new Promise<AppUpdateState>((_, reject) => { failRefresh = reject }))
+    fireEvent.click(screen.getByRole('button', { name: '重新检查' }))
+    expect(await screen.findByText('下载完成后交给系统安装器安装，装完应用会重启')).toBeVisible()
+    expect(screen.getByRole('button', { name: '下载更新' })).toBeDisabled()
+
+    await act(async () => {
+      failRefresh(new Error('offline'))
+      await Promise.resolve()
+    })
+    expect(screen.queryByRole('button', { name: '去系统设置允许安装' })).toBeNull()
+    expect(screen.getByText('重新检查失败，仍显示上次缓存的更新信息。')).toBeVisible()
+    expect(screen.getByText('0.3.0 · 4.0 KB')).toBeVisible()
+  })
+
   it('打开系统安装设置失败给出错误提示，不产生未处理拒绝', async () => {
     bridge.openAppUpdateInstallSettings.mockRejectedValueOnce(new Error('设置无法打开'))
     render(<App />)

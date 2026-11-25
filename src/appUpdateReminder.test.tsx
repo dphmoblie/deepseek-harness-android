@@ -180,6 +180,63 @@ describe('每日应用更新提醒', () => {
     expect(hook.result.current.available).toEqual(release)
   })
 
+  it.each([update, noUpdate])('切换频道期间忽略旧频道更新结果且不消耗当天提醒 %#', async stale => {
+    let finishCheck!: (state: AppUpdateState) => void
+    let finishChange!: (state: AppUpdateState) => void
+    const load = vi.fn()
+      .mockImplementationOnce(() => new Promise<AppUpdateState>(resolve => { finishCheck = resolve }))
+      .mockResolvedValue({ ...update, channel: 'beta' })
+    const hook = renderHook(() => reminder.useAppUpdateReminder(true, load))
+    await settle()
+
+    const betaState: AppUpdateState = { ...noUpdate, channel: 'beta' }
+    act(() => {
+      void hook.result.current.changeChannel(() => new Promise<AppUpdateState>(resolve => { finishChange = resolve }))
+    })
+    focus()
+    await act(async () => {
+      finishCheck(stale)
+      await Promise.resolve()
+    })
+    expect(load).toHaveBeenCalledTimes(1)
+    expect(hook.result.current.available).toBeNull()
+    expect(localStorage.getItem(reminder.APP_UPDATE_REMINDER_CHECKED_KEY)).toBeNull()
+    expect(localStorage.getItem(reminder.APP_UPDATE_REMINDER_SHOWN_KEY)).toBeNull()
+
+    await act(async () => {
+      finishChange(betaState)
+      await Promise.resolve()
+    })
+    focus()
+    await settle()
+    expect(load).toHaveBeenCalledTimes(2)
+    expect(hook.result.current.available).toEqual(release)
+  })
+
+  it('切换频道后可重新检查，当天已经展示过的提醒保持去重', async () => {
+    const load = vi.fn().mockResolvedValueOnce(noUpdate).mockResolvedValue(update)
+    const hook = renderHook(() => reminder.useAppUpdateReminder(true, load))
+    await settle()
+    expect(localStorage.getItem(reminder.APP_UPDATE_REMINDER_CHECKED_KEY)).toBe('2026-10-12')
+
+    const betaUpdate: AppUpdateState = { ...update, channel: 'beta' }
+    await act(async () => {
+      await hook.result.current.changeChannel(() => Promise.resolve(betaUpdate))
+    })
+    focus()
+    await settle()
+    expect(hook.result.current.available).toEqual(release)
+    expect(load).toHaveBeenCalledTimes(2)
+
+    await act(async () => {
+      await hook.result.current.changeChannel(() => Promise.resolve(noUpdate))
+    })
+    focus()
+    await settle()
+    expect(hook.result.current.available).toBeNull()
+    expect(load).toHaveBeenCalledTimes(2)
+  })
+
   it('请求中关闭不会展示晚到结果，重新开启复用已有结果', async () => {
     let resolve: (state: AppUpdateState) => void = () => undefined
     const load = vi.fn(() => new Promise<AppUpdateState>(done => { resolve = done }))

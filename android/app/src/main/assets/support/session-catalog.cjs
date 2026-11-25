@@ -541,7 +541,7 @@ function byRecency(left, right) {
 
 /**
  * 主流程：列目录 → 按最近更新排序 → **未归档取 `limit` 条、归档取 [MAX_ARCHIVED] 条** →
- * 分配日志扫描时间 → 合并回最近更新顺序。`hooks` 仅供单测观察（见 `readSession`）。
+ * 两组共用扫描截止时间 → 合并回最近更新顺序。`hooks` 仅供单测观察（见 `readSession`）。
  */
 async function buildCatalog(limit, root, hooks = null, workspaceStatePath = defaultWorkspaceStatePath(root)) {
   const started = Date.now()
@@ -564,13 +564,12 @@ async function buildCatalog(limit, root, hooks = null, workspaceStatePath = defa
   let truncated = candidates.length > selectedCount || unreadable > 0
   const sessions = []
 
-  async function scan(group, cutoff, start = 0) {
-    let index = start
-    for (; index < group.length && Date.now() <= cutoff; index += 1) {
-      const candidate = group[index]
+  async function scan(group) {
+    for (const candidate of group) {
+      if (Date.now() > deadline) break
       let detail = { depth: 0, title: '' }
       try {
-        detail = await readSession(candidate.log, cutoff, hooks)
+        detail = await readSession(candidate.log, deadline, hooks)
       } catch (error) {
         if (error !== null && typeof error === 'object' && error.code === 'SESSION_CATALOG_ZSTD_UNSUPPORTED') throw error
         // 单个会话读不动（权限、损坏）：仍然列出它的 id 与时间，只是没有标题、按主会话处理。
@@ -582,16 +581,12 @@ async function buildCatalog(limit, root, hooks = null, workspaceStatePath = defa
       if (detail.parentId !== undefined) session.parentId = detail.parentId
       if (detail.agentName !== undefined) session.agentName = detail.agentName
       sessions.push(session)
-      if (Date.now() > cutoff) truncated = true
+      if (Date.now() > deadline) truncated = true
     }
-    return index
   }
 
-  // 为归档保留一半剩余时间；归档提前读完时，把剩下的时间归还给未归档会话。
-  const firstCutoff = archived.length > 0 ? Math.min(deadline, (Date.now() + deadline) / 2) : deadline
-  const firstCount = await scan(unarchived, firstCutoff)
-  await scan(archived, deadline)
-  await scan(unarchived, deadline, firstCount)
+  // 每组同时最多读一份日志，避免一组把另一组的读取挡到截止时间之后。
+  await Promise.all([scan(unarchived), scan(archived)])
   return {
     sessions: sessions.sort(byRecency),
     truncated: truncated || sessions.length < selectedCount,

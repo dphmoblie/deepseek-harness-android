@@ -83,7 +83,14 @@ export function AppUpdateSection({ loadUpdate, loadLocalUpdate, setUpdateChannel
       // 或 GitHub 波动把「接收测试版本」开关回弹关闭并锁死。
       void loadLocalUpdate().then(local => {
         if (revision === readRevision.current && !remoteSucceeded) {
-          setState(prev => prev ?? local)
+          setState(prev => {
+            if (prev === null || prev.channel !== local.channel || prev.installedVersion !== local.installedVersion ||
+                prev.installedVersionCode !== local.installedVersionCode || local.checkedAt !== undefined) {
+              return local
+            }
+            const { available, cached, checkedAt } = prev
+            return { ...local, available, cached, checkedAt }
+          })
         }
       }).catch(() => undefined)
     }

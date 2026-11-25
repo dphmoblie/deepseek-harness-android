@@ -5057,8 +5057,9 @@ export function App() {
   // 应用更新入口默认直连发布目录；原生仍保留缓存参数，供明确的缓存读取场景使用。
   const loadAppUpdate = useCallback((forceRefresh = true) => runtimeBridge.getAppUpdateState(forceRefresh), [])
   const loadAppUpdateLocal = useCallback(() => runtimeBridge.getAppUpdateLocalState(), [])
-  const setAppUpdateChannel = useCallback((channel: AppUpdateChannel) => runtimeBridge.setAppUpdateChannel(channel), [])
   const appUpdateReminder = useAppUpdateReminder(language !== null && !booting && !appDisclaimerOpen && !onboardingOpen && !firstRunPermissionsOpen, loadAppUpdate)
+  const { changeChannel } = appUpdateReminder
+  const setAppUpdateChannel = useCallback((channel: AppUpdateChannel) => changeChannel(() => runtimeBridge.setAppUpdateChannel(channel)), [changeChannel])
   const downloadAppUpdate = useCallback(() => runtimeBridge.downloadAppUpdate(), [])
   const installAppUpdate = useCallback(() => runtimeBridge.installAppUpdate(), [])
   const openAppUpdateInstallSettings = useCallback(() => runtimeBridge.openAppUpdateInstallSettings(), [])

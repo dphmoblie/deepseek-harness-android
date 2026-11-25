@@ -335,10 +335,35 @@ function httpGet(url, headers = {}) {
       res.on('data', chunk => { body += chunk })
       res.on('end', () => resolveResponse({ statusCode: res.statusCode, headers: res.headers, body }))
     })
-    req.once('timeout', () => req.destroy(new Error(`HTTP request timed out: ${url}`)))
+    req.once('timeout', () => req.destroy(new Error('HTTP request timed out')))
     req.once('error', reject)
     req.end()
   })
+}
+
+export async function verifyAuthenticatedLaunch(launchUrl, basicHeader) {
+  const headers = { Accept: 'text/html', Authorization: basicHeader }
+  const authed = await httpGet(launchUrl, headers)
+  if (authed.statusCode === 200) return
+  if (authed.statusCode !== 302 && authed.statusCode !== 303) {
+    throw new Error(`鉴权后访问启动页返回异常：status=${authed.statusCode}`)
+  }
+  if (typeof authed.headers.location !== 'string' || !authed.headers.location) {
+    throw new Error('鉴权跳转缺少目标地址')
+  }
+
+  const nextUrl = new URL(authed.headers.location, launchUrl)
+  if (nextUrl.origin !== new URL(launchUrl).origin || nextUrl.username || nextUrl.password) {
+    throw new Error('鉴权跳转目标必须与启动页同源')
+  }
+  const cookies = (authed.headers['set-cookie'] ?? [])
+    .map(cookie => cookie.split(';')[0])
+    .filter(Boolean)
+    .join('; ')
+  const followed = await httpGet(nextUrl, { ...headers, ...(cookies ? { Cookie: cookies } : {}) })
+  if (followed.statusCode !== 200) {
+    throw new Error(`鉴权跳转后访问首页返回异常：status=${followed.statusCode}`)
+  }
 }
 
 export async function resolveNodePtyDir(dshRoot) {
@@ -478,6 +503,7 @@ export async function runDshBootSmoke({
     }
 
     const launchUrl = launchMatch[1]
+    if (Number(launchMatch[2]) !== port) throw new Error('启动地址端口与冒烟服务端口不符')
     const unauth = await httpGet(`http://127.0.0.1:${port}/`, { Accept: 'text/html' })
     if (unauth.statusCode !== 401 || unauth.headers['www-authenticate'] !== EXPECTED_AUTH_CHALLENGE) {
       throw new Error(
@@ -486,27 +512,7 @@ export async function runDshBootSmoke({
     }
 
     const basicHeader = `Basic ${Buffer.from(`dsh-mobile:${authToken}`, 'utf8').toString('base64')}`
-    const authed = await httpGet(launchUrl, {
-      Accept: 'text/html',
-      Authorization: basicHeader,
-    })
-    if (authed.statusCode === 302 && typeof authed.headers.location === 'string') {
-      const cookies = (Array.isArray(authed.headers['set-cookie']) ? authed.headers['set-cookie'] : [])
-        .map(cookie => cookie.split(';')[0])
-        .filter(Boolean)
-        .join('; ')
-      const nextUrl = new URL(authed.headers.location, `http://127.0.0.1:${port}`).toString()
-      const followed = await httpGet(nextUrl, {
-        Accept: 'text/html',
-        Authorization: basicHeader,
-        ...(cookies ? { Cookie: cookies } : {}),
-      })
-      if (followed.statusCode !== 200) {
-        throw new Error(`鉴权跳转后访问首页返回异常：status=${followed.statusCode}`)
-      }
-    } else if (authed.statusCode !== 200) {
-      throw new Error(`鉴权后访问启动页返回异常：status=${authed.statusCode}`)
-    }
+    await verifyAuthenticatedLaunch(launchUrl, basicHeader)
 
     // 同步核对外部浏览器交接：携带浏览器一次性参数应返回 302 并签发 dsh_browser_session Cookie。
     const dshToken = launchMatch[3]

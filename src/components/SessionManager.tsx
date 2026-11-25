@@ -560,11 +560,11 @@ export function SessionManager({ onBack, onOpenHarness, embedded = false, disabl
             <strong>{t('正在读取会话…')}</strong>
             <p>{t('只读取标题与更新时间，不会读取会话正文。')}</p>
           </div>
-        ) : catalog.status === 'unavailable' ? (
+        ) : catalog.status === 'unavailable' || (catalog.truncated && visibleCount === 0) ? (
           <div className="session-empty">
             <EmptyMark />
-            <strong>{t('读不到会话列表')}</strong>
-            <p>{t(unavailableHint(catalog.reason))}</p>
+            <strong>{t(catalog.status === 'unavailable' ? '读不到会话列表' : '会话列表读取不完整')}</strong>
+            {catalog.status === 'unavailable' && <p>{t(unavailableHint(catalog.reason))}</p>}
             <button className="button button-secondary compact-button" type="button" onClick={retrySessions} disabled={disabled || retrying}>
               {retrying && <Loader2 className="spin" size={16} />}{t(retrying ? '正在读取会话…' : '重试')}
             </button>
@@ -610,7 +610,7 @@ export function SessionManager({ onBack, onOpenHarness, embedded = false, disabl
         )}
       </section>
 
-      {catalog.status === 'ready' && catalog.truncated && (
+      {catalog.status === 'ready' && catalog.truncated && visibleCount > 0 && (
         <p className="session-note">{t('会话较多，这里只列出最近更新的一部分。')}</p>
       )}
 
