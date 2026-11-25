@@ -45,7 +45,7 @@ describe('悬浮球设置', () => {
     render(<App />)
   await arriveAtSettingsHome()
 
-    await openSettingsPage('后台', '后台保持')
+    await openSettingsPage('运行与网络', '后台保活与悬浮球')
     expect(await screen.findByText('悬浮球')).toBeInTheDocument()
     expect(screen.getByRole('switch', { name: /悬浮球/ })).toBeDisabled()
     // 「系统权限已关闭」只在设置里记着开启时才出现：这里设置是关着的，不能只因为没权限就报它。
@@ -59,7 +59,7 @@ describe('悬浮球设置', () => {
   it('开启悬浮球立即独立保存，不需要离开页面', async () => {
     render(<App />)
     await arriveAtSettingsHome()
-    await openSettingsPage('后台', '后台保持')
+    await openSettingsPage('运行与网络', '后台保活与悬浮球')
     const toggle = screen.getByRole('switch', { name: /悬浮球/ })
     fireEvent.click(toggle)
     await waitFor(() => expect(bridge.setOverlayBallEnabled).toHaveBeenCalledWith(true))
@@ -74,7 +74,7 @@ describe('悬浮球设置', () => {
     bridge.setOverlayBallEnabled.mockRejectedValueOnce(new Error('无法保存悬浮球设置'))
     render(<App />)
     await arriveAtSettingsHome()
-    await openSettingsPage('后台', '后台保持')
+    await openSettingsPage('运行与网络', '后台保活与悬浮球')
     const toggle = screen.getByRole('switch', { name: /悬浮球/ })
     fireEvent.click(toggle)
     await waitFor(() => expect(toggle).toBeEnabled())
@@ -89,7 +89,7 @@ describe('悬浮球设置', () => {
   it('再次打开应用沿用已保存的悬浮球开关', async () => {
     const first = render(<App />)
     await arriveAtSettingsHome()
-    await openSettingsPage('后台', '后台保持')
+    await openSettingsPage('运行与网络', '后台保活与悬浮球')
     fireEvent.click(screen.getByRole('switch', { name: /悬浮球/ }))
     await waitFor(() => expect(screen.getByRole('switch', { name: /悬浮球/ })).toBeChecked())
     first.unmount()
@@ -98,7 +98,7 @@ describe('悬浮球设置', () => {
     bridge.getOverlayBallState.mockResolvedValue({ enabled: true, canDrawOverlays: true, serviceActive: true })
     render(<App />)
     await arriveAtSettingsHome()
-    await openSettingsPage('后台', '后台保持')
+    await openSettingsPage('运行与网络', '后台保活与悬浮球')
     expect(screen.getByRole('switch', { name: /悬浮球/ })).toBeChecked()
     expect(bridge.setOverlayBallEnabled).toHaveBeenCalledTimes(1)
   })
@@ -106,11 +106,11 @@ describe('悬浮球设置', () => {
   it('独立保存悬浮球不会提交其它草稿，整页保存不重放开关', async () => {
     render(<App />)
     await arriveAtSettingsHome()
-    await openSettingsPage('后台', '后台保持')
-    fireEvent.click(screen.getByRole('switch', { name: /后台保持 Harness/ }))
+    await openSettingsPage('运行与网络', '后台保活与悬浮球')
+    fireEvent.click(screen.getByRole('switch', { name: /后台保活 Harness/ }))
     fireEvent.click(screen.getByRole('switch', { name: /悬浮球/ }))
     await waitFor(() => expect(screen.getByRole('switch', { name: /悬浮球/ })).toBeChecked())
-    expect(screen.getByRole('switch', { name: /后台保持 Harness/ })).toBeChecked()
+    expect(screen.getByRole('switch', { name: /后台保活 Harness/ })).toBeChecked()
     expect(bridge.saveSettings).not.toHaveBeenCalled()
     await pressSave()
     expect(bridge.saveSettings).toHaveBeenCalledWith(expect.objectContaining({ keepRuntimeInBackground: true }))
@@ -122,7 +122,7 @@ describe('悬浮球设置', () => {
     try {
       render(<App />)
       await arriveAtSettingsHome()
-      await openSettingsPage('后台', '后台保持')
+      await openSettingsPage('运行与网络', '后台保活与悬浮球')
       const toggle = screen.getByRole('switch', { name: /悬浮球/ })
       fireEvent.click(toggle)
       await waitFor(() => expect(toggle).toBeChecked())
@@ -151,7 +151,7 @@ describe('悬浮球设置', () => {
     render(<App />)
   await arriveAtSettingsHome()
 
-    await openSettingsPage('后台', '后台保持')
+    await openSettingsPage('运行与网络', '后台保活与悬浮球')
     expect(await screen.findByText(/系统权限已关闭/)).toBeInTheDocument()
   })
 
@@ -163,7 +163,7 @@ describe('悬浮球设置', () => {
     render(<App />)
   await arriveAtSettingsHome()
 
-    await openSettingsPage('后台', '后台保持')
+    await openSettingsPage('运行与网络', '后台保活与悬浮球')
     const toggle = await screen.findByRole('switch', { name: /悬浮球/ })
     await waitFor(() => expect(toggle).toBeChecked())
     expect(toggle).toBeEnabled()
@@ -185,7 +185,7 @@ describe('悬浮球设置', () => {
   await arriveAtSettingsHome()
     expect(bridge.getSettings).toHaveBeenCalledTimes(1)
 
-    await openSettingsPage('后台', '后台保持')
+    await openSettingsPage('运行与网络', '后台保活与悬浮球')
     await waitFor(() => expect(bridge.getSettings).toHaveBeenCalledTimes(2))
     // 重读的结果必须真的进到开关上，而不只是多调了一次桥方法。
     await waitFor(() => expect(screen.getByRole('switch', { name: /悬浮球/ })).toBeChecked())
@@ -206,7 +206,7 @@ describe('悬浮球设置', () => {
       render(<App />)
 
       fireEvent.click(await screen.findByRole('button', { name: '打开应用设置' }))
-      await openSettingsPage('后台', '后台保持')
+      await openSettingsPage('运行与网络', '后台保活与悬浮球')
 
       const toggle = await screen.findByRole('switch', { name: /悬浮球/ })
       fireEvent.click(toggle)
@@ -236,7 +236,7 @@ describe('悬浮球设置', () => {
     let resolveSettings!: (value: RuntimeSettings) => void
     bridge.getSettings.mockImplementationOnce(() => new Promise<RuntimeSettings>(resolve => { resolveSettings = resolve }))
 
-    fireEvent.click(screen.getByRole('button', { name: /主题/ }))
+    fireEvent.click(screen.getByRole('button', { name: /外观与显示/ }))
     expect(screen.getByText('正在读取设置')).toBeVisible()
     expect(screen.queryByRole('slider')).toBeNull()
     expect(screen.queryByRole('button', { name: '保存' })).toBeNull()
@@ -245,8 +245,8 @@ describe('悬浮球设置', () => {
       resolveSettings({ ...settings, terminalFontSize: 16 })
       await Promise.resolve()
     })
-    // 「主题」现在只摆入口，字号在三级页「字号与配色」里。
-    fireEvent.click(await screen.findByRole('button', { name: /字号与配色/ }))
+    // 「外观与显示」二级页只摆入口，字号在三级页「显示与配色」里。
+    fireEvent.click(await screen.findByRole('button', { name: /显示与配色/ }))
     const slider = await screen.findByRole('slider', { name: /字号/ })
     expect(slider).toHaveValue('16')
     fireEvent.change(slider, { target: { value: '18' } })
@@ -258,11 +258,11 @@ describe('悬浮球设置', () => {
     render(<App />)
   await arriveAtSettingsHome()
     bridge.getSettings.mockRejectedValueOnce(new Error('read failed'))
-    fireEvent.click(screen.getByRole('button', { name: /后台/ }))
+    fireEvent.click(screen.getByRole('button', { name: /运行与网络/ }))
     expect(await screen.findByRole('alert')).toHaveTextContent('无法读取最新设置，请重试')
     expect(screen.queryByRole('button', { name: '保存' })).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: '重试' }))
-    expect(await screen.findByRole('heading', { name: '后台' })).toBeVisible()
+    expect(await screen.findByRole('heading', { name: '运行与网络', level: 1 })).toBeVisible()
   })
 
   it('页内用菜单隐藏悬浮球后，保存其他草稿不会重新开启它', async () => {
@@ -270,7 +270,7 @@ describe('悬浮球设置', () => {
     bridge.getOverlayBallState.mockResolvedValue({ enabled: true, canDrawOverlays: true, serviceActive: true })
     render(<App />)
   await arriveAtSettingsHome()
-    await openSettingsPage('主题', '字号与配色')
+    await openSettingsPage('外观与显示', '显示与配色')
     const slider = screen.getByRole('slider', { name: /字号/ })
     fireEvent.change(slider, { target: { value: '19' } })
 
@@ -289,7 +289,7 @@ describe('悬浮球设置', () => {
     bridge.getOverlayBallState.mockResolvedValue({ enabled: true, canDrawOverlays: true, serviceActive: true })
     render(<App />)
   await arriveAtSettingsHome()
-    await openSettingsPage('后台', '后台保持')
+    await openSettingsPage('运行与网络', '后台保活与悬浮球')
     expect(screen.getByRole('switch', { name: /悬浮球/ })).toBeChecked()
     bridge.getOverlayBallState.mockResolvedValue({ enabled: false, canDrawOverlays: true, serviceActive: false })
     // 没有编辑项时不应为了“保存”而提交旧的悬浮球开关值。
@@ -301,7 +301,7 @@ describe('悬浮球设置', () => {
     bridge.setOverlayBallEnabled.mockImplementationOnce(() => new Promise<OverlayBallState>(resolve => { resolveWrite = resolve }))
     render(<App />)
     await arriveAtSettingsHome()
-    await openSettingsPage('后台', '后台保持')
+    await openSettingsPage('运行与网络', '后台保活与悬浮球')
     const toggle = screen.getByRole('switch', { name: /悬浮球/ })
     let resolveRead!: (value: OverlayBallState) => void
     bridge.getOverlayBallState.mockImplementationOnce(() => new Promise<OverlayBallState>(resolve => { resolveRead = resolve }))
@@ -320,7 +320,7 @@ describe('悬浮球设置', () => {
     bridge.getOverlayBallState.mockRejectedValue(new Error('overlay read failed'))
     render(<App />)
   await arriveAtSettingsHome()
-    await openSettingsPage('后台', '后台保持')
+    await openSettingsPage('运行与网络', '后台保活与悬浮球')
     expect(screen.getByRole('alert')).toHaveTextContent('无法读取悬浮球状态，正在重试')
     expect(screen.queryByText('系统权限已关闭')).toBeNull()
     expect(screen.queryByRole('button', { name: '前往系统设置开启' })).toBeNull()
@@ -334,13 +334,13 @@ describe('悬浮球设置', () => {
       await Promise.resolve()
     })
     expect(screen.queryByText('无法读取悬浮球状态，正在重试')).toBeNull()
-    expect(screen.getByText('点按快捷操作，长按打开对话小窗')).toBeVisible()
+    expect(screen.getByText('点按打开快捷菜单，长按呼出对话小窗')).toBeVisible()
   })
 
   it('保存成功后悬浮球查询失败不会误报保存失败', async () => {
     render(<App />)
   await arriveAtSettingsHome()
-    await openSettingsPage('主题', '字号与配色')
+    await openSettingsPage('外观与显示', '显示与配色')
     bridge.getOverlayBallState.mockRejectedValue(new Error('overlay read failed'))
     fireEvent.change(screen.getByRole('slider', { name: /字号/ }), { target: { value: '20' } })
     await pressSave()
@@ -353,7 +353,7 @@ describe('悬浮球设置', () => {
     document.documentElement.style.removeProperty('--app-font-scale')
     render(<App />)
   await arriveAtSettingsHome()
-    await openSettingsPage('主题', '字号与配色')
+    await openSettingsPage('外观与显示', '显示与配色')
     // 夹具默认字号就是基准值，挂载后应写回中性系数 1：不设置的人看到的是原来的界面。
     await waitFor(() => expect(document.documentElement.style.getPropertyValue('--app-font-scale')).toBe('1'))
 
@@ -365,7 +365,7 @@ describe('悬浮球设置', () => {
   it('悬浮球独立保存成功不依赖后续查询', async () => {
     render(<App />)
     await arriveAtSettingsHome()
-    await openSettingsPage('后台', '后台保持')
+    await openSettingsPage('运行与网络', '后台保活与悬浮球')
     fireEvent.click(screen.getByRole('switch', { name: /悬浮球/ }))
     await waitFor(() => expect(screen.getByRole('switch', { name: /悬浮球/ })).toBeChecked())
     bridge.getOverlayBallState.mockRejectedValue(new Error('overlay read failed'))
@@ -395,7 +395,7 @@ describe('设置草稿与未保存的输入', () => {
     for (let depth = 0; depth < 3; depth += 1) {
       const heading = screen.getByRole('heading', { level: 1 })
       if (heading.textContent === '设置') return
-      fireEvent.click(await screen.findByRole('button', { name: '返回设置' }))
+      fireEvent.click(await screen.findByRole('button', { name: /返回上一级|返回设置/ }))
       await waitFor(() => expect(screen.getByRole('heading', { level: 1 }).textContent).not.toBe(heading.textContent))
     }
     await screen.findByRole('heading', { name: '设置' })
@@ -443,7 +443,7 @@ describe('设置草稿与未保存的输入', () => {
     await openSettingsPage('模型与密钥')
 
     const login = screen.getByRole('button', { name: '登录 DeepSeek 账号' })
-    const bypass = screen.getByRole('button', { name: '我已在 Harness 内配置过，仍要打开' })
+    const bypass = screen.getByRole('button', { name: '已在 Harness 内配置，直接进入' })
     expect(login).toBeDisabled()
     expect(bypass).toBeDisabled()
     fireEvent.click(login)
@@ -472,7 +472,7 @@ describe('设置草稿与未保存的输入', () => {
     expect(bridge.saveSettings).not.toHaveBeenCalled()
 
     // 切到别的设置页：这一次离开会替用户保存。
-    await openSettingsPage('后台', '后台保持')
+    await openSettingsPage('运行与网络', '后台保活与悬浮球')
     await waitFor(() => expect(bridge.saveSettings).toHaveBeenCalledWith(expect.objectContaining({
       providerApiKeys: { deepseek: 'unit-test-pending-key' },
     })))
@@ -531,7 +531,7 @@ describe('设置草稿与未保存的输入', () => {
     expect(screen.queryByRole('combobox', { name: '供应商' })).not.toBeInTheDocument()
 
     // 三级页：没配置的模板集中在这里；点一家就回到模型页并展开它的密钥输入框。
-    fireEvent.click(screen.getByRole('button', { name: /添加其他供应商/ }))
+    fireEvent.click(screen.getByRole('button', { name: /添加内置供应商/ }))
     const addList = await screen.findByRole('list', { name: '可添加的供应商' })
     expect(within(addList).queryByText('DeepSeek')).toBeNull()
     expect(within(addList).queryByText('OpenAI')).toBeNull()
@@ -616,7 +616,7 @@ describe('设置草稿与未保存的输入', () => {
     await chooseProvider('OpenAI')
     fireEvent.change(screen.getByLabelText(/OpenAI API Key/), { target: { value: 'unit-test-openai-key' } })
     // 离开这一页：后台保存带上 openai 的密钥，并把它记为「已落盘」。
-    await openSettingsPage('后台', '后台保持')
+    await openSettingsPage('运行与网络', '后台保活与悬浮球')
     await waitFor(() => expect(bridge.saveSettings).toHaveBeenCalledWith(
       expect.objectContaining({ providerApiKeys: { openai: 'unit-test-openai-key' } })))
     await openSettingsPage('模型与密钥')
@@ -624,7 +624,7 @@ describe('设置草稿与未保存的输入', () => {
     // 再改一个凭据：这一轮只该带新的那一份，已落盘的 openai 不该被重传一遍。
     fireEvent.click(screen.getByRole('button', { name: /^DeepSeek / }))
     fireEvent.change(screen.getByLabelText(/DeepSeek API Key/), { target: { value: 'unit-test-deepseek-key' } })
-    await openSettingsPage('后台', '后台保持')
+    await openSettingsPage('运行与网络', '后台保活与悬浮球')
     await waitFor(() => expect(bridge.saveSettings.mock.calls.at(-1)?.[0])
       .toEqual(expect.objectContaining({ providerApiKeys: { deepseek: 'unit-test-deepseek-key' } })))
   })
@@ -641,7 +641,7 @@ describe('设置草稿与未保存的输入', () => {
 
     // 用户去别的设置页看一眼再回来：刚输入的密钥与正在编辑的供应商都必须还在。
     await backToSettingsHome()
-    await openSettingsPage('主题', '字号与配色')
+    await openSettingsPage('外观与显示', '显示与配色')
     await backToSettingsHome()
     await openSettingsPage('模型与密钥')
 
@@ -662,7 +662,7 @@ describe('设置草稿与未保存的输入', () => {
     render(<App />)
   await arriveAtSettingsHome()
 
-    await openSettingsPage('主题', '字号与配色')
+    await openSettingsPage('外观与显示', '显示与配色')
     // 写盘一律挂起：切页时的自动保存不会结算，草稿因此始终是「脏」的 ——
     // 这样下面看到的 18 只能来自草稿，而不是恰好已经落盘。
     bridge.saveSettings.mockImplementation(() => new Promise<RuntimeSettings>(() => {}))
@@ -673,7 +673,7 @@ describe('设置草稿与未保存的输入', () => {
     await backToSettingsHome()
     await openSettingsPage('模型与密钥')
     await backToSettingsHome()
-    await openSettingsPage('主题', '字号与配色')
+    await openSettingsPage('外观与显示', '显示与配色')
 
     // 重读照旧发生，但草稿是「脏」的：用户输到一半的值优先。
     expect(await screen.findByRole('slider', { name: /字号/ })).toHaveValue('18')
@@ -719,7 +719,7 @@ describe('设置草稿与未保存的输入', () => {
     // 写盘一直挂着不结算：这样「回来还在」只能来自草稿，而不是恰好已经落盘。
     bridge.saveSettings.mockImplementation(() => new Promise<RuntimeSettings>(() => {}))
 
-    await openSettingsPage('主题', '字号与配色')
+    await openSettingsPage('外观与显示', '显示与配色')
     fireEvent.change(screen.getByRole('slider', { name: /字号/ }), { target: { value: '18' } })
 
     // 拿到对话页：它不属于设置区，草稿要活到进程结束，不能再在这里丢掉。
@@ -728,7 +728,7 @@ describe('设置草稿与未保存的输入', () => {
     fireEvent.click(within(nav).getByRole('button', { name: '首页' }))
     await waitFor(() => expect(screen.queryByRole('heading', { name: '设置', level: 1 })).not.toBeInTheDocument())
 
-    await openSettingsPage('主题', '字号与配色')
+    await openSettingsPage('外观与显示', '显示与配色')
     expect(await screen.findByRole('slider', { name: /字号/ })).toHaveValue('18')
   })
 
@@ -755,7 +755,7 @@ describe('设置草稿与未保存的输入', () => {
     bridge.saveSettings.mockImplementation(() => new Promise<RuntimeSettings>(resolve => { resolveSave = resolve }))
 
     await backToSettingsHome()
-    await openSettingsPage('后台')
+    await openSettingsPage('运行与网络')
     await backToSettingsHome()
     await openSettingsPage('模型与密钥')
 
@@ -822,7 +822,7 @@ describe('外观设置接线', () => {
     render(<App />)
   await arriveAtSettingsHome()
 
-    await openSettingsPage('主题', '字号与配色')
+    await openSettingsPage('外观与显示', '显示与配色')
     const section = await screen.findByRole('region', { name: /界面主题/ })
     expect(section).toBeInTheDocument()
     // 三个选项都要在（渲染成 radiogroup 里的 radio），否则用户无法「跟着系统走」。
@@ -843,7 +843,7 @@ describe('外观设置接线', () => {
     try {
       render(<App />)
       await arriveAtSettingsHome()
-      await openSettingsPage('主题', '字号与配色')
+      await openSettingsPage('外观与显示', '显示与配色')
       const group = await screen.findByRole('radiogroup', { name: '应用方向' })
       await waitFor(() => expect(within(group).getByRole('radio', { name: '竖屏' })).toBeChecked())
       fireEvent.click(within(group).getByRole('radio', { name: '横屏' }))
@@ -856,36 +856,36 @@ describe('外观设置接线', () => {
     }
   })
 
-  it('「主题」摆三行入口，DSH 的主题与背景合在同一页', async () => {
+  it('「外观与显示」摆三行入口，对话页外观同步独立成页', async () => {
     render(<App />)
   await arriveAtSettingsHome()
 
-    await openSettingsPage('主题')
-    expect(await screen.findByRole('button', { name: /字号与配色/ })).toBeVisible()
-    expect(screen.getByRole('button', { name: /^背景/ })).toBeVisible()
-    expect(screen.getByRole('button', { name: /DSH 主题/ })).toBeVisible()
+    await openSettingsPage('外观与显示')
+    expect(await screen.findByRole('button', { name: /显示与配色/ })).toBeVisible()
+    expect(screen.getByRole('button', { name: /背景与卡片/ })).toBeVisible()
+    expect(screen.getByRole('button', { name: /对话页外观同步/ })).toBeVisible()
     // 二级页不再直接摆控件：字号滑杆和背景卡片都不该在这里。
     expect(screen.queryByRole('slider', { name: /字号/ })).toBeNull()
     expect(screen.queryByText('应用背景与卡片')).toBeNull()
 
-    await openSettingsPage('主题', '字号与配色')
+    await openSettingsPage('外观与显示', '显示与配色')
     expect(await screen.findByRole('region', { name: /界面主题/ })).toBeVisible()
     expect(screen.getByRole('slider', { name: /字号/ })).toBeVisible()
     expect(screen.queryByText('应用背景与卡片')).toBeNull()
 
-    await openSettingsPage('主题', '背景')
+    await openSettingsPage('外观与显示', '背景与卡片')
     expect(await screen.findByText('应用背景与卡片')).toBeVisible()
     expect(screen.queryByRole('slider', { name: /字号/ })).toBeNull()
     expect(screen.queryByRole('region', { name: /界面主题/ })).toBeNull()
-    // DSH 同步已经独立成页，不再和本机背景挤在一起。
-    expect(screen.queryByText('同步到 DSH 页面')).toBeNull()
+    // 对话页同步已经独立成页，不再和本机背景挤在一起。
+    expect(screen.queryByText('同步到 Harness 对话页')).toBeNull()
 
-    await openSettingsPage('主题', 'DSH 主题')
+    await openSettingsPage('外观与显示', '对话页外观同步')
     // 合并后同一页里既有主题（透明度 + 同步/恢复），也有背景（勾选 + 选文件）。
     expect(await screen.findByRole('slider', { name: /按钮与输入框不透明度/ })).toBeVisible()
-    expect(screen.getByRole('button', { name: '让 DSH 使用当前主题' })).toBeVisible()
-    expect(screen.getByRole('button', { name: '恢复 DSH 默认主题' })).toBeVisible()
-    expect(screen.getByRole('checkbox', { name: '连背景一起同步' })).toBeVisible()
+    expect(screen.getByRole('button', { name: '同步当前主题到对话页' })).toBeVisible()
+    expect(screen.getByRole('button', { name: '恢复对话页默认主题' })).toBeVisible()
+    expect(screen.getByRole('checkbox', { name: '同时同步背景' })).toBeVisible()
     expect(screen.getByRole('button', { name: '选择背景文件' })).toBeVisible()
     expect(screen.queryByText('应用背景与卡片')).toBeNull()
     expect(screen.queryByRole('region', { name: /界面主题/ })).toBeNull()
@@ -893,45 +893,44 @@ describe('外观设置接线', () => {
 })
 
 /**
- * 后台页只管「运行时从哪来」，装/启停/重置与设备命令各在自己的独立页；
- * 入口放在这里，才不会让人为了找运行时页翻遍设置首页。
+ * 运行与网络 / 设备控制二级页只列入口，具体控件放在各自三级页，
+ * 避免不同类型选项堆在同一屏。
  */
-describe('后台页的运行时与设备 Shell 入口', () => {
+describe('运行与网络及设备控制入口', () => {
   beforeEach(beforeEachAppTest)
 
-  it('给出两个入口，并说明独立页各自管什么', async () => {
+  it('运行与网络二级页给出后台保活与网络方式两个入口', async () => {
     render(<App />)
   await arriveAtSettingsHome()
 
-    await openSettingsPage('后台', '设备连接')
-    expect(await screen.findByRole('heading', { name: '运行时与设备 Shell' })).toBeVisible()
-    expect(screen.getByRole('button', { name: 'Ubuntu 运行时' })).toBeEnabled()
-    expect(screen.getByRole('button', { name: '设备 Shell 设置' })).toBeEnabled()
-    expect(screen.getByText('默认使用内置受校验版本，其他版本请在版本管理切换')).toBeVisible()
+    await openSettingsPage('运行与网络')
+    expect(await screen.findByRole('heading', { name: '运行与网络', level: 1 })).toBeVisible()
+    expect(screen.getByRole('button', { name: /后台保活与悬浮球/ })).toBeEnabled()
+    expect(screen.getByRole('button', { name: /网络与浏览方式/ })).toBeEnabled()
   })
 
-  it('两个入口分别进入运行时页与设备 Shell 页', async () => {
+  it('设备控制两个入口分别进入 Shizuku 与 Root 通道三级页', async () => {
     render(<App />)
   await arriveAtSettingsHome()
 
-    await openSettingsPage('后台', '设备连接')
-    fireEvent.click(screen.getByRole('button', { name: 'Ubuntu 运行时' }))
-    expect(await screen.findByRole('heading', { name: 'Ubuntu 运行时' })).toBeVisible()
+    await openSettingsPage('设备控制')
+    fireEvent.click(screen.getByRole('button', { name: /Shizuku 与设备 Shell/ }))
+    expect(await screen.findByRole('heading', { name: 'Shizuku 与设备 Shell', level: 1 })).toBeVisible()
 
-    fireEvent.click(screen.getByRole('button', { name: '返回设置' }))
-    await openSettingsPage('后台', '设备连接')
-    fireEvent.click(screen.getByRole('button', { name: '设备 Shell 设置' }))
-    expect(await screen.findByRole('heading', { name: '设备 Shell 设置' })).toBeVisible()
+    fireEvent.click(screen.getByRole('button', { name: '返回上一级' }))
+    expect(await screen.findByRole('heading', { name: '设备控制', level: 1 })).toBeVisible()
+    fireEvent.click(screen.getByRole('button', { name: /Root 通道与电源/ }))
+    expect(await screen.findByRole('heading', { name: 'Root 通道与电源', level: 1 })).toBeVisible()
   })
 
   it('悬浮球开启后切页不重复整页保存', async () => {
     render(<App />)
     await arriveAtSettingsHome()
-    await openSettingsPage('后台', '后台保持')
+    await openSettingsPage('运行与网络', '后台保活与悬浮球')
     const toggle = screen.getByRole('switch', { name: /悬浮球/ })
     fireEvent.click(toggle)
     await waitFor(() => expect(toggle).toBeChecked())
-    fireEvent.click(screen.getByRole('button', { name: '返回设置' }))
+    fireEvent.click(screen.getByRole('button', { name: '返回上一级' }))
     expect(bridge.setOverlayBallEnabled).toHaveBeenCalledWith(true)
     expect(bridge.saveSettings).not.toHaveBeenCalled()
   })
@@ -940,7 +939,7 @@ describe('后台页的运行时与设备 Shell 入口', () => {
     bridge.getOverlayBallState.mockResolvedValue({ enabled: false, canDrawOverlays: true, serviceActive: false })
     render(<App />)
     await arriveAtSettingsHome()
-    await openSettingsPage('后台', '后台保持')
+    await openSettingsPage('运行与网络', '后台保活与悬浮球')
 
     fireEvent.click(await screen.findByRole('switch', { name: /悬浮球/ }))
     await pressSave()
@@ -997,7 +996,7 @@ describe('后台页的运行时与设备 Shell 入口', () => {
     bridge.saveSettings.mockImplementationOnce(() => new Promise<RuntimeSettings>(resolve => { resolveSave = resolve }))
     render(<App />)
     await arriveAtSettingsHome()
-    await openSettingsPage('后台', '后台保持')
+    await openSettingsPage('运行与网络', '后台保活与悬浮球')
 
     fireEvent.click(await screen.findByRole('switch', { name: /打开应用时预启动服务/ }))
     await pressSave()
@@ -1026,7 +1025,7 @@ describe('后台页的运行时与设备 Shell 入口', () => {
 
     // The active save disables credential editing; a newer draft can still be
     // created by another settings control while the native response is pending.
-    await openSettingsPage('主题', '字号与配色')
+    await openSettingsPage('外观与显示', '显示与配色')
     fireEvent.change(await screen.findByRole('slider', { name: /字号/ }), { target: { value: '18' } })
     // 新草稿自己的那次保存也挂起：本用例只关心「第一次保存迟到」时草稿的命运，
     // 若让它照常落盘，草稿就不再是「未保存」，落盘后的重建本来就会清空密钥框。
@@ -1184,7 +1183,7 @@ describe('内置供应商获取上游模型', () => {
     render(<App />)
     await arriveAtSettingsHome()
     await openSettingsPage('模型与密钥')
-    expect(screen.getByText(/不会替你在 Harness 里切换模型/)).toBeVisible()
+    expect(screen.getByText(/实际对话模型请在 Harness 内切换/)).toBeVisible()
   })
 })
 
@@ -1194,7 +1193,7 @@ describe('页面网络访问', () => {
   it('默认只连本机；选「全部网络连接」后按新档位保存', async () => {
     render(<App />)
     await arriveAtSettingsHome()
-    await openSettingsPage('后台')
+    await openSettingsPage('运行与网络', '网络与浏览方式')
 
     const group = await screen.findByRole('radiogroup', { name: '网络访问' })
     expect(within(group).getAllByRole('radio')).toHaveLength(3)
@@ -1217,12 +1216,12 @@ describe('页面网络访问', () => {
     bridge.getSettings.mockResolvedValue({ ...settings, pageNetworkAccess: 'http' })
     render(<App />)
     await arriveAtSettingsHome()
-    await openSettingsPage('后台')
+    await openSettingsPage('运行与网络', '网络与浏览方式')
 
     expect(await screen.findByRole('radio', { name: /允许 HTTP 连接/ })).toBeChecked()
 
     // 换到另一页改一个不相关的开关：设置区共享同一份草稿，保存时档位必须原样带上。
-    await openSettingsPage('主题', '字号与配色')
+    await openSettingsPage('外观与显示', '显示与配色')
     fireEvent.click(await screen.findByRole('switch', { name: /保持屏幕常亮/ }))
     await pressSave()
     await waitFor(() => expect(bridge.saveSettings).toHaveBeenCalledWith(expect.objectContaining({

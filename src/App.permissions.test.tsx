@@ -45,6 +45,7 @@ describe('Android 首次权限说明', () => {
     await screen.findByRole('heading', { name: '对话已就绪' })
     expect(screen.queryByRole('dialog', { name: '权限说明与授权' })).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: '设置' }))
+    fireEvent.click(await screen.findByRole('button', { name: /安全与权限/ }))
     fireEvent.click(await screen.findByRole('button', { name: /权限说明与授权/ }))
     expect(await screen.findByRole('dialog', { name: '权限说明与授权' })).toBeInTheDocument()
     expect(bridge.requestNotificationPermission).not.toHaveBeenCalled()

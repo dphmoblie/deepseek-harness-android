@@ -150,7 +150,7 @@ describe('外观设置', () => {
 
   it('没有背景文件时勾选同步仍保持关闭', async () => {
     render(<AppearanceSettings />)
-    const checkbox = screen.getByRole('checkbox', { name: '连背景一起同步' })
+    const checkbox = screen.getByRole('checkbox', { name: '同时同步背景' })
     fireEvent.click(checkbox)
     await waitFor(() => expect(checkbox).not.toBeChecked())
   })
@@ -160,7 +160,7 @@ describe('外观设置', () => {
       .mockRejectedValueOnce(new Error('保存失败'))
     try {
       render(<AppearanceSettings />)
-      const checkbox = screen.getByRole('checkbox', { name: '连背景一起同步' })
+      const checkbox = screen.getByRole('checkbox', { name: '同时同步背景' })
       fireEvent.click(checkbox)
       await waitFor(() => expect(checkbox).not.toBeChecked())
     } finally {

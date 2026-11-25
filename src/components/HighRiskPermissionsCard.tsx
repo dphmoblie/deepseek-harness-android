@@ -26,31 +26,31 @@ interface HighRiskCategoryGroup {
 const HIGH_RISK_CATEGORY_GROUPS: readonly HighRiskCategoryGroup[] = [
   {
     id: 'files_storage',
-    title: '一、高危文件与存储修改（6 项）',
+    title: '一、文件与存储修改（6 项）',
     items: [
       {
         id: 'core_partition_write',
         tier: 'high',
         title: '核心系统分区写入与重挂载',
-        description: '拦截对 /system、/vendor、/product、/system_ext、/odm、/apex、/system_root 的 rw 重挂载及文件写入、覆盖、替换操作',
+        description: '拦截对 /system、/vendor、/product、/system_ext、/odm、/apex、/system_root 的读写重挂载及文件写入、覆盖、替换操作',
       },
       {
         id: 'system_data_destruction',
         tier: 'critical',
         title: '系统核心数据目录删除与覆写',
-        description: '拦截对 /data 根目录及 /data/system、misc、vendor、apex、property、app、dalvik-cache、adb 的 rm、wipe、find -delete、shred、truncate、dd 覆写',
+        description: '拦截对 /data 根目录及 /data/system、misc、vendor、apex、property、app、dalvik-cache、adb 的删除与覆写操作',
       },
       {
         id: 'shared_storage_delete',
         tier: 'critical',
         title: '内置共享存储（SD 卡）批量删除',
-        description: '拦截对 /sdcard、/storage/emulated/0、/data/media/0 根目录及 DCIM、Pictures、Download、Documents 等关键目录的整目录或通配符删除',
+        description: '拦截对 /sdcard、/storage/emulated/0、/data/media/0 根目录及 DCIM、Pictures、Download、Documents 等目录的整目录或通配符删除',
       },
       {
         id: 'app_private_data_modify',
         tier: 'elevated',
         title: '应用私有数据目录修改与删除',
-        description: '拦截对 /data/data、/data/user、/data/user_de 及 /sdcard/Android/data、obb 下应用私有文件的删除、截断与重定向写入（保留只读查看与备份）',
+        description: '拦截对 /data/data、/data/user、/data/user_de 及 /sdcard/Android/data、obb 下应用私有文件的删除、截断与写入（保留只读查看与备份）',
       },
       {
         id: 'system_permissions_owner',
@@ -62,19 +62,19 @@ const HIGH_RISK_CATEGORY_GROUPS: readonly HighRiskCategoryGroup[] = [
         id: 'dev_node_write',
         tier: 'elevated',
         title: '/dev 设备节点直接写入',
-        description: '拦截向 /dev/ 下的非空设备节点（排除 /dev/null、/dev/zero、标准流）直接重定向或 tee 写入数据',
+        description: '拦截向 /dev/ 下非空设备节点（排除 /dev/null、/dev/zero、标准流）直接重定向或 tee 写入数据',
       },
     ],
   },
   {
     id: 'system_ops',
-    title: '二、高危系统与运维命令（7 项）',
+    title: '二、系统与内核命令（7 项）',
     items: [
       {
         id: 'dynamic_shell_eval',
         tier: 'elevated',
         title: '动态 Shell 展开与二次解释执行',
-        description: '拦截 $(...)、反引号、$IFS 变量拼接、eval、exec、source 及 sh/bash/mksh -c 等动态命令变形（防止拼接绕过静态规则）',
+        description: '拦截 $(...)、反引号、$IFS 变量拼接、eval、exec、source 及 sh/bash/mksh -c 等动态命令变形，防止拼接绕过拦截规则',
       },
       {
         id: 'filesystem_mount',
@@ -86,7 +86,7 @@ const HIGH_RISK_CATEGORY_GROUPS: readonly HighRiskCategoryGroup[] = [
         id: 'raw_device_image_tool',
         tier: 'elevated',
         title: '镜像直写与回环/映射设备工具',
-        description: '拦截 dd、losetup、dmsetup 及带 of= 参数的原始镜像/设备写入命令',
+        description: '拦截 dd、losetup、dmsetup 及带 of= 参数的原始镜像或设备写入命令',
       },
       {
         id: 'kernel_module_control',
@@ -116,25 +116,25 @@ const HIGH_RISK_CATEGORY_GROUPS: readonly HighRiskCategoryGroup[] = [
   },
   {
     id: 'critical_hardware',
-    title: '三、极危整机、安全与底层硬件（4 项）',
+    title: '三、系统安全与底层硬件（4 项）',
     items: [
       {
         id: 'system_service_privilege',
         tier: 'high',
         title: '关键系统服务控制与嵌套特权 Shell',
-        description: '拦截 kill init (PID 1)、start/stop zygote/system_server/surfaceflinger/servicemanager，以及嵌套 su -c 与 adb shell',
+        description: '拦截终止 init (PID 1)、启停 zygote/system_server/surfaceflinger/servicemanager，以及嵌套执行 su -c 与 adb shell',
       },
       {
         id: 'selinux_security_policy',
         tier: 'high',
         title: 'SELinux 强制模式与安全策略修改',
-        description: '拦截 setenforce 0/permissive、写入 /sys/fs/selinux/enforce 及内核参数关闭 SELinux',
+        description: '拦截 setenforce 0/permissive、写入 /sys/fs/selinux/enforce 及通过内核参数关闭 SELinux',
       },
       {
         id: 'device_power_control',
         tier: 'high',
         title: '设备重启、关机与电源触发',
-        description: '拦截 reboot、poweroff、shutdown、halt、svc/cmd power、重启广播、写 /proc/sysrq-trigger 与 /sys/power/',
+        description: '拦截 reboot、poweroff、shutdown、halt、svc/cmd power、重启广播及写入 /proc/sysrq-trigger、/sys/power/',
       },
       {
         id: 'block_flash_memory_raw',
@@ -146,19 +146,19 @@ const HIGH_RISK_CATEGORY_GROUPS: readonly HighRiskCategoryGroup[] = [
   },
   {
     id: 'host_capability_unlock',
-    title: '四、完全放开 AI 宿主、沙箱与设备能力（8 项）',
+    title: '四、解除高级限制（沙箱、确认页与设备能力，8 项）',
     items: [
       {
         id: 'root_unconfined_sandbox',
         tier: 'critical',
         title: 'Root 解除命名空间与能力沙箱包装',
-        description: '跳过 unshare 命名空间隔离、/system 只读重挂载、/dev/block 遮蔽与 setpriv 能力裁剪，直接以完整宿主 UID 0 命名空间执行 Root 命令（关闭即恢复沙箱包装）',
+        description: '跳过 unshare 命名空间隔离、/system 只读重挂载、/dev/block 屏蔽与 setpriv 能力裁剪，直接以完整宿主 UID 0 环境执行 Root 命令（关闭即恢复沙箱包装）',
       },
       {
         id: 'root_skip_app_confirm',
         tier: 'critical',
         title: 'Root 高危与极危跳过应用警告页直通',
-        description: '当命令命中的细分分类均已开启时，跳过 dsh 审批与 Android 应用高危/极危警告确认页实现全自动 Root 执行（未开启对应命令分类时仍硬拦截）',
+        description: '当命令命中的细分分类均已开启时，跳过 dsh 审批与 Android 应用高危/极危警告确认页实现自动执行（未开启对应分类时仍拦截）',
       },
       {
         id: 'accessibility_system_apps',
@@ -170,13 +170,13 @@ const HIGH_RISK_CATEGORY_GROUPS: readonly HighRiskCategoryGroup[] = [
         id: 'accessibility_sensitive_windows',
         tier: 'critical',
         title: '无障碍读取与操作敏感窗口及密码框',
-        description: '解除密码框、验证码、支付与授权窗口整棵拦截，并在主屏与副屏无障碍树中放开可编辑输入框文本与敏感词输入',
+        description: '解除密码框、验证码、支付与授权窗口的整棵拦截，并在主屏与副屏无障碍树中放开可编辑输入框文本与敏感词输入',
       },
       {
         id: 'accessibility_lockscreen_and_burst',
         tier: 'high',
         title: '无障碍解除锁屏拦截与高频动作节流',
-        description: '允许熄屏/锁屏状态下继续调用无障碍读取与动作，并取消主屏与副屏连发动作之间的强制冷却间隔',
+        description: '允许熄屏/锁屏状态下继续调用无障碍读取与动作，并取消主屏与副屏连续动作之间的强制冷却间隔',
       },
       {
         id: 'device_file_unrestricted',
@@ -194,7 +194,7 @@ const HIGH_RISK_CATEGORY_GROUPS: readonly HighRiskCategoryGroup[] = [
         id: 'storage_full_sdcard_mount',
         tier: 'high',
         title: '访客自动挂载完整共享存储（/mnt/sdcard）与 Android 目录',
-        description: '下次启动 Ubuntu 访客时自动将完整内置存储挂载到 /mnt/sdcard，并放开目录白名单选择共享存储根目录与 Android/data、obb 子目录（关闭开关后下一次启动即刻撤除）',
+        description: '下次启动 Ubuntu 访客时自动将完整内置存储挂载到 /mnt/sdcard，并放开目录白名单选择共享存储根目录与 Android/data、obb 子目录（关闭后下次启动撤除）',
       },
     ],
   },
@@ -289,7 +289,7 @@ export function HighRiskPermissionsCard({ bridge = runtimeBridge }: { bridge?: R
     : load.status === 'failed'
       ? t('读取失败')
       : !value?.enabled
-        ? t('总开关已关 · 全部拦截')
+        ? t('已关闭 · 全部拦截')
         : t('已放行 {0} / {1} 项', enabledCount, totalCount)
 
   return (
@@ -297,8 +297,8 @@ export function HighRiskPermissionsCard({ bridge = runtimeBridge }: { bridge?: R
       <div className="section-title section-title-action">
         <span className="section-icon"><ShieldAlert size={19} /></span>
         <div>
-          <h2 id="high-risk-permissions">{t('AI 高危文件与命令权限')}</h2>
-          <p>{t('由宿主硬编码规则在命令执行前主动拦截，绝不交由 AI 自行判断')}</p>
+          <h2 id="high-risk-permissions">{t('AI 高危操作控制')}</h2>
+          <p>{t('默认由本机安全规则拦截高危操作，仅放行你手动开启的类别')}</p>
         </div>
         <span className={`status-chip ${value?.enabled && enabledCount > 0 ? 'warning' : 'success'}`}>
           {statusChipLabel}
@@ -306,22 +306,22 @@ export function HighRiskPermissionsCard({ bridge = runtimeBridge }: { bridge?: R
       </div>
 
       {load.status === 'loading' && (
-        <p className="settings-note">{t('正在读取高危文件与命令权限设置…')}</p>
+        <p className="settings-note">{t('正在读取高危操作控制设置…')}</p>
       )}
 
       {value !== null && (
         <>
           <label className="toggle-row">
             <span>
-              <strong>{t('允许 AI 申请高危文件与命令权限（总开关）')}</strong>
+              <strong>{t('允许放行高危操作（总开关）')}</strong>
               <small>
-                {t('关闭时，下方全部 25 类高危文件修改、系统命令与宿主能力放开均由宿主硬编码规则直接拦截；开启后，仅对下方显式勾选的细分项放行。')}
+                {t('关闭时，下方全部 25 项高危操作均由本机安全规则直接拦截；开启后，仅放行下方勾选的类别。')}
               </small>
             </span>
             <input
               type="checkbox"
               role="switch"
-              aria-label={t('允许 AI 申请高危文件与命令权限（总开关）')}
+              aria-label={t('允许放行高危操作（总开关）')}
               checked={value.enabled}
               disabled={busy}
               onChange={event => {
@@ -331,7 +331,7 @@ export function HighRiskPermissionsCard({ bridge = runtimeBridge }: { bridge?: R
           </label>
 
           <p className="settings-note">
-            {t('纵深防御说明：硬编码规则覆盖 Root、Shizuku、无障碍、文件通道、副屏与访客挂载。前 17 项开启后默认仍保留沙箱隔离与 Root 应用警告确认页；只有显式勾选第四组对应开关，才会进一步放开沙箱、确认页或宿主能力，关闭开关即刻恢复全部硬编码拦截。')}
+            {t('安全说明：规则覆盖 Root、Shizuku、无障碍、文件通道、副屏与存储挂载。前 17 项放行后仍默认保留沙箱隔离与 Root 警告确认页；仅在开启第四组对应开关后才会解除这些限制，关闭后立即恢复拦截。')}
           </p>
 
           <div className="settings-inline-actions">
@@ -353,9 +353,14 @@ export function HighRiskPermissionsCard({ bridge = runtimeBridge }: { bridge?: R
             </button>
           </div>
 
-          {HIGH_RISK_CATEGORY_GROUPS.map(group => (
+          {HIGH_RISK_CATEGORY_GROUPS.map(group => {
+            const groupEnabledCount = group.items.filter(item => value.categories[item.id]).length
+            return (
             <div key={group.id} className="high-risk-group" role="group" aria-label={t(group.title)}>
-              <h3 className="high-risk-group-title">{t(group.title)}</h3>
+              <div className="high-risk-group-header">
+                <h3 className="high-risk-group-title">{t(group.title)}</h3>
+                <span className="high-risk-group-count">{t('已开 {0} / {1}', groupEnabledCount, group.items.length)}</span>
+              </div>
               <div className="high-risk-item-list">
                 {group.items.map(item => {
                   const categoryChecked = value.categories[item.id]
@@ -390,17 +395,18 @@ export function HighRiskPermissionsCard({ bridge = runtimeBridge }: { bridge?: R
                 })}
               </div>
             </div>
-          ))}
+            )
+          })}
         </>
       )}
 
       {writeError !== null && (
-        <p role="alert">{t('保存高危文件与命令权限失败：{0}', writeError)}</p>
+        <p role="alert">{t('保存高危操作设置失败：{0}', writeError)}</p>
       )}
 
       {load.status === 'failed' && (
         <p role="alert">
-          {t('无法读取高危文件与命令权限设置')}{' '}
+          {t('无法读取高危操作控制设置')}{' '}
           <button
             className="button button-quiet"
             type="button"

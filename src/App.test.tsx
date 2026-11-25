@@ -51,33 +51,48 @@ describe('App conversation gate', () => {
   await arriveAtSettingsHome()
   })
 
-  it('没有保存过模型密钥时点打开只会给出引导，不会启动运行时', async () => {
+  it('跳过填写 API 与 API Key 时，点打开直接进入 Harness 不再拦截', async () => {
+    window.localStorage.removeItem('dsh-mobile-onboarding-v1')
     bridge.getSettings.mockResolvedValue({ ...settings, configuredModelProviders: [] })
 
     render(<App />)
-    await arriveAtSettingsHome()
 
-    // 首次配置未完成：点「打开 Harness」既不启动也不开门，而是送到密钥设置页并说明原因。
-    fireEvent.click(screen.getByRole('button', { name: /打开 Harness/ }))
+    // 首次引导里跳过填写模型密钥（直接点下一步走完或跳过引导），回到首页点「打开对话」直接放行。
+    const onboarding = await screen.findByRole('dialog', { name: '免费声明' })
+    fireEvent.click(within(onboarding).getByRole('button', { name: '我已了解' }))
+    fireEvent.click(screen.getByRole('button', { name: '下一步' }))
+    fireEvent.click(screen.getByRole('button', { name: '完成' }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
 
-    expect(await screen.findByRole('heading', { name: '模型与密钥' })).toBeInTheDocument()
-    expect(await screen.findByText('未检测到模型凭据：请先在「模型与密钥」登录 DeepSeek 账号或保存一次 API Key 再打开 Harness')).toBeInTheDocument()
-    expect(bridge.startHarness).not.toHaveBeenCalled()
-    expect(bridge.openHarness).not.toHaveBeenCalled()
+    fireEvent.click(await screen.findByRole('button', { name: /打开对话|打开 Harness/ }))
+
+    await waitFor(() => expect(bridge.startHarness).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+    expect(screen.queryByRole('heading', { name: '模型与密钥' })).not.toBeInTheDocument()
+    expect(screen.queryByText(/未检测到模型凭据/)).not.toBeInTheDocument()
   })
 
-  it('「模型与密钥」页的显式确认仍可打开 Harness', async () => {
+  it('未保存模型密钥时从设置页点「打开 Harness」也能直接进入', async () => {
     bridge.getSettings.mockResolvedValue({ ...settings, configuredModelProviders: [] })
 
     render(<App />)
     await arriveAtSettingsHome()
 
-    // 门禁先把用户送到「模型与密钥」；只有那里的放行按钮能跳过凭据检查。
     fireEvent.click(screen.getByRole('button', { name: /打开 Harness/ }))
-    await screen.findByRole('heading', { name: '模型与密钥' })
-    expect(bridge.openHarness).not.toHaveBeenCalled()
 
-    fireEvent.click(screen.getByRole('button', { name: '我已在 Harness 内配置过，仍要打开' }))
+    await waitFor(() => expect(bridge.startHarness).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+    expect(screen.queryByRole('heading', { name: '模型与密钥' })).not.toBeInTheDocument()
+  })
+
+  it('「模型与密钥」页的直接进入按钮仍可打开 Harness', async () => {
+    bridge.getSettings.mockResolvedValue({ ...settings, configuredModelProviders: [] })
+
+    render(<App />)
+    await arriveAtSettingsHome()
+    await openSettingsPage('模型与密钥')
+
+    fireEvent.click(screen.getByRole('button', { name: /已在 Harness 内配置，直接进入|我已在 Harness 内配置过，仍要打开/ }))
 
     await waitFor(() => expect(bridge.startHarness).toHaveBeenCalledTimes(1))
     await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
@@ -349,7 +364,7 @@ describe('App conversation gate', () => {
     render(<App />)
   await arriveAtSettingsHome()
 
-    await openSettingsPage('设备 Shell 设置')
+    await openSettingsPage('设备控制', 'Shizuku 与设备 Shell')
     fireEvent.click(await screen.findByRole('button', { name: '打开设备 Shell' }))
     expect(await screen.findByRole('heading', { name: '终端' })).toBeInTheDocument()
     fireEvent.click(screen.getByRole('tab', { name: '设备 Shell' }))
@@ -363,15 +378,16 @@ describe('App conversation gate', () => {
     render(<App />)
   await arriveAtSettingsHome()
 
-    // 运行时来源与设备入口都在「后台」页（原来的两个三级页已并入）。
-    await openSettingsPage('后台', '设备连接')
-    expect(screen.getByText('默认使用内置受校验版本，其他版本请在版本管理切换')).toBeInTheDocument()
+    // 「运行与网络」包含后台保活与网络浏览方式两个子页入口。
+    await openSettingsPage('运行与网络')
+    expect(screen.getByRole('button', { name: /后台保活与悬浮球/ })).toBeVisible()
+    expect(screen.getByRole('button', { name: /网络与浏览方式/ })).toBeVisible()
     // 屏幕内返回按钮走的是历史回退，视图切换在 popstate 之后生效。
     fireEvent.click(screen.getByRole('button', { name: '返回设置' }))
     expect(await screen.findByRole('heading', { name: '设置' })).toBeVisible()
 
-    // 字号在「终端与外观」页。
-    await openSettingsPage('主题', '字号与配色')
+    // 字号在「外观与显示 › 显示与配色」页。
+    await openSettingsPage('外观与显示', '显示与配色')
     const fontSlider = await screen.findByRole('slider', { name: /字号/ })
     fireEvent.change(fontSlider, { target: { value: '17' } })
     // 输入期间不落盘：切到后台才写。
@@ -570,20 +586,20 @@ describe('应用语言', () => {
   it('设置切换立即生效且重新挂载后保留语言', async () => {
     const view = render(<App />)
     fireEvent.click(await screen.findByRole('button', { name: '打开应用设置' }))
-    fireEvent.change(screen.getByLabelText('语言'), { target: { value: 'en' } })
-    expect(await screen.findByRole('heading', { name: 'Settings' })).toBeVisible()
+    fireEvent.click(await screen.findByRole('button', { name: /外观与显示/ }))
+    fireEvent.change(await screen.findByLabelText('语言'), { target: { value: 'en' } })
+    expect(await screen.findByRole('heading', { name: 'Appearance and display', level: 1 })).toBeVisible()
     // 不再有「开机自动启动」，因此徽章停在就绪/未启动，而不是 Running。
     expect(bridge.startHarness).not.toHaveBeenCalled()
-    // 设置首页现在只保留分类入口，编辑项会自动保存。
-    fireEvent.click(screen.getByRole('button', { name: /^Theme/ }))
-    expect(await screen.findByRole('heading', { name: 'Theme' })).toBeVisible()
+    // 设置页编辑项自动保存，不提供手动保存按钮。
     expect(screen.queryByRole('button', { name: 'Save settings' })).toBeNull()
     view.unmount()
     render(<App />)
     fireEvent.click(await screen.findByRole('button', { name: 'Open app settings' }))
-    expect(screen.getByLabelText('Language')).toHaveValue('en')
+    fireEvent.click(await screen.findByRole('button', { name: /Appearance and display/ }))
+    expect(await screen.findByLabelText('Language')).toHaveValue('en')
     fireEvent.change(screen.getByLabelText('Language'), { target: { value: 'zh-CN' } })
-    expect(await screen.findByRole('heading', { name: '设置' })).toBeVisible()
+    expect(await screen.findByRole('heading', { name: '外观与显示', level: 1 })).toBeVisible()
     expect(document.documentElement.lang).toBe('zh-CN')
   })
 

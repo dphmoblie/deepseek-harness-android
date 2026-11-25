@@ -60,8 +60,8 @@ describe('HighRiskPermissionsCard', () => {
     const { bridge } = makeBridge()
     render(<HighRiskPermissionsCard bridge={bridge} />)
 
-    expect(await screen.findByText('总开关已关 · 全部拦截')).toBeVisible()
-    const masterSwitch = screen.getByRole('switch', { name: '允许 AI 申请高危文件与命令权限（总开关）' })
+    expect(await screen.findByText('已关闭 · 全部拦截')).toBeVisible()
+    const masterSwitch = screen.getByRole('switch', { name: '允许放行高危操作（总开关）' })
     expect(masterSwitch).not.toBeChecked()
     expect(masterSwitch).toBeEnabled()
 
@@ -85,7 +85,7 @@ describe('HighRiskPermissionsCard', () => {
     render(<HighRiskPermissionsCard bridge={bridge} />)
 
     const masterSwitch = await screen.findByRole('switch', {
-      name: '允许 AI 申请高危文件与命令权限（总开关）',
+      name: '允许放行高危操作（总开关）',
     })
     fireEvent.click(masterSwitch)
 
@@ -103,6 +103,7 @@ describe('HighRiskPermissionsCard', () => {
         categories: { device_power_control: true },
       })
       expect(screen.getByText('已放行 1 / 25 项')).toBeVisible()
+      expect(screen.getByText('已开 1 / 4')).toBeVisible()
       expect(powerSwitch).toBeChecked()
     })
 
@@ -115,6 +116,7 @@ describe('HighRiskPermissionsCard', () => {
         categories: { root_unconfined_sandbox: true },
       })
       expect(screen.getByText('已放行 2 / 25 项')).toBeVisible()
+      expect(screen.getByText('已开 1 / 8')).toBeVisible()
       expect(unconfinedSwitch).toBeChecked()
     })
 
@@ -137,21 +139,21 @@ describe('HighRiskPermissionsCard', () => {
 
     render(<HighRiskPermissionsCard bridge={bridge} />)
     const masterSwitch = await screen.findByRole('switch', {
-      name: '允许 AI 申请高危文件与命令权限（总开关）',
+      name: '允许放行高危操作（总开关）',
     })
     fireEvent.click(masterSwitch)
 
-    expect(await screen.findByRole('alert')).toHaveTextContent('保存高危文件与命令权限失败：磁盘写入失败')
+    expect(await screen.findByRole('alert')).toHaveTextContent('保存高危操作设置失败：磁盘写入失败')
     await waitFor(() => {
       expect(getHighRiskPermissions).toHaveBeenCalledTimes(2)
     })
 
     getHighRiskPermissions.mockRejectedValueOnce(new Error('桥接不可用'))
     const { unmount } = render(<HighRiskPermissionsCard bridge={bridge} />)
-    expect(await screen.findByText('无法读取高危文件与命令权限设置')).toBeVisible()
+    expect(await screen.findByText('无法读取高危操作控制设置')).toBeVisible()
     fireEvent.click(screen.getByRole('button', { name: '重试' }))
     await waitFor(() => {
-      expect(screen.getAllByText('总开关已关 · 全部拦截').length).toBeGreaterThanOrEqual(2)
+      expect(screen.getAllByText('已关闭 · 全部拦截').length).toBeGreaterThanOrEqual(2)
     })
     unmount()
   })
@@ -161,7 +163,7 @@ describe('HighRiskPermissionsCard', () => {
     const { bridge } = makeBridge(makePermissions(true, { core_partition_write: true, storage_full_sdcard_mount: true }))
     render(<HighRiskPermissionsCard bridge={bridge} />)
 
-    expect(await screen.findByRole('heading', { name: 'AI High-Risk File & Command Permissions' })).toBeVisible()
+    expect(await screen.findByRole('heading', { name: 'AI High-Risk Operation Controls' })).toBeVisible()
     expect(screen.getByText('2 / 25 allowed')).toBeVisible()
     expect(screen.getByRole('switch', { name: 'Core system partition write & rw remount' })).toBeChecked()
     expect(screen.getByRole('switch', { name: 'Physical block devices, partitioning, flashing & raw memory access' })).not.toBeChecked()
@@ -181,7 +183,7 @@ describe('HighRiskPermissionsCard', () => {
 
     render(<HighRiskPermissionsCard bridge={bridge} />)
     const masterSwitch = await screen.findByRole('switch', {
-      name: '允许 AI 申请高危文件与命令权限（总开关）',
+      name: '允许放行高危操作（总开关）',
     })
     // 触发一次失败更新后立刻补一次成功更新；迟到的回读不能把最新开启状态冲回关闭
     setHighRiskPermissions.mockRejectedValueOnce(new Error('临时错误'))

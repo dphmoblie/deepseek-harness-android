@@ -44,8 +44,8 @@ describe('外观设置：自适应主题色与同步分区', () => {
 
   it('同步分区给出两个显式按钮，未同步过时如实说明', () => {
     render(<AppearanceSettings />)
-    expect(screen.getByRole('button', { name: '让 DSH 使用当前主题' })).toBeTruthy()
-    expect(screen.getByRole('button', { name: '恢复 DSH 默认主题' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: '同步当前主题到对话页' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: '恢复对话页默认主题' })).toBeTruthy()
     expect(screen.getByText('还没有同步过')).toBeTruthy()
   })
 })

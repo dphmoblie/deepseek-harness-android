@@ -46,8 +46,8 @@ describe('后台保持与恢复', () => {
     render(<App />)
   await arriveAtSettingsHome()
 
-    await openSettingsPage('后台', '后台保持')
-    const toggle = await screen.findByRole('switch', { name: /后台保持 Harness/ })
+    await openSettingsPage('运行与网络', '后台保活与悬浮球')
+    const toggle = await screen.findByRole('switch', { name: /后台保活 Harness/ })
     expect(toggle).not.toBeChecked()
     expect(bridge.requestNotificationPermission).not.toHaveBeenCalled()
 
@@ -65,7 +65,7 @@ describe('后台保持与恢复', () => {
   await arriveAtSettingsHome()
 
     // 预启动与「后台保持」同属后台行为，开关在三级页「后台保持」里。
-    await openSettingsPage('后台', '后台保持')
+    await openSettingsPage('运行与网络', '后台保活与悬浮球')
     const toggle = await screen.findByRole('switch', { name: /打开应用时预启动服务/ })
     expect(toggle).not.toBeChecked()
     // 默认关闭时开机不会预启动：与「不自动打开对话」是同一条底线。
@@ -114,9 +114,9 @@ describe('后台保持与恢复', () => {
     render(<App />)
 
     fireEvent.click(await screen.findByRole('button', { name: '打开应用设置' }))
-    await openSettingsPage('后台', '后台保持')
+    await openSettingsPage('运行与网络', '后台保活与悬浮球')
 
-    const toggle = await screen.findByRole('switch', { name: /后台保持 Harness/ })
+    const toggle = await screen.findByRole('switch', { name: /后台保活 Harness/ })
     fireEvent.click(toggle)
     await waitFor(() => expect(bridge.requestNotificationPermission).toHaveBeenCalledTimes(1))
 
@@ -157,10 +157,10 @@ describe('后台保持与恢复', () => {
       render(<App />)
 
       fireEvent.click(await screen.findByRole('button', { name: '打开应用设置' }))
-      await openSettingsPage('后台', '后台保持')
+      await openSettingsPage('运行与网络', '后台保活与悬浮球')
 
       // 开关变更本身不落盘：离开页面 / 切到后台才写，并触发前台服务复核。
-      const toggle = await screen.findByRole('switch', { name: /后台保持 Harness/ })
+      const toggle = await screen.findByRole('switch', { name: /后台保活 Harness/ })
       fireEvent.click(toggle)
       fireEvent.click(toggle)
       // 勾选「后台保持」会顺带申请通知权限，那次操作在假时钟下要推一下才会让出忙碌锁。
@@ -202,7 +202,7 @@ describe('后台保持与恢复', () => {
     render(<App />)
   await arriveAtSettingsHome()
 
-    await openSettingsPage('后台', '后台保持')
+    await openSettingsPage('运行与网络', '后台保活与悬浮球')
     expect(await screen.findByText('前台服务运行中')).toBeVisible()
     expect(screen.getByText('未授予')).toBeVisible()
     // 设备 Shell 辅助只反映 Shizuku 授权状态，不代表保活能力。
@@ -218,7 +218,7 @@ describe('后台保持与恢复', () => {
     render(<App />)
     await arriveAtSettingsHome()
 
-    await openSettingsPage('后台', '后台保持')
+    await openSettingsPage('运行与网络', '后台保活与悬浮球')
     expect(await screen.findByText('实时动态通知')).toBeVisible()
     expect(screen.getByText('未授予')).toBeVisible()
     fireEvent.click(screen.getByRole('button', { name: '开启实时动态' }))
@@ -261,7 +261,7 @@ describe('运行时自检', () => {
     })
     render(<App />)
   await arriveAtSettingsHome()
-    await openSettingsPage('诊断与日志', '设备能力')
+    await openSettingsPage('诊断与自检', '环境自检与设备能力')
     fireEvent.click(screen.getByRole('button', { name: '运行自检' }))
     // 自检要等一次桥调用，结果区块是异步出现的。
     expect(await screen.findByRole('group', { name: '自检结果' })).toHaveTextContent('失败')
@@ -278,7 +278,7 @@ describe('运行时自检', () => {
     })
     render(<App />)
   await arriveAtSettingsHome()
-    await openSettingsPage('诊断与日志', '设备能力')
+    await openSettingsPage('诊断与自检', '环境自检与设备能力')
     fireEvent.click(screen.getByRole('button', { name: '运行自检' }))
     await screen.findByRole('group', { name: '自检结果' })
     expect(screen.queryByText('本机 Landlock 沙箱不可用')).toBeNull()
@@ -292,7 +292,7 @@ describe('运行时自检', () => {
       .mockRejectedValueOnce(new Error('SELF_CHECK_FAILED'))
     render(<App />)
   await arriveAtSettingsHome()
-    await openSettingsPage('诊断与日志', '设备能力')
+    await openSettingsPage('诊断与自检', '环境自检与设备能力')
     fireEvent.click(screen.getByRole('button', { name: '运行自检' }))
     fireEvent.click(await screen.findByRole('button', { name: '修复运行时权限' }))
     expect(await screen.findByText('自检未完成，请稍后重试')).toBeVisible()
@@ -305,7 +305,7 @@ describe('运行时自检', () => {
     render(<App />)
   await arriveAtSettingsHome()
 
-    await openSettingsPage('诊断与日志', '设备能力')
+    await openSettingsPage('诊断与自检', '环境自检与设备能力')
     expect(await screen.findByRole('heading', { name: '运行时自检' })).toBeVisible()
     // 这句说明必须在界面上讲清「为什么不用 bash 也能查」。
     expect(screen.getByText(/不需要 bash 也能判断运行时哪一环断了/)).toBeVisible()
@@ -332,7 +332,7 @@ describe('运行时自检', () => {
     render(<App />)
   await arriveAtSettingsHome()
 
-    await openSettingsPage('诊断与日志', '设备能力')
+    await openSettingsPage('诊断与自检', '环境自检与设备能力')
     fireEvent.click(await screen.findByRole('button', { name: '运行自检' }))
 
     const results = await screen.findByRole('group', { name: '自检结果' })
@@ -363,7 +363,7 @@ describe('运行时自检', () => {
     render(<App />)
   await arriveAtSettingsHome()
 
-    await openSettingsPage('诊断与日志', '设备能力')
+    await openSettingsPage('诊断与自检', '环境自检与设备能力')
     fireEvent.click(await screen.findByRole('button', { name: '运行自检' }))
     await screen.findByRole('group', { name: '自检结果' })
 
@@ -388,7 +388,7 @@ describe('运行时自检', () => {
     render(<App />)
   await arriveAtSettingsHome()
 
-    await openSettingsPage('诊断与日志', '设备能力')
+    await openSettingsPage('诊断与自检', '环境自检与设备能力')
     fireEvent.click(await screen.findByRole('button', { name: '运行自检' }))
     await screen.findByRole('group', { name: '自检结果' })
 
@@ -422,7 +422,7 @@ describe('运行时自检', () => {
     render(<App />)
   await arriveAtSettingsHome()
 
-    await openSettingsPage('诊断与日志', '设备能力')
+    await openSettingsPage('诊断与自检', '环境自检与设备能力')
     fireEvent.click(await screen.findByRole('button', { name: '运行自检' }))
 
     expect(await screen.findByText('全部 4 项检查通过')).toBeVisible()
@@ -444,7 +444,7 @@ describe('运行时自检', () => {
     render(<App />)
   await arriveAtSettingsHome()
 
-    await openSettingsPage('诊断与日志', '设备能力')
+    await openSettingsPage('诊断与自检', '环境自检与设备能力')
     fireEvent.click(await screen.findByRole('button', { name: '运行自检' }))
     await screen.findByRole('group', { name: '自检结果' })
 
@@ -470,7 +470,7 @@ describe('运行时自检', () => {
     render(<App />)
   await arriveAtSettingsHome()
 
-    await openSettingsPage('诊断与日志', '设备能力')
+    await openSettingsPage('诊断与自检', '环境自检与设备能力')
     fireEvent.click(await screen.findByRole('button', { name: '运行自检' }))
 
     const results = await screen.findByRole('group', { name: '自检结果' })
@@ -503,7 +503,7 @@ describe('运行时自检', () => {
     render(<App />)
   await arriveAtSettingsHome()
 
-    await openSettingsPage('诊断与日志', '设备能力')
+    await openSettingsPage('诊断与自检', '环境自检与设备能力')
     fireEvent.click(await screen.findByRole('button', { name: '运行自检' }))
     await screen.findByText('附件目录不存在，截图等附件无法落盘')
 
@@ -528,7 +528,7 @@ describe('运行时自检', () => {
     render(<App />)
   await arriveAtSettingsHome()
 
-    await openSettingsPage('诊断与日志', '设备能力')
+    await openSettingsPage('诊断与自检', '环境自检与设备能力')
     // 版本一行不依赖自检：进页面就能看到已安装的运行时版本。
     expect(await screen.findByText('运行时版本')).toBeVisible()
     expect(screen.getByText('2026.08.17')).toBeVisible()
@@ -559,7 +559,7 @@ describe('运行时自检', () => {
     render(<App />)
   await arriveAtSettingsHome()
 
-    await openSettingsPage('诊断与日志', '设备能力')
+    await openSettingsPage('诊断与自检', '环境自检与设备能力')
     fireEvent.click(screen.getByRole('button', { name: '运行自检' }))
     expect(await screen.findByText('全部 1 项检查通过')).toBeVisible()
 
@@ -605,7 +605,7 @@ describe('空闲自行停止', () => {
 
     // 事后也能查到这次停止是谁发起的，而不是只看到「已就绪」。
     fireEvent.click(screen.getByRole('button', { name: '打开应用设置' }))
-    await openSettingsPage('后台', '后台保持')
+    await openSettingsPage('运行与网络', '后台保活与悬浮球')
     expect(await screen.findByText('自行停止（可能空闲自动停止）')).toBeVisible()
   })
 
@@ -628,7 +628,7 @@ describe('空闲自行停止', () => {
     expect(screen.queryByText(/已自行停止/)).toBeNull()
     // 显式停止成功后视图自动落到设置首页，直接进「后台」页查停止记录。
     await screen.findByRole('heading', { name: '设置' })
-    await openSettingsPage('后台', '后台保持')
+    await openSettingsPage('运行与网络', '后台保活与悬浮球')
     expect(await screen.findByText('用户停止')).toBeVisible()
   })
 
@@ -735,7 +735,7 @@ describe('运行时版本管理', () => {
     // 重读的效果要看得见：回设置首页再进「诊断与日志」，已安装版本那一行已经换成新版本。
     fireEvent.click(screen.getByRole('button', { name: '返回设置' }))
     await screen.findByRole('heading', { name: '设置' }, { timeout: 5_000 })
-    await openSettingsPage('诊断与日志', '设备能力')
+    await openSettingsPage('诊断与自检', '环境自检与设备能力')
     expect(await screen.findByText('2026.09.01')).toBeVisible()
   })
 

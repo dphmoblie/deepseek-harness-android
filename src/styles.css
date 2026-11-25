@@ -4421,11 +4421,26 @@ html[lang="en"] .screen-heading h1, html[lang="ko"] .screen-heading h1, html[lan
   border-top: 1px solid var(--line);
 }
 
+.high-risk-group-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
 .high-risk-group-title {
-  margin: 0 0 8px;
+  margin: 0;
   color: var(--ink);
   font-size: 0.8125rem;
   font-weight: 600;
+}
+
+.high-risk-group-count {
+  flex: none;
+  color: var(--muted);
+  font-size: 0.75rem;
+  font-weight: 500;
 }
 
 .high-risk-item-list {

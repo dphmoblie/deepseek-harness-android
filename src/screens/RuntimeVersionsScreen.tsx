@@ -168,7 +168,7 @@ export function RuntimeVersionsPanel({
         <span className="section-icon"><HardDrive size={19} /></span>
         <div>
           <h2 id="runtime-versions-title">{t("运行时版本管理")}</h2>
-          <p>{t("管理当前、上一版与内置运行时（安装新版请在运行环境页）")}</p>
+          <p>{t("管理当前、上一版与内置运行时（安装新版请前往「Ubuntu 运行时」）")}</p>
         </div>
       </div>
 

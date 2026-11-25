@@ -589,7 +589,8 @@ describe('版本管理：Harness 版本安装期间不能排队启动', () => {
     const nav = document.querySelector('.bottom-navigation') as HTMLElement
     fireEvent.click(within(nav).getByRole('button', { name: '设置' }))
     await screen.findByRole('heading', { name: '设置' })
-    fireEvent.click(screen.getByRole('button', { name: /设备 Shell/ }))
+    fireEvent.click(screen.getByRole('button', { name: /设备控制/ }))
+    fireEvent.click(await screen.findByRole('button', { name: /Shizuku 与设备 Shell/ }))
     expect(await screen.findByRole('button', { name: '打开设备 Shell' })).toBeDisabled()
 
     await act(async () => { finishInstall({ active: 'bundled', bundledVersion: '0.2.0-rc.2', installed: [] }); await Promise.resolve() })

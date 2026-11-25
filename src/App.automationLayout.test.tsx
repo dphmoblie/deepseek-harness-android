@@ -26,32 +26,32 @@ describe('自动化设置：三条腿分成三个页面', () => {
 
   async function openAutomation(sub?: string): Promise<void> {
     render(<App />)
-    await openSettingsPage('自动化设置', sub)
+    await openSettingsPage('自动化', sub)
   }
 
-  it('自动化设置页只给出三个入口，不在这里展开控件', async () => {
+  it('自动化二级页只给出三个入口，不在这里展开控件', async () => {
     await openAutomation()
-    expect(screen.getByRole('button', { name: /无障碍/ })).toBeVisible()
-    expect(screen.getByRole('button', { name: /副屏/ })).toBeVisible()
-    expect(screen.getByRole('button', { name: /自动参数/ })).toBeVisible()
+    expect(screen.getByRole('button', { name: /无障碍与白名单/ })).toBeVisible()
+    expect(screen.getByRole('button', { name: /目标应用副屏/ })).toBeVisible()
+    expect(screen.getByRole('button', { name: /运行控制与规则/ })).toBeVisible()
     // 入口页不直接摆控件：总开关、白名单这些都在各自的三级页里。
     expect(screen.queryByRole('heading', { name: '自动化总开关' })).toBeNull()
     expect(screen.queryByRole('heading', { name: '副屏状态' })).toBeNull()
     expect(screen.queryByRole('button', { name: '保存白名单' })).toBeNull()
   })
 
-  it('自动参数页放总开关、运行记录、规则与每应用参数', async () => {
-    await openAutomation('自动参数')
+  it('运行控制与规则页放总开关、运行记录、规则与按应用配置', async () => {
+    await openAutomation('运行控制与规则')
     expect(await screen.findByRole('heading', { name: '自动化总开关' })).toBeVisible()
     expect(screen.getByRole('heading', { name: '本次会话的运行记录' })).toBeVisible()
     expect(screen.getByRole('heading', { name: '自动化规则' })).toBeVisible()
-    expect(screen.getByRole('heading', { name: '每应用参数' })).toBeVisible()
+    expect(screen.getByRole('heading', { name: '按应用配置' })).toBeVisible()
     // 白名单与密码属于无障碍页，不能混进来。
     expect(screen.queryByRole('heading', { name: '白名单验证密码' })).toBeNull()
   })
 
-  it('无障碍页放服务说明、白名单与验证密码', async () => {
-    await openAutomation('无障碍')
+  it('无障碍与白名单页放服务说明、白名单与验证密码', async () => {
+    await openAutomation('无障碍与白名单')
     expect(await screen.findByRole('heading', { name: '无障碍应用自动化' })).toBeVisible()
     expect(screen.getByRole('switch', { name: '启用无障碍白名单限制' })).toBeVisible()
     expect(screen.getByRole('button', { name: '保存白名单' })).toBeVisible()
@@ -59,17 +59,17 @@ describe('自动化设置：三条腿分成三个页面', () => {
     expect(screen.queryByRole('heading', { name: '自动化总开关' })).toBeNull()
   })
 
-  it('副屏页放副屏状态', async () => {
-    await openAutomation('副屏')
+  it('目标应用副屏页放副屏状态', async () => {
+    await openAutomation('目标应用副屏')
     expect(await screen.findByRole('heading', { name: '副屏状态' })).toBeVisible()
     expect(screen.queryByRole('heading', { name: '自动化总开关' })).toBeNull()
   })
 
-  it('三级页的返回键回到自动化设置', async () => {
-    await openAutomation('无障碍')
+  it('三级页的返回键回到自动化二级页', async () => {
+    await openAutomation('无障碍与白名单')
     await screen.findByRole('heading', { name: '无障碍应用自动化' })
-    fireEvent.click(screen.getByRole('button', { name: '返回设置' }))
-    expect(await screen.findByRole('heading', { name: '自动化设置', level: 1 })).toBeVisible()
+    fireEvent.click(screen.getByRole('button', { name: '返回上一级' }))
+    expect(await screen.findByRole('heading', { name: '自动化', level: 1 })).toBeVisible()
     expect(screen.queryByRole('heading', { name: '无障碍应用自动化' })).toBeNull()
   })
 })

@@ -371,7 +371,7 @@ export async function chooseProvider(name: string): Promise<void> {
     fireEvent.click(existing)
     return
   }
-  fireEvent.click(screen.getByRole('button', { name: /添加其他供应商/ }))
+  fireEvent.click(screen.getByRole('button', { name: /添加内置供应商/ }))
   const list = await screen.findByRole('list', { name: '可添加的供应商' })
   fireEvent.click(within(list).getByRole('button', { name: pattern }))
   // 点完会回退到模型页（历史回退是异步的），等密钥框真正出现再交给用例。
@@ -915,7 +915,7 @@ export async function openSettingsPage(name: string, sub?: string): Promise<void
     timeout: SETTINGS_NAV_TIMEOUT_MS,
   })
   fireEvent.click(entry)
-  await screen.findByRole('heading', { name }, { timeout: SETTINGS_NAV_TIMEOUT_MS })
+  await screen.findByRole('heading', { name, level: 1 }, { timeout: SETTINGS_NAV_TIMEOUT_MS })
   if (sub === undefined) return
   // 先按「以 sub 开头」找：分组里可能同时有「背景」与「DSH 背景」两行，子串匹配会撞车。
   const subEntry = screen.queryByRole('button', { name: new RegExp(`^${sub}`) })

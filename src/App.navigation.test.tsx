@@ -73,6 +73,10 @@ const bridge = vi.hoisted(() => ({
   addTerminalExitListener: vi.fn(),
   getHighRiskPermissions: vi.fn(),
   setHighRiskPermissions: vi.fn(),
+  getAppOrientation: vi.fn(),
+  setAppOrientation: vi.fn(),
+  setAppTheme: vi.fn(),
+  harnessThemeState: vi.fn(),
   // 首页内嵌的「会话工作区」一挂载就读一次会话列表：缺这个桩会让 effect 抛错并卸载整棵树。
   listSessions: vi.fn(),
 }))
@@ -247,6 +251,10 @@ beforeEach(() => {
     enabled: false,
     categories: { ...defaultHighRiskCategories },
   })
+  bridge.getAppOrientation.mockResolvedValue({ mode: 'system' })
+  bridge.setAppOrientation.mockResolvedValue({ mode: 'system' })
+  bridge.setAppTheme.mockResolvedValue(undefined)
+  bridge.harnessThemeState.mockResolvedValue({ syncBackground: false, syncedAt: 0, background: null })
 })
 
 afterEach(() => {
@@ -411,6 +419,35 @@ describe('返回键与视图历史', () => {
 
     // 应自动返回到主视图
     await waitFor(() => expect(window.location.hash).toBe(''))
+    expect(mainViewHeading()).toBeVisible()
+  })
+
+  it('三级设置页支持浏览器前进/后退，且左边缘滑动只退回父级二级页', async () => {
+    await renderAtMainView()
+    fireEvent.click(screen.getByRole('button', { name: '打开应用设置' }))
+    fireEvent.click(await screen.findByRole('button', { name: /外观与显示/ }))
+    expect(await screen.findByRole('heading', { name: '外观与显示', level: 1 })).toBeVisible()
+    fireEvent.click(screen.getByRole('button', { name: /显示与配色/ }))
+    expect(await screen.findByRole('heading', { name: '显示与配色', level: 1 })).toBeVisible()
+    expect(window.location.hash).toBe('#settings-appearance-display')
+
+    // 浏览器后退应回到二级页，前进应回到三级页（不会因缺失于 APP_VIEWS 而落回主视图）
+    await pressBack()
+    expect(await screen.findByRole('heading', { name: '外观与显示', level: 1 })).toBeVisible()
+    expect(window.location.hash).toBe('#settings-appearance')
+    await pressForward()
+    expect(await screen.findByRole('heading', { name: '显示与配色', level: 1 })).toBeVisible()
+    expect(window.location.hash).toBe('#settings-appearance-display')
+
+    // 边缘手势右滑从三级页只退到父级二级页
+    fireEvent.touchStart(window, { touches: [{ clientX: 10, clientY: 200 }] })
+    fireEvent.touchEnd(window, { changedTouches: [{ clientX: 120, clientY: 210 }] })
+    expect(await screen.findByRole('heading', { name: '外观与显示', level: 1 })).toBeVisible()
+    expect(window.location.hash).toBe('#settings-appearance')
+
+    // 收尾：退回栈底
+    await pressBack()
+    await pressBack()
     expect(mainViewHeading()).toBeVisible()
   })
 })

@@ -73,9 +73,9 @@ describe('设备能力卡片', () => {
       entry('virtual_screen', { state: 'needs_action', reason: 'DEVICE_SHELL_DISABLED', action: 'enable_device_shell' }),
     ])) } as unknown as RuntimeBridge
     render(<DeviceCapabilityCard bridge={bridge} onOpenDeviceShell={onOpenDeviceShell} />)
-    const button = await screen.findByRole('button', { name: '设备 Shell 设置' })
-    expect(button.closest('p')?.textContent).toContain('设备命令通道没有就绪')
-    expect(button.closest('p')?.textContent).toContain('到「设备 Shell 设置」检查 Shizuku 授权')
+    const button = await screen.findByRole('button', { name: 'Shizuku 与设备 Shell' })
+    expect(button.closest('p')?.textContent).toContain('设备命令通道未就绪')
+    expect(button.closest('p')?.textContent).toContain('前往「设备控制 › Shizuku 与设备 Shell」检查授权')
     fireEvent.click(button)
     expect(onOpenDeviceShell).toHaveBeenCalledTimes(1)
   })
@@ -84,23 +84,23 @@ describe('设备能力卡片', () => {
     card({ getDeviceCapabilities: vi.fn().mockResolvedValue(report()) })
 
     await findRow('Shizuku（设备 Shell） 可用')
-    row('根通道（KernelSU） 可用')
+    row('Root 通道（KernelSU） 可用')
     row('无障碍服务 可用')
     row('副屏 可用')
     row('整屏截图 可用')
     row('中文输入 可用')
-    /* 状态走 chip（清单 M-7）：就绪走 `success` 档，与「需一步设置」的琥珀色区分开。 */
+    /* 状态走 chip（清单 M-7）：就绪走 `success` 档，与「需进一步设置」的琥珀色区分开。 */
     expect(row('Shizuku（设备 Shell） 可用').querySelector('.status-chip')).toHaveClass('success')
   })
 
-  it('降级的那一项说「能用但保护降了一档」，并讲清少了什么', async () => {
+  it('降级的那一项说「可用（隔离受限）」，并讲清少了什么', async () => {
     card({
       getDeviceCapabilities: vi.fn().mockResolvedValue(report([
         entry('kernelsu_root', { state: 'degraded', reason: 'ROOT_SANDBOX_DEGRADED' }),
       ])),
     })
 
-    const root = await findRow('根通道（KernelSU） 可用，但保护降了一档 · 命令照常执行，但这台设备给不了完整的隔离：静态审查已按严格档收紧，对 /dev 的遮蔽没有生效')
+    const root = await findRow('Root 通道（KernelSU） 可用（隔离受限） · 命令可继续执行，但当前设备无法提供完整隔离：静态审查已按严格档收紧，对 /dev 的屏蔽未生效')
     /* 降级**不许**出现「下一步」：用户没有可点的一步，指路反而会让人以为再设一步就能补回来。 */
     expect(root.textContent).not.toContain('下一步')
     expect(root.querySelector('.status-chip')).toHaveClass('warn')
@@ -112,7 +112,7 @@ describe('设备能力卡片', () => {
     await findRow('Shizuku（设备 Shell） 可用')
     expect(screen.queryByText(/下一步：/u)).toBeNull()
     expect(screen.queryByText(/替代方式：/u)).toBeNull()
-    expect(screen.queryByText(/Shizuku 没有在运行/u)).toBeNull()
+    expect(screen.queryByText(/Shizuku 服务未运行/u)).toBeNull()
   })
 
   it('需要一步设置的行把原因与下一步都说清', async () => {
@@ -122,7 +122,7 @@ describe('设备能力卡片', () => {
       ])),
     })
 
-    await findRow('Shizuku（设备 Shell） 需要一步设置 · Shizuku 没有在运行 · 下一步：打开 Shizuku')
+    await findRow('Shizuku（设备 Shell） 需进一步设置 · Shizuku 服务未运行 · 下一步：打开 Shizuku')
   })
 
   it('依赖未满足的行说明缺的是哪一环，并给出替代方式', async () => {
@@ -134,10 +134,10 @@ describe('设备能力卡片', () => {
     })
 
     await findRow(
-      'Shizuku（设备 Shell） 这台设备不支持 · 还没有安装 Shizuku · 下一步：安装 Shizuku · 替代方式：没有设备 Shell，需要整屏操作的功能都用不了',
+      'Shizuku（设备 Shell） 当前设备不支持 · 尚未安装 Shizuku · 下一步：安装 Shizuku · 替代方式：未连接设备 Shell 时，需要整屏操作的功能将不可用',
     )
     row(
-      '中文输入 依赖未满足 · 无障碍服务没有开启 · 下一步：到系统设置里开启本应用的无障碍服务 · 替代方式：只能通过 Shell 发送可打印的 ASCII 字符',
+      '中文输入 依赖未满足 · 无障碍服务未开启 · 下一步：前往系统设置开启本应用的无障碍服务 · 替代方式：仅可通过 Shell 发送可打印的 ASCII 字符',
     )
   })
 
@@ -151,7 +151,7 @@ describe('设备能力卡片', () => {
       }),
     })
 
-    await findRow('副屏 这台设备不支持 · 需要 Android 10 或更高版本')
+    await findRow('副屏 当前设备不支持 · 需要 Android 10 或更高版本')
   })
 
   it('讲不出原因的码照原样显示，不编一句解释', async () => {
@@ -161,7 +161,7 @@ describe('设备能力卡片', () => {
       ])),
     })
 
-    await findRow('整屏截图 依赖未满足 · 暂时说不上来具体原因 · 下一步：do_something_new')
+    await findRow('整屏截图 依赖未满足 · 暂无法确定具体原因 · 下一步：do_something_new')
   })
 
   it('读不到清单时说读不到，并给一次重试（不显示成「五项都不可用」）', async () => {
@@ -188,7 +188,7 @@ describe('设备能力卡片', () => {
 
     await findRow('无障碍服务 可用')
     fireEvent.click(screen.getByRole('button', { name: '重新检测' }))
-    await findRow('无障碍服务 需要一步设置 · 无障碍服务没有开启 · 下一步：到系统设置里开启本应用的无障碍服务')
+    await findRow('无障碍服务 需进一步设置 · 无障碍服务未开启 · 下一步：前往系统设置开启本应用的无障碍服务')
     expect(bridge.getDeviceCapabilities).toHaveBeenCalledTimes(2)
   })
 
@@ -203,10 +203,10 @@ describe('设备能力卡片', () => {
     card(bridge)
     fireEvent(window, new Event('focus'))
     finishNew(report([entry('accessibility', { state: 'needs_action', reason: 'ACCESSIBILITY_OFF', action: 'open_accessibility_settings' })]))
-    await findRow('无障碍服务 需要一步设置 · 无障碍服务没有开启 · 下一步：到系统设置里开启本应用的无障碍服务')
+    await findRow('无障碍服务 需进一步设置 · 无障碍服务未开启 · 下一步：前往系统设置开启本应用的无障碍服务')
     finishOld(report())
     await new Promise(resolve => setTimeout(resolve, 0))
-    row('无障碍服务 需要一步设置 · 无障碍服务没有开启 · 下一步：到系统设置里开启本应用的无障碍服务')
+    row('无障碍服务 需进一步设置 · 无障碍服务未开启 · 下一步：前往系统设置开启本应用的无障碍服务')
   })
 
   it('切回前台时立即重新读取能力', async () => {
@@ -218,7 +218,7 @@ describe('设备能力卡片', () => {
     card(bridge)
     await findRow('Shizuku（设备 Shell） 可用')
     fireEvent(window, new Event('focus'))
-    await findRow('Shizuku（设备 Shell） 需要一步设置 · Shizuku 没有在运行 · 下一步：打开 Shizuku')
+    await findRow('Shizuku（设备 Shell） 需进一步设置 · Shizuku 服务未运行 · 下一步：打开 Shizuku')
     expect(bridge.getDeviceCapabilities).toHaveBeenCalledTimes(2)
   })
 })

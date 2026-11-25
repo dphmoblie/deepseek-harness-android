@@ -11,7 +11,7 @@ import { saveBackgroundState, readBackgroundState } from '../backgroundRef'
 
 const background = { uri: 'content://media/external/video/media/42', mime: 'video/mp4', kind: 'video' as const }
 
-const checkbox = () => screen.getByRole<HTMLInputElement>('checkbox', { name: '连背景一起同步' })
+const checkbox = () => screen.getByRole<HTMLInputElement>('checkbox', { name: '同时同步背景' })
 
 function deferred<T>() {
   let resolve!: (value: T | PromiseLike<T>) => void
@@ -74,19 +74,19 @@ describe('外观设置：连背景一起同步的持久化', () => {
     render(<AppearanceSettings />)
     await waitFor(() => expect(checkbox().checked).toBe(true))
 
-    fireEvent.click(screen.getByRole('button', { name: '让 DSH 使用当前主题' }))
+    fireEvent.click(screen.getByRole('button', { name: '同步当前主题到对话页' }))
 
     await waitFor(() => expect(bridge.applyHarnessTheme).toHaveBeenCalled())
     expect(bridge.applyHarnessTheme.mock.lastCall?.[0]).toMatchObject({ syncBackground: true })
     // 背景地址不进载荷：原生自己记着，页面从 /__shell/background 取。
     expect(JSON.stringify(bridge.applyHarnessTheme.mock.lastCall?.[0])).not.toContain('content://')
-    expect(screen.getByText('DSH 已切换为当前主题和背景视频')).toBeTruthy()
+    expect(screen.getByText('已将当前主题和背景视频同步到对话页')).toBeTruthy()
   })
 
   it('遮背景的面板、左侧栏与右侧面板透明度分开调，并随载荷带给 DSH', async () => {
     render(<AppearanceSettings />)
 
-    const overlay = screen.getByRole<HTMLInputElement>('slider', { name: /遮盖背景的界面不透明度/ })
+    const overlay = screen.getByRole<HTMLInputElement>('slider', { name: /主界面不透明度/ })
     const sidebar = screen.getByRole<HTMLInputElement>('slider', { name: /侧边栏不透明度/ })
     const rightPanel = screen.getByRole<HTMLInputElement>('slider', { name: /右侧面板不透明度/ })
     // 初值取上次同步的载荷：beforeEach 里存的是 86；侧栏与右栏字段缺失分别按 100、40 迁移。
@@ -97,7 +97,7 @@ describe('外观设置：连背景一起同步的持久化', () => {
     fireEvent.change(overlay, { target: { value: '55' } })
     fireEvent.change(sidebar, { target: { value: '20' } })
     fireEvent.change(rightPanel, { target: { value: '72' } })
-    fireEvent.click(screen.getByRole('button', { name: '让 DSH 使用当前主题' }))
+    fireEvent.click(screen.getByRole('button', { name: '同步当前主题到对话页' }))
 
     await waitFor(() => expect(bridge.applyHarnessTheme).toHaveBeenCalled())
     expect(bridge.applyHarnessTheme.mock.lastCall?.[0]).toMatchObject({
@@ -115,7 +115,7 @@ describe('外观设置：连背景一起同步的持久化', () => {
 
     await waitFor(() => expect(bridge.setHarnessSyncBackground).toHaveBeenCalledWith(false))
     expect(screen.getByText('还没有选择背景文件，已只同步颜色')).toBeTruthy()
-    expect(screen.getByText(/重启后保留/u)).toBeTruthy()
+    expect(screen.getByText(/重启仍保留/u)).toBeTruthy()
   })
 
   it('原生状态回读迟到时不会覆盖用户先完成的开关操作', async () => {

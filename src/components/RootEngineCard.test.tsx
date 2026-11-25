@@ -33,24 +33,24 @@ const radio = (name: RegExp): HTMLInputElement => screen.getByRole('radio', { na
 describe('根通道卡片', () => {
   it('设置入口标题与设备能力名称分开', async () => {
     card({ getRootEngineStatus: vi.fn().mockResolvedValue(status()) })
-    await waitFor(() => expect(screen.getByRole('heading', { name: '根通道设置' })).toBeTruthy())
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'Root 通道设置' })).toBeTruthy())
   })
 
-  it('关着的时候说清是「还没查」，不说成「这台设备没有 KernelSU」，电源按钮不可用', async () => {
+  it('关着的时候说清是「还没查」，不说成「当前设备不支持 KernelSU」，电源按钮不可用', async () => {
     card({ getRootEngineStatus: vi.fn().mockResolvedValue(status()) })
 
     await waitFor(() => { expect(radio(/关闭/).checked).toBe(true) })
     /*
      * 关着时原生不拉 su（`RootEngineAccess.status` 回 `unsupported` + `ROOT_ENGINE_DISABLED`），
-     * `unsupported` 这一档此刻只是「还没查」：说成「这台设备没有可用的 KernelSU」会与能力行的
-     * 「开关没有打开」自相矛盾（清单 M-4 的现场）。
+     * `unsupported` 这一档此刻只是「还没查」：说成「当前设备未检测到可用的 KernelSU」会与能力行的
+     * 「尚未开启」自相矛盾（清单 M-4 的现场）。
      */
-    expect(screen.getByText(/关着的时候本应用不拉 su/)).toBeTruthy()
-    expect(screen.queryByText(/这台设备没有可用的 KernelSU/)).toBeNull()
-    /* 关着时不该出现「开关开着但还没法用」那句——它只在开着却没就绪时出现。 */
-    expect(screen.queryByText(/开关开着但还没法用/)).toBeNull()
+    expect(screen.getByText(/关闭状态下不会调用 su/)).toBeTruthy()
+    expect(screen.queryByText(/当前设备未检测到可用的 KernelSU/)).toBeNull()
+    /* 关着时不该出现「已开启但暂不可用」那句——它只在开着却没就绪时出现。 */
+    expect(screen.queryByText(/Root 通道已开启但暂不可用/)).toBeNull()
     /* 关着就不该讲降级：没有隔离可降。 */
-    expect(screen.queryByText(/隔离不完整/)).toBeNull()
+    expect(screen.queryByText(/隔离保护不完整/)).toBeNull()
     expect(screen.getByRole('button', { name: /重启设备/ })).toBeDisabled()
     expect(screen.getByRole('button', { name: /关机/ })).toBeDisabled()
   })
@@ -68,15 +68,15 @@ describe('根通道卡片', () => {
     card({ getRootEngineStatus, setRootEngineMode })
 
     await waitFor(() => { expect(radio(/关闭/).checked).toBe(true) })
-    fireEvent.click(radio(/读写 · 严格/))
+    fireEvent.click(radio(/读写（严格护栏）/))
 
-    await waitFor(() => { expect(radio(/读写 · 严格/).checked).toBe(true) })
+    await waitFor(() => { expect(radio(/读写（严格护栏）/).checked).toBe(true) })
     expect(setRootEngineMode).toHaveBeenCalledWith('read_write', 'strict')
-    expect(screen.getByText(/需要一步设置/)).toBeTruthy()
-    expect(screen.getByText(/KernelSU 还没有给本应用授权/)).toBeTruthy()
+    expect(screen.getByText(/需进一步授权/)).toBeTruthy()
+    expect(screen.getByText(/KernelSU 尚未授权给本应用/)).toBeTruthy()
     expect(screen.getByText(/su 版本：3\.1\.0:KernelSU/)).toBeTruthy()
     /* 开着但没就绪：必须说清命令此刻仍走 Shizuku，而不是让用户以为已经能用了。 */
-    expect(screen.getByText(/开关开着但还没法用/)).toBeTruthy()
+    expect(screen.getByText(/Root 通道已开启但暂不可用/)).toBeTruthy()
   })
 
   it('选择最大档时明确说清放行了哪些命令，并启用电源按钮', async () => {
@@ -92,12 +92,12 @@ describe('根通道卡片', () => {
     card({ getRootEngineStatus, setRootEngineMode })
 
     await waitFor(() => { expect(radio(/关闭/).checked).toBe(true) })
-    fireEvent.click(radio(/读写 · 最大/))
+    fireEvent.click(radio(/读写（最大放行）/))
 
-    await waitFor(() => { expect(radio(/读写 · 最大/).checked).toBe(true) })
+    await waitFor(() => { expect(radio(/读写（最大放行）/).checked).toBe(true) })
     expect(setRootEngineMode).toHaveBeenCalledWith('read_write', 'maximum')
-    expect(screen.getByText(/最大档：mount、dd（普通文件）、insmod、setprop（普通属性）与动态脚本放行/)).toBeTruthy()
-    expect(screen.getByText(/极危操作需打开应用警告页确认/)).toBeTruthy()
+    expect(screen.getByText(/最大放行档：放行 mount、dd（普通文件）、insmod、setprop（普通属性）及动态脚本/)).toBeTruthy()
+    expect(screen.getByText(/仍需在应用警告页确认/)).toBeTruthy()
     expect(screen.getByRole('button', { name: /重启设备/ })).toBeEnabled()
     expect(screen.getByRole('button', { name: /关机/ })).toBeEnabled()
   })
@@ -116,9 +116,9 @@ describe('根通道卡片', () => {
       })),
     })
 
-    await waitFor(() => { expect(screen.getByText(/隔离不完整，少了这些保护：/)).toBeTruthy() })
-    expect(screen.getByText(/unshare 用不了/)).toBeTruthy()
-    expect(screen.getByText(/没有 setpriv/)).toBeTruthy()
+    await waitFor(() => { expect(screen.getByText(/当前设备的隔离保护不完整，缺少以下防护：/)).toBeTruthy() })
+    expect(screen.getByText(/当前设备不支持 unshare/)).toBeTruthy()
+    expect(screen.getByText(/当前设备缺少 setpriv/)).toBeTruthy()
     expect(screen.getByText(/静态审查已按当前档位收紧/)).toBeTruthy()
     /* 认不出的码照原样显示：那是两侧词表不同步的证据。 */
     expect(screen.queryByText('BLOCK_MASK_FAILED')).toBeNull()
@@ -144,7 +144,7 @@ describe('根通道卡片', () => {
   it('读不到状态时说读不到，而不是画一个关着的模式', async () => {
     card({ getRootEngineStatus: vi.fn().mockRejectedValue(new Error('浏览器预览不支持根通道状态查询')) })
 
-    await waitFor(() => { expect(screen.getByText(/无法读取根通道状态/)).toBeTruthy() })
+    await waitFor(() => { expect(screen.getByText(/无法读取 Root 通道状态/)).toBeTruthy() })
     expect(screen.queryByRole('radio')).toBeNull()
   })
 
@@ -156,9 +156,9 @@ describe('根通道卡片', () => {
     card({ getRootEngineStatus, setRootEngineMode })
 
     await waitFor(() => { expect(radio(/关闭/).checked).toBe(true) })
-    fireEvent.click(radio(/读写 · 最大/))
+    fireEvent.click(radio(/读写（最大放行）/))
 
-    await waitFor(() => { expect(screen.getByRole('alert').textContent).toContain('保存根通道设置失败：根通道模式取值无效') })
+    await waitFor(() => { expect(screen.getByRole('alert').textContent).toContain('保存 Root 通道设置失败：根通道模式取值无效') })
     /* 选择必须回到设备的真实取值（这里仍是关），不能停在我以为它变成了的那个值上。 */
     expect(radio(/关闭/).checked).toBe(true)
     expect(getRootEngineStatus).toHaveBeenCalledTimes(2)

@@ -30,7 +30,7 @@ function bridgeError(message: string, code?: string): Error {
 describe('Shizuku 版本显示', () => {
   beforeEach(beforeEachAppTest)
 
-  /** 进入「设备 Shell 设置」二级页——Shizuku 区块就在这一页。 */
+  /** 进入「设备控制 › Shizuku 与设备 Shell」三级页——Shizuku 区块就在这一页。 */
   async function openShizukuPage(state: Partial<ShizukuState>): Promise<HTMLElement> {
     bridge.getShizukuState.mockResolvedValue({
       installed: true,
@@ -41,8 +41,8 @@ describe('Shizuku 版本显示', () => {
       ...state,
     })
     render(<App />)
-  await arriveAtShell()
-    await openSettingsPage('设备 Shell 设置')
+    await arriveAtShell()
+    await openSettingsPage('设备控制', 'Shizuku 与设备 Shell')
     return screen.findByRole('region', { name: 'Shizuku' })
   }
 
@@ -73,7 +73,7 @@ describe('Shizuku 版本显示', () => {
     })
 
     // 没运行就没有服务端 API 版本，但应用版本还是要说清楚。
-    expect(within(section).getByText(/设备 Shell ·未运行 · Shizuku 应用 13\.6\.0/)).toBeVisible()
+    expect(within(section).getByText(/状态：未运行 · Shizuku 应用 13\.6\.0/)).toBeVisible()
     expect(within(section).queryByText(/服务端 API/)).toBeNull()
 
     fireEvent.click(within(section).getByRole('button', { name: /打开 Shizuku/ }))

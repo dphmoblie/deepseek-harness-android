@@ -175,7 +175,7 @@ describe('§5.6-B 渲染测量', () => {
       await tick(6_000)
       profile.reset()
 
-      await openSettingsPage('诊断与日志', '设备能力')
+      await openSettingsPage('诊断与自检', '环境自检与设备能力')
 
       const rows = profile.sinceReset()
       report('夹具自检：设置首页 → 诊断与日志', rows)
@@ -284,7 +284,7 @@ describe('§5.6-B 渲染测量', () => {
       freshButEqualSnapshots()
       const { profile } = mountProfiledApp()
 
-      await openSettingsPage('诊断与日志', '设备能力')
+      await openSettingsPage('诊断与自检', '环境自检与设备能力')
       await waitFor(() => expect(bridge.getKeepAliveState).toHaveBeenCalled())
       // 让挂载期与进页面时的那些读取全部落地，从稳态之后再开始数。
       await tick(6_000)
@@ -381,7 +381,7 @@ describe('§5.6-B 渲染测量', () => {
     await openSettingsPage('模型与密钥')
     profile.reset()
 
-    for (const name of ['后台', '主题', '设备 Shell 设置', '诊断与日志']) {
+    for (const name of ['运行与网络', '外观与显示', '设备控制', '诊断与自检']) {
       fireEvent.click(screen.getByRole('button', { name: '返回设置' }))
       // 开机不再自动进设置首页：先点底栏导航，再等标题。
       await arriveAtSettingsHome()

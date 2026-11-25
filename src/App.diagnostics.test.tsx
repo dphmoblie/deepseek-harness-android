@@ -25,11 +25,11 @@ describe('诊断与日志', () => {
     render(<App />)
     await arriveAtSettingsHome()
 
-    await openSettingsPage('诊断与日志', '日志与采集')
-    const toggle = await screen.findByRole('switch', { name: /收集诊断日志/ })
+    await openSettingsPage('诊断与自检', '日志记录与导出')
+    const toggle = await screen.findByRole('switch', { name: /记录诊断日志/ })
     await waitFor(() => expect(toggle).toBeEnabled())
     expect(toggle).toBeChecked()
-    const harnessExportToggle = await screen.findByRole('switch', { name: /导出 Harness 运行日志/ })
+    const harnessExportToggle = await screen.findByRole('switch', { name: /导出时附带 Harness 运行日志/ })
     expect(harnessExportToggle).toBeChecked()
     // 没有任何日志时可导出/清空按钮保持禁用，避免产生空文件。
     expect(screen.getByRole('button', { name: '导出并分享' })).toBeDisabled()
@@ -42,7 +42,7 @@ describe('诊断与日志', () => {
 
     fireEvent.click(toggle)
     await waitFor(() => expect(bridge.setDiagnosticLogSettings).toHaveBeenCalledWith(false, 7, true))
-    expect(await screen.findByRole('switch', { name: /收集诊断日志/ })).not.toBeChecked()
+    expect(await screen.findByRole('switch', { name: /记录诊断日志/ })).not.toBeChecked()
 
     fireEvent.click(harnessExportToggle)
     await waitFor(() => expect(bridge.setDiagnosticLogSettings).toHaveBeenCalledWith(false, 7, false))
@@ -52,7 +52,7 @@ describe('诊断与日志', () => {
   it('保留天数输入框允许编辑，失焦时拒绝空值和越界值', async () => {
     render(<App />)
     await arriveAtSettingsHome()
-    await openSettingsPage('诊断与日志', '日志与采集')
+    await openSettingsPage('诊断与自检', '日志记录与导出')
 
     const retentionInput = await screen.findByRole('spinbutton', { name: /保留天数/ })
     fireEvent.change(retentionInput, { target: { value: '' } })
@@ -84,8 +84,8 @@ describe('诊断与日志', () => {
     render(<App />)
   await arriveAtSettingsHome()
 
-    await openSettingsPage('诊断与日志', '日志与采集')
-    expect(await screen.findByText('收集中')).toBeVisible()
+    await openSettingsPage('诊断与自检', '日志记录与导出')
+    expect(await screen.findByText('记录中')).toBeVisible()
     expect(screen.getByText('2 个文件 · 4.0 KB')).toBeVisible()
 
     // 等待启动流程释放忙碌状态：run() 在忙碌时会直接忽略点击。
@@ -116,7 +116,7 @@ describe('诊断与日志', () => {
     render(<App />)
   await arriveAtSettingsHome()
 
-    await openSettingsPage('诊断与日志', '日志与采集')
+    await openSettingsPage('诊断与自检', '日志记录与导出')
     fireEvent.click(await screen.findByRole('button', { name: '导出并分享' }))
     fireEvent.click(await screen.findByRole('button', { name: '继续导出' }))
 
@@ -143,7 +143,7 @@ describe('诊断与日志', () => {
     })
     render(<App />)
     await arriveAtSettingsHome()
-    await openSettingsPage('诊断与日志', '日志与采集')
+    await openSettingsPage('诊断与自检', '日志记录与导出')
 
     expect(screen.getByText(/仅自动脱敏模型密钥、授权头等凭据，仍可能包含文件路径、URL/)).toBeVisible()
     const shareButton = screen.getByRole('button', { name: '导出并分享' })
@@ -161,7 +161,7 @@ describe('诊断与日志', () => {
     render(<App />)
   await arriveAtSettingsHome()
 
-    await openSettingsPage('诊断与日志', '日志与采集')
+    await openSettingsPage('诊断与自检', '日志记录与导出')
     const toggle = await screen.findByRole('button', { name: /运行日志（最近 8 KB）/ })
     expect(toggle).toHaveAttribute('aria-expanded', 'false')
     // 折叠状态不碰桥接：访客输出可能含会话内容，不展开就不带进界面。
@@ -187,7 +187,7 @@ describe('诊断与日志', () => {
     render(<App />)
   await arriveAtSettingsHome()
 
-    await openSettingsPage('诊断与日志', '日志与采集')
+    await openSettingsPage('诊断与自检', '日志记录与导出')
     fireEvent.click(await screen.findByRole('button', { name: /运行日志（最近 8 KB）/ }))
 
     expect(await screen.findByText('当前没有可读取的运行日志')).toBeVisible()
@@ -203,7 +203,7 @@ describe('诊断与日志', () => {
     render(<App />)
   await arriveAtSettingsHome()
 
-    await openSettingsPage('诊断与日志', '日志与采集')
+    await openSettingsPage('诊断与自检', '日志记录与导出')
     fireEvent.click(await screen.findByRole('button', { name: /运行日志（最近 8 KB）/ }))
 
     fireEvent.click(await screen.findByRole('button', { name: '复制' }))
@@ -222,7 +222,7 @@ describe('诊断与日志', () => {
     render(<App />)
   await arriveAtSettingsHome()
 
-    await openSettingsPage('诊断与日志', '日志与采集')
+    await openSettingsPage('诊断与自检', '日志记录与导出')
     fireEvent.click(await screen.findByRole('button', { name: /运行日志（最近 8 KB）/ }))
     const output = await waitFor(() => {
       const node = document.querySelector('.harness-log-output')
@@ -245,7 +245,7 @@ describe('诊断与日志', () => {
     render(<App />)
   await arriveAtSettingsHome()
 
-    await openSettingsPage('诊断与日志', '日志与采集')
+    await openSettingsPage('诊断与自检', '日志记录与导出')
     fireEvent.click(await screen.findByRole('button', { name: /运行日志（最近 8 KB）/ }))
 
     const insights = await screen.findByRole('group', { name: '判读提示' })
@@ -257,7 +257,7 @@ describe('诊断与日志', () => {
     render(<App />)
   await arriveAtSettingsHome()
 
-    await openSettingsPage('诊断与日志', '日志与采集')
+    await openSettingsPage('诊断与自检', '日志记录与导出')
     fireEvent.click(await screen.findByRole('button', { name: /运行日志（最近 8 KB）/ }))
     await waitFor(() => expect(bridge.getHarnessLog).toHaveBeenCalledWith({ maxBytes: 8 * 1024 }))
 
@@ -277,7 +277,7 @@ describe('诊断与日志', () => {
     render(<App />)
   await arriveAtSettingsHome()
 
-    await openSettingsPage('诊断与日志', '日志与采集')
+    await openSettingsPage('诊断与自检', '日志记录与导出')
     const toggle = await screen.findByRole('button', { name: /诊断日志（最近 64 KB）/ })
     // 与运行日志同样按需读取：折叠时不碰桥接。
     expect(bridge.readDiagnosticLog).not.toHaveBeenCalled()
@@ -295,7 +295,7 @@ describe('诊断与日志', () => {
     render(<App />)
   await arriveAtSettingsHome()
 
-    await openSettingsPage('诊断与日志', '日志与采集')
+    await openSettingsPage('诊断与自检', '日志记录与导出')
     fireEvent.click(await screen.findByRole('button', { name: /诊断日志（最近 64 KB）/ }))
 
     expect(await screen.findByText(/当前没有可查看的诊断日志/)).toBeVisible()
@@ -313,8 +313,8 @@ describe('诊断与日志', () => {
     render(<App />)
     await arriveAtSettingsHome()
 
-    await openSettingsPage('诊断与日志', '系统浏览器')
-    const select = await screen.findByRole('combobox', { name: '打开方式' })
+    await openSettingsPage('运行与网络', '网络与浏览方式')
+    const select = await screen.findByRole('combobox', { name: '默认打开方式' })
     await waitFor(() => expect(select).toHaveValue(''))
     expect(bridge.getExternalBrowsers).toHaveBeenCalledTimes(1)
 
@@ -327,14 +327,14 @@ describe('诊断与日志', () => {
     await waitFor(() => expect(bridge.setExternalBrowser).toHaveBeenLastCalledWith(null))
   })
 
-  it('只进入诊断与日志页时不查询系统浏览器清单，进入系统浏览器子页才读取', async () => {
+  it('只进入运行与网络页时不查询系统浏览器清单，进入网络与浏览方式子页才读取', async () => {
     render(<App />)
     await arriveAtSettingsHome()
 
-    await openSettingsPage('诊断与日志')
+    await openSettingsPage('运行与网络')
     expect(bridge.getExternalBrowsers).not.toHaveBeenCalled()
 
-    fireEvent.click(screen.getByRole('button', { name: /系统浏览器/ }))
+    fireEvent.click(screen.getByRole('button', { name: /网络与浏览方式/ }))
     await waitFor(() => expect(bridge.getExternalBrowsers).toHaveBeenCalledTimes(1))
   })
 
@@ -343,8 +343,8 @@ describe('诊断与日志', () => {
     render(<App />)
     await arriveAtSettingsHome()
 
-    await openSettingsPage('诊断与日志', '系统浏览器')
+    await openSettingsPage('运行与网络', '网络与浏览方式')
     expect(await screen.findByText('用系统浏览器打开 Harness')).toBeTruthy()
-    expect(screen.queryByRole('combobox', { name: '打开方式' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('combobox', { name: '默认打开方式' })).not.toBeInTheDocument()
   })
 })

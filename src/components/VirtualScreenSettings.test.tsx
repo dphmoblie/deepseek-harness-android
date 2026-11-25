@@ -223,7 +223,7 @@ describe('目标应用副屏设置页', () => {
     expect(reading('采集帧率')).toBe('60 FPS')
     expect(reading('虚拟屏实际刷新率')).toBe('60 Hz')
     expect(reading('目标帧率')).toBe('60 FPS')
-    expect(reading('画面年龄')).toBe('40 毫秒')
+    expect(reading('最近帧延迟')).toBe('40 毫秒')
     expect(reading('输入后首帧间隔估计')).toBe('120 毫秒（最近 3 次平均 110 毫秒）')
     expect(reading('副屏当前前台应用')).toBe('com.example.target')
     expect(reading('副屏当前前台 Activity')).toBe('com.example.target/.MainActivity')
@@ -247,17 +247,17 @@ describe('目标应用副屏设置页', () => {
     render(<VirtualScreenSettings bridge={bridge} onBack={() => {}} />)
     expect(await screen.findByText('运行中')).toBeInTheDocument()
     expect(reading('采集帧率')).toBe('未知')
-    expect(reading('画面年龄')).toBe('2500 毫秒')
+    expect(reading('最近帧延迟')).toBe('2500 毫秒')
   })
 
-  it('本次会话从未采到帧时画面年龄显示未知', async () => {
+  it('本次会话从未采到帧时最近帧延迟显示未知', async () => {
     const bridge = bridgeWith({
       getVirtualScreenSettings: vi.fn().mockResolvedValue(settings()),
       getVirtualScreenState: vi.fn().mockResolvedValue(state({ active: true, frameFps: 0, frameAtElapsedMs: 0, frameAgeMs: 0 })),
     })
     render(<VirtualScreenSettings bridge={bridge} onBack={() => {}} />)
     expect(await screen.findByText('运行中')).toBeInTheDocument()
-    expect(reading('画面年龄')).toBe('未知')
+    expect(reading('最近帧延迟')).toBe('未知')
   })
 
   it('取不到的读数显示未知，不补 0 也不留空白', async () => {

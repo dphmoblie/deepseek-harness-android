@@ -16,7 +16,7 @@ import type {
  */
 const CAPABILITY_LABELS: Record<string, string> = {
   shizuku: 'Shizuku（设备 Shell）',
-  kernelsu_root: '根通道（KernelSU）',
+  kernelsu_root: 'Root 通道（KernelSU）',
   accessibility: '无障碍服务',
   virtual_screen: '副屏',
   screenshot: '整屏截图',
@@ -29,10 +29,10 @@ const CAPABILITY_LABELS: Record<string, string> = {
  */
 const STATE_LABELS: Record<DeviceCapabilityState, string> = {
   ready: '可用',
-  degraded: '可用，但保护降了一档',
-  needs_action: '需要一步设置',
+  degraded: '可用（隔离受限）',
+  needs_action: '需进一步设置',
   blocked: '依赖未满足',
-  unsupported: '这台设备不支持',
+  unsupported: '当前设备不支持',
 }
 
 /**
@@ -56,22 +56,21 @@ function chipClass(state: DeviceCapabilityState): string {
 
 /** 原因码 → 一句人话。讲不出原因的码一律回落到「暂时说不上来」，不编。 */
 const REASON_NOTES: Record<string, string> = {
-  SHIZUKU_NOT_INSTALLED: '还没有安装 Shizuku',
-  SHIZUKU_NOT_RUNNING: 'Shizuku 没有在运行',
-  SHIZUKU_PERMISSION_DENIED: 'Shizuku 权限被拒绝',
-  SHIZUKU_PERMISSION_UNDETERMINED: '还没有授予 Shizuku 权限',
-  SHIZUKU_NOT_CONNECTED: 'Shizuku 已授权，但服务还没连上',
-  ACCESSIBILITY_OFF: '无障碍服务没有开启',
+  SHIZUKU_NOT_INSTALLED: '尚未安装 Shizuku',
+  SHIZUKU_NOT_RUNNING: 'Shizuku 服务未运行',
+  SHIZUKU_PERMISSION_DENIED: 'Shizuku 权限已被拒绝',
+  SHIZUKU_PERMISSION_UNDETERMINED: '尚未授予 Shizuku 权限',
+  SHIZUKU_NOT_CONNECTED: 'Shizuku 已授权，但服务尚未连接',
+  ACCESSIBILITY_OFF: '无障碍服务未开启',
   ACCESSIBILITY_ENABLED_DISCONNECTED: '无障碍服务已开启，但应用尚未连接',
   ANDROID_TOO_OLD: '需要 Android 10 或更高版本',
-  TEXT_INPUT_NEEDS_ACCESSIBILITY: '中文等非 ASCII 文字只能由无障碍服务写入',
-  DEVICE_SHELL_DISABLED: '设备命令通道没有就绪',
-  ROOT_ENGINE_DISABLED: '根通道开关没有打开（打开后才会检测这台设备支不支持）',
-  KERNELSU_NOT_INSTALLED: '这台设备没有可用的 KernelSU',
-  KERNELSU_PERMISSION_REQUIRED: 'KernelSU 还没有给本应用授权',
-  ROOT_IMPL_NOT_KERNELSU: '设备上的 root 不是 KernelSU，本应用只走 KernelSU',
-  ROOT_SANDBOX_DEGRADED: '命令照常执行，但这台设备给不了完整的隔离：静态审查已按严格档收紧，'
-    + '对 /dev 的遮蔽没有生效',
+  TEXT_INPUT_NEEDS_ACCESSIBILITY: '中文等非 ASCII 文字需通过无障碍服务输入',
+  DEVICE_SHELL_DISABLED: '设备命令通道未就绪',
+  ROOT_ENGINE_DISABLED: 'Root 通道尚未开启（开启后才会检测设备支持情况）',
+  KERNELSU_NOT_INSTALLED: '当前设备未检测到可用的 KernelSU',
+  KERNELSU_PERMISSION_REQUIRED: 'KernelSU 尚未授权给本应用',
+  ROOT_IMPL_NOT_KERNELSU: '设备上的 Root 方案不是 KernelSU，本应用仅支持 KernelSU',
+  ROOT_SANDBOX_DEGRADED: '命令可继续执行，但当前设备无法提供完整隔离：静态审查已按严格档收紧，对 /dev 的屏蔽未生效',
 }
 
 /** 动作码 → 下一步做什么。这里是**指路**，不替用户点：真正的入口在各自的设置区里。 */
@@ -80,26 +79,21 @@ const ACTION_NOTES: Record<string, string> = {
   open_shizuku: '打开 Shizuku',
   grant_shizuku_permission: '授予 Shizuku 权限',
   connect_shizuku: '连接 Shizuku',
-  open_accessibility_settings: '到系统设置里开启本应用的无障碍服务',
-  enable_root_engine: '到「根通道」设置里打开开关',
-  grant_root_permission: '到 KernelSU 管理器里给本应用授权',
-  enable_device_shell: '到「设备 Shell 设置」检查 Shizuku 授权',
+  open_accessibility_settings: '前往系统设置开启本应用的无障碍服务',
+  enable_root_engine: '前往「设备控制 › Root 通道与电源」开启',
+  grant_root_permission: '前往 KernelSU 管理器为本应用授权',
+  enable_device_shell: '前往「设备控制 › Shizuku 与设备 Shell」检查授权',
 }
 
 /** 替代码 → 退一步还能怎么做。没有替代方式时原生侧给 `null`，这一行就不显示。 */
 const ALTERNATIVE_NOTES: Record<string, string> = {
-  NO_DEVICE_SHELL: '没有设备 Shell，需要整屏操作的功能都用不了',
-  SHELL_ASCII_ONLY: '只能通过 Shell 发送可打印的 ASCII 字符',
-  SHIZUKU_SHELL: '没有根通道时，Shizuku 的设备 Shell 仍可用（命令以 shell 身份执行，没有 UID 0）',
+  NO_DEVICE_SHELL: '未连接设备 Shell 时，需要整屏操作的功能将不可用',
+  SHELL_ASCII_ONLY: '仅可通过 Shell 发送可打印的 ASCII 字符',
+  SHIZUKU_SHELL: '未开启 Root 通道时，Shizuku 设备 Shell 仍可用（以 shell 身份运行，无 Root 权限）',
 }
 
-/**
- * 要额外给一个入口按钮的动作码。
- *
- * 单独取名而不是在 JSX 里写字符串字面量：这个码同时存在于原生 `DeviceCapabilityPolicy.ACTION_ENABLE_DEVICE_SHELL`
- * 与这张卡里，点名一处方便两侧对照（上一版是就地写的 `entry.action === 'enable_device_shell'`）。
- */
 const ACTION_NEEDS_ENTRY_BUTTON = 'enable_device_shell'
+const ACTION_NEEDS_ROOT_BUTTON = 'enable_root_engine'
 
 /**
  * 一次检测的状态。
@@ -153,7 +147,7 @@ function RefreshAction({ refreshing, label, onClick }: { refreshing: boolean; la
  *    但 `degraded` 的行**要**说原因——那正是「能用但不完整」里最该知道的那一半。
  *  - 卡片本身**不写入任何浏览器存储**，也不触发任何动作。
  */
-export function DeviceCapabilityCard({ bridge = runtimeBridge, onOpenDeviceShell }: { bridge?: RuntimeBridge; onOpenDeviceShell?: () => void }) {
+export function DeviceCapabilityCard({ bridge = runtimeBridge, onOpenDeviceShell, onOpenRootEngine }: { bridge?: RuntimeBridge; onOpenDeviceShell?: () => void; onOpenRootEngine?: () => void }) {
   const [load, setLoad] = useState<CapabilityLoad>({ status: 'loading' })
   const [refreshing, setRefreshing] = useState(false)
   const requestId = useRef(0)
@@ -200,7 +194,7 @@ export function DeviceCapabilityCard({ bridge = runtimeBridge, onOpenDeviceShell
   return <section className="settings-section" aria-labelledby="device-capabilities">
     <div className="section-title"><span className="section-icon"><Cpu size={19} /></span>
       <div><h2 id="device-capabilities">{t('设备能力')}</h2>
-        <p>{t('查看 Shizuku、根通道、无障碍与副屏可用状态')}</p></div>
+        <p>{t('检测 Shizuku、Root 通道、无障碍与副屏的当前状态')}</p></div>
     </div>
     {load.status === 'loading' && <p className="settings-note">{t('正在检测设备能力…')}</p>}
     {report !== null && <div className="device-capability-list" role="list">
@@ -208,9 +202,10 @@ export function DeviceCapabilityCard({ bridge = runtimeBridge, onOpenDeviceShell
         <strong>{t(CAPABILITY_LABELS[entry.id] ?? entry.id)}</strong>{' '}
         <span className={chipClass(entry.state)}>{t(STATE_LABELS[entry.state])}</span>
         {entry.state !== 'ready' && <>
-          {' · '}{t(REASON_NOTES[entry.reason] ?? '暂时说不上来具体原因')}
+          {' · '}{t(REASON_NOTES[entry.reason] ?? '暂无法确定具体原因')}
           {entry.action !== null && <>{' · '}{t('下一步：{0}', t(ACTION_NOTES[entry.action] ?? entry.action))}</>}
-          {entry.action === ACTION_NEEDS_ENTRY_BUTTON && onOpenDeviceShell !== undefined && <button className="button button-secondary compact-button" type="button" onClick={onOpenDeviceShell}>{t('设备 Shell 设置')}</button>}
+          {entry.action === ACTION_NEEDS_ENTRY_BUTTON && onOpenDeviceShell !== undefined && <button className="button button-secondary compact-button" type="button" onClick={onOpenDeviceShell}>{t('Shizuku 与设备 Shell')}</button>}
+          {entry.action === ACTION_NEEDS_ROOT_BUTTON && onOpenRootEngine !== undefined && <button className="button button-secondary compact-button" type="button" onClick={onOpenRootEngine}>{t('Root 通道与电源')}</button>}
           {entry.alternative !== null && <>{' · '}{t('替代方式：{0}', t(ALTERNATIVE_NOTES[entry.alternative] ?? entry.alternative))}</>}
         </>}
       </p>)}

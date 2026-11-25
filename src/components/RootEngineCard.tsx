@@ -15,35 +15,29 @@ import type { RootEngineStatus, RootGuardProfile, RuntimeBridge } from '../platf
  * 所以下面渲染时先看 `mode`——关着就说关着，绝不说成「这台设备没有可用的 KernelSU」。
  */
 const KERNEL_SU_STATE_LABELS: Record<string, string> = {
-  ready: '当前可用',
-  needs_action: '需要一步设置',
-  unsupported: '这台设备没有可用的 KernelSU',
+  ready: '已就绪',
+  needs_action: '需进一步授权',
+  unsupported: '当前设备不支持 KernelSU',
 }
 
-/**
- * 原因码 → 一句人话。
- *
- * 这张表只有根通道用到的五个码；全量表在 `DeviceCapabilityCard`（那边还要管 Shizuku 与无障碍）。
- * 两处都回落到「暂时说不上来」而不是编一句，讲不出原因的码一律照实说。
- */
 const REASON_NOTES: Record<string, string> = {
-  ROOT_ENGINE_DISABLED: '开关关着',
-  KERNELSU_NOT_INSTALLED: '这台设备没有可用的 KernelSU',
-  KERNELSU_PERMISSION_REQUIRED: 'KernelSU 还没有给本应用授权',
-  ROOT_IMPL_NOT_KERNELSU: '设备上的 root 不是 KernelSU，本应用只走 KernelSU',
-  ROOT_SANDBOX_DEGRADED: '命令照常执行，但这台设备给不了完整的隔离',
+  ROOT_ENGINE_DISABLED: '已关闭',
+  KERNELSU_NOT_INSTALLED: '当前设备未检测到可用的 KernelSU',
+  KERNELSU_PERMISSION_REQUIRED: 'KernelSU 尚未授权给本应用',
+  ROOT_IMPL_NOT_KERNELSU: '设备上的 Root 方案不是 KernelSU，本应用仅支持 KernelSU',
+  ROOT_SANDBOX_DEGRADED: '命令可继续执行，但当前设备无法提供完整隔离',
 }
 
-/** 降级原因码 → 一句人话（词表来自 `RootSecurityWrapper.DEGRADATION_CODES`）。 */
+/** 降级原因码 → 清晰说明（词表来自 `RootSecurityWrapper.DEGRADATION_CODES`）。 */
 const DEGRADATION_NOTES: Record<string, string> = {
-  NAMESPACE_UNAVAILABLE: '这台设备的 unshare 用不了，命令会跑在宿主命名空间里',
-  PID_ISOLATION_UNAVAILABLE: '拿不到 PID 隔离，命令能看到、也影响得到宿主进程',
-  PROPAGATION_FAILED: '挂载传播关系切不开，隔离里做的挂载可能影响到外面',
-  BLOCK_MASK_FAILED: '没能把 /dev/block 遮掉，命令理论上能读写块设备',
-  BLOCK_MASK_SKIPPED: '这一档没有做 /dev 遮蔽',
-  CORE_PARTITION_RO_FAILED: '有核心分区没能重新挂成只读',
-  PROC_REMOUNT_FAILED: '/proc 没能按隔离重新挂载',
-  HARDENING_UNAVAILABLE: '这台设备没有 setpriv，命令跑在完整的 root 能力集里',
+  NAMESPACE_UNAVAILABLE: '当前设备不支持 unshare，命令将在宿主命名空间运行',
+  PID_ISOLATION_UNAVAILABLE: '无法启用 PID 隔离，命令可见并可能影响宿主进程',
+  PROPAGATION_FAILED: '无法隔离挂载传播关系，隔离环境内的挂载可能影响宿主',
+  BLOCK_MASK_FAILED: '未能屏蔽 /dev/block，命令理论上可读写块设备',
+  BLOCK_MASK_SKIPPED: '当前档位未启用 /dev 屏蔽',
+  CORE_PARTITION_RO_FAILED: '部分核心分区未能重新挂载为只读',
+  PROC_REMOUNT_FAILED: '/proc 未能按隔离模式重新挂载',
+  HARDENING_UNAVAILABLE: '当前设备缺少 setpriv，命令将以完整 Root 能力集运行',
 }
 
 type StatusLoad =
@@ -161,12 +155,12 @@ export function RootEngineCard({ bridge = runtimeBridge }: { bridge?: RuntimeBri
 
   return <div className="settings-subsection" aria-labelledby="root-engine">
     <div className="section-title"><span className="section-icon"><KeyRound size={19} /></span>
-      <div><h3 id="root-engine">{t('根通道设置')}</h3>
-        <p>{t('以 UID 0 执行设备命令（默认关闭；分严格/最大护栏）')}</p></div>
+      <div><h3 id="root-engine">{t('Root 通道设置')}</h3>
+        <p>{t('通过 KernelSU 以 Root（UID 0）执行设备命令，默认关闭')}</p></div>
     </div>
-    {load.status === 'loading' && <p className="settings-note">{t('正在读取根通道状态…')}</p>}
+    {load.status === 'loading' && <p className="settings-note">{t('正在读取 Root 通道状态…')}</p>}
     {value !== null && <fieldset className="settings-note">
-      <legend>{t('根通道模式')}</legend>
+      <legend>{t('运行模式')}</legend>
       <label>
         <input
           type="radio"
@@ -175,7 +169,7 @@ export function RootEngineCard({ bridge = runtimeBridge }: { bridge?: RuntimeBri
           disabled={busy}
           onChange={() => { void change('off', profile) }}
         />
-        {' '}{t('关闭根通道')}
+        {' '}{t('关闭')}
       </label>
       {' '}
       <label>
@@ -186,7 +180,7 @@ export function RootEngineCard({ bridge = runtimeBridge }: { bridge?: RuntimeBri
           disabled={busy}
           onChange={() => { void change('read_write', 'strict') }}
         />
-        {' '}{t('读写 · 严格')}
+        {' '}{t('读写（严格护栏）')}
       </label>
       {' '}
       <label>
@@ -197,47 +191,47 @@ export function RootEngineCard({ bridge = runtimeBridge }: { bridge?: RuntimeBri
           disabled={busy}
           onChange={() => { void change('read_write', 'maximum') }}
         />
-        {' '}{t('读写 · 最大')}
+        {' '}{t('读写（最大放行）')}
       </label>
     </fieldset>}
     {value !== null && <p className="settings-note">
       {value.enabled
         ? t(KERNEL_SU_STATE_LABELS[value.kernelSuStatus] ?? value.kernelSuStatus)
-        : t('开关关着')}
-      {value.enabled && value.reason !== 'READY' && ` · ${t(REASON_NOTES[value.reason] ?? '暂时说不上来具体原因')}`}
+        : t('已关闭')}
+      {value.enabled && value.reason !== 'READY' && ` · ${t(REASON_NOTES[value.reason] ?? '暂无法确定具体原因')}`}
     </p>}
-    {/* 关着时说不成「没有 KernelSU」（原生此刻不拉 su，根本没查过）：如实说「还不知道」，并讲清为什么。 */}
+    {/* 关闭时不主动调用 su，避免无故弹出 Root 授权提示。 */}
     {value !== null && !value.enabled && <p className="settings-note">
-      {t('关着的时候本应用不拉 su，打开开关后才检测 KernelSU。')}
+      {t('关闭状态下不会调用 su；开启后才会检测设备的 KernelSU 环境。')}
     </p>}
     {value !== null && value.suVersion !== null && <p className="settings-note">{t('su 版本：{0}', value.suVersion)}</p>}
     {value !== null && value.enabled && !value.usable && <p className="settings-note">
-      {t('开关开着但还没法用，命令暂走 Shizuku（无 UID 0）。')}
+      {t('Root 通道已开启但暂不可用，当前设备命令仍通过 Shizuku 执行（无 Root 权限）。')}
     </p>}
     {value !== null && value.enabled && value.usable && <p className="settings-note">
       {profile === 'maximum'
-        ? t('最大档：mount、dd（普通文件）、insmod、setprop（普通属性）与动态脚本放行；电源、SELinux、核心分区写入及刷机/块设备/数据销毁等极危操作需打开应用警告页确认。')
-        : t('严格档：mount、dd、insmod、setprop 与动态脚本走 dsh 审批（dsh 完全权限下放行）；高危与极危操作需打开应用警告页确认。')}
+        ? t('最大放行档：放行 mount、dd（普通文件）、insmod、setprop（普通属性）及动态脚本；电源、SELinux、核心分区写入及刷机/块设备/数据销毁等操作仍需在应用警告页确认。')
+        : t('严格护栏档：mount、dd、insmod、setprop 及动态脚本需经 dsh 审批（完全权限模式下自动放行）；高危与极危操作均需在应用警告页确认。')}
     </p>}
     {value !== null && value.degraded && <>
-      <p className="settings-note">{t('隔离不完整，少了这些保护：')}</p>
+      <p className="settings-note">{t('当前设备的隔离保护不完整，缺少以下防护：')}</p>
       <ul className="settings-note">
         {value.degradations.map(code => <li key={code}>
           {/* 认不出的码照原样显示：那是两侧词表不同步的证据，比换成「未知」更容易查。 */}
           {code in DEGRADATION_NOTES ? t(DEGRADATION_NOTES[code]) : code}
         </li>)}
       </ul>
-      <p className="settings-note">{t('命令仍会执行，但静态审查已按当前档位收紧；最大档在降级设备上等于无沙箱 root，风险更高。')}</p>
+      <p className="settings-note">{t('命令仍可执行，但静态审查已按当前档位收紧；最大放行档在降级设备上等同于无沙箱 Root，风险更高。')}</p>
     </>}
     {value !== null && <p className="settings-note">
-      {t('护栏仅为静态文本过滤，非硬沙箱；不确定请保持关闭')}
+      {t('安全护栏仅为静态文本检查，并非硬件级沙箱；如不确定请保持关闭。')}
     </p>}
-    {writeError !== null && <p role="alert">{t('保存根通道设置失败：{0}', writeError)}</p>}
+    {writeError !== null && <p role="alert">{t('保存 Root 通道设置失败：{0}', writeError)}</p>}
     {value !== null && <button className="button button-secondary compact-button" type="button" disabled={busy} onClick={() => { void refresh() }}>{t('重新检测')}</button>}
 
     {value !== null && <>
-      <p className="settings-note">{t('设备电源（快捷操作）')}</p>
-      <p className="settings-note">{t('手动电源操作需系统身份确认；AI 请求电源命令需打开应用警告页确认')}</p>
+      <p className="settings-note">{t('设备电源（手动快捷操作）')}</p>
+      <p className="settings-note">{t('手动重启或关机需通过系统身份验证；AI 发起的电源命令需在应用警告页确认')}</p>
       <div className="settings-note">
         <button
           className="button button-secondary compact-button"
@@ -257,12 +251,12 @@ export function RootEngineCard({ bridge = runtimeBridge }: { bridge?: RuntimeBri
           <Power size={16} /> {powerBusy === 'powerOff' ? t('正在确认…') : t('关机')}
         </button>
       </div>
-      {!value.enabled && <p className="settings-note">{t('先启用根通道，才能使用手动重启/关机。')}</p>}
-      {value.enabled && !value.usable && <p className="settings-note">{t('KernelSU 未就绪，手动重启/关机暂不可用。')}</p>}
+      {!value.enabled && <p className="settings-note">{t('请先开启 Root 通道，再使用手动重启或关机。')}</p>}
+      {value.enabled && !value.usable && <p className="settings-note">{t('KernelSU 未就绪，暂无法执行手动重启或关机。')}</p>}
       {powerNotice !== null && <p className="settings-note" role="status">{powerNotice}</p>}
       {powerError !== null && <p role="alert">{t('设备电源操作失败：{0}', powerError)}</p>}
     </>}
 
-    {load.status === 'failed' && <p role="alert">{t('无法读取根通道状态')} <button className="button button-quiet" type="button" onClick={() => { void refresh() }}>{t('重试')}</button></p>}
+    {load.status === 'failed' && <p role="alert">{t('无法读取 Root 通道状态')} <button className="button button-quiet" type="button" onClick={() => { void refresh() }}>{t('重试')}</button></p>}
   </div>
 }

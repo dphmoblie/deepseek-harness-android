@@ -97,12 +97,15 @@ describe('应用免责条款：首次启动门禁与设置页查看', () => {
     expect(await screen.findByRole('heading', { name: '对话已就绪' })).toBeVisible()
   })
 
-  it('可在设置页随时打开免责条款并关闭回看，不出现退出按钮', async () => {
+  it('可在设置页「关于与反馈」中随时打开免责条款并关闭回看，不出现退出按钮', async () => {
     render(<App />)
     await arriveAtSettingsHome()
 
-    const aboutGroup = await screen.findByRole('region', { name: '关于与条款' })
-    const entry = within(aboutGroup).getByRole('button', { name: /免责条款/ })
+    const diagnosticsGroup = await screen.findByRole('region', { name: '诊断与关于' })
+    fireEvent.click(within(diagnosticsGroup).getByRole('button', { name: /关于与反馈/ }))
+    expect(await screen.findByRole('heading', { level: 1, name: '关于与反馈' })).toBeVisible()
+
+    const entry = screen.getByRole('button', { name: '查看免责条款' })
     expect(entry).toBeVisible()
     fireEvent.click(entry)
 
@@ -116,14 +119,19 @@ describe('应用免责条款：首次启动门禁与设置页查看', () => {
     expect(bridge.exitApp).not.toHaveBeenCalled()
   })
 
-  it('英文模式下设置页「关于与条款 / 免责条款」入口无中文残留', async () => {
+  it('英文模式下设置页「关于与反馈 / 查看免责条款」入口无中文残留', async () => {
     window.localStorage.setItem('dsh-mobile-language-v1', 'en')
     render(<App />)
     await arriveAtSettingsHome()
 
-    const aboutGroup = await screen.findByRole('region', { name: 'About and terms' })
-    const entry = within(aboutGroup).getByRole('button', { name: /Disclaimer/ })
-    expect(entry).toBeVisible()
-    expect(entry.textContent ?? '').not.toMatch(/[\u4e00-\u9fff]/)
+    const diagnosticsGroup = await screen.findByRole('region', { name: 'Diagnostics & About' })
+    const aboutEntry = within(diagnosticsGroup).getByRole('button', { name: /About & Feedback/ })
+    expect(aboutEntry).toBeVisible()
+    expect(aboutEntry.textContent ?? '').not.toMatch(/[\u4e00-\u9fff]/)
+    fireEvent.click(aboutEntry)
+
+    const viewButton = await screen.findByRole('button', { name: 'View disclaimer' })
+    expect(viewButton).toBeVisible()
+    expect(viewButton.textContent ?? '').not.toMatch(/[\u4e00-\u9fff]/)
   })
 })

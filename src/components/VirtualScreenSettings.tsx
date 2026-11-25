@@ -797,7 +797,7 @@ export function VirtualScreenSettings({
                 <dd>{t(formatReading(deviceState.state.targetFps, 'FPS'))}</dd>
               </div>
               <div>
-                <dt>{t('画面年龄')}</dt>
+                <dt>{t('最近帧延迟')}</dt>
                 <dd>
                   {frameAgeMillis(deviceState.state) === null
                     ? t('未知')

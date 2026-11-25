@@ -239,11 +239,11 @@ export function AppearanceSettings({ scope = 'all', loadBackground = readBackgro
     const theme: SyncedTheme = { mode: readThemeMode(), accent: accentColor, background: surface.background, surface: surface.surface, surfaceOpacity: overlayOpacity, controlOpacity: card.controlOpacity, sidebarOpacity, rightPanelOpacity, syncBackground: includeBackground && background !== null }
     try {
       await runtimeBridge.applyHarnessTheme(theme)
-      let note = t('DSH 已切换为当前主题')
+      let note = t('已将当前主题同步到对话页')
       if (theme.syncBackground) {
         if (background) {
           // 原生只记地址；页面播放时由 /__shell/background 流式取，不经过这里。
-          note = background.kind === 'video' ? t('DSH 已切换为当前主题和背景视频') : t('DSH 已切换为当前主题和背景')
+          note = background.kind === 'video' ? t('已将当前主题和背景视频同步到对话页') : t('已将当前主题和背景同步到对话页')
         } else {
           // 没选过背景就只同步颜色，并把原因说清楚，不静默丢内容。
           note = t('还没有选择背景文件，已只同步颜色')
@@ -277,7 +277,7 @@ export function AppearanceSettings({ scope = 'all', loadBackground = readBackgro
         setWithBackground(false)
         setBackgroundRef(null)
         clearBackgroundState()
-        setSyncMessage('DSH 已回到默认主题')
+        setSyncMessage('对话页已恢复默认主题')
       })
     } catch (error) {
       setSyncMessage(error instanceof Error ? error.message : '恢复失败，请重试')
@@ -355,10 +355,10 @@ export function AppearanceSettings({ scope = 'all', loadBackground = readBackgro
           </div>
           <div className="appearance-accent-block">
             <div className="appearance-accent-heading">
-              <strong>{t('选中的强调色')}</strong>
-              <span>{t('选中项、进度条与状态色')}</span>
+              <strong>{t('强调色')}</strong>
+              <span>{t('用于高亮按钮、选中项与进度条')}</span>
             </div>
-            <div className="appearance-accent-options" role="radiogroup" aria-label={t('选中的强调色')}>
+            <div className="appearance-accent-options" role="radiogroup" aria-label={t('强调色')}>
               {ACCENT_OPTIONS.map(({ value, label, color }) => (
                 <label key={value} className={!customAccent && accent === value ? 'appearance-accent-option active' : 'appearance-accent-option'}>
                   <input
@@ -435,7 +435,7 @@ export function AppearanceSettings({ scope = 'all', loadBackground = readBackgro
             {backgroundError && <p role="alert">{t(backgroundError)}</p>}
           </div>
           <div className="appearance-customization appearance-adaptive">
-            <div className="appearance-accent-heading"><strong>{t('自适应主题色')}</strong><span>{t('从背景首帧提取，仅影响外壳')}</span></div>
+            <div className="appearance-accent-heading"><strong>{t('自适应主题色')}</strong><span>{t('从背景首帧提取配色，仅作用于启动器界面')}</span></div>
             <div className="appearance-accent-options" role="radiogroup" aria-label={t('强调色来源')}>
               {ACCENT_SOURCES.map(({ value, label }) => (
                 <label key={value} className={source === value ? 'appearance-accent-option active' : 'appearance-accent-option'}>
@@ -455,17 +455,17 @@ export function AppearanceSettings({ scope = 'all', loadBackground = readBackgro
       )}
       {showDsh && (
           <div className="appearance-customization appearance-sync">
-            <div className="appearance-accent-heading"><strong>{t('同步背景')}</strong><span>{t('仅记地址，勾选后同步到 DSH，重启后保留')}</span></div>
+            <div className="appearance-accent-heading"><strong>{t('同步背景')}</strong><span>{t('仅记录文件引用，不复制原文件，同步后重启仍保留')}</span></div>
             <div className="appearance-sync-background">
-              <label><input type="checkbox" checked={withBackground} disabled={backgroundToggling || syncing || backgroundPicking} onChange={event => void toggleBackground(event.target.checked)} /><span>{t('连背景一起同步')}</span></label>
+              <label><input type="checkbox" checked={withBackground} disabled={backgroundToggling || syncing || backgroundPicking} onChange={event => void toggleBackground(event.target.checked)} /><span>{t('同时同步背景')}</span></label>
               <button type="button" className="compact-button" disabled={backgroundPicking || backgroundToggling || syncing} onClick={() => void pickBackground()}>{backgroundRef ? t('重新选择背景文件') : t('选择背景文件')}</button>
-              <small>{backgroundRef ? t('已选：{0}', backgroundRef.mime) : t('仅记地址，视频不复制、无大小上限')}</small>
+              <small>{backgroundRef ? t('已选：{0}', backgroundRef.mime) : t('仅记录文件引用，视频不复制且无大小上限')}</small>
             </div>
           </div>
       )}
       {showDsh && (
           <div className="appearance-customization appearance-sync">
-            <div className="appearance-accent-heading"><strong>{t('同步到 DSH 页面')}</strong><span>{t('将外壳主题手动同步到 DSH')}</span></div>
+            <div className="appearance-accent-heading"><strong>{t('同步到 Harness 对话页')}</strong><span>{t('将当前启动器主题与透明度应用到对话页')}</span></div>
             {/* 这一项与外壳的「按钮与输入框不透明度」是同一个值：改完点同步即可带去 DSH。 */}
             <label className="range-field">
               <span><strong>{t('按钮与输入框不透明度')}</strong><small>{card.controlOpacity}%</small></span>
@@ -484,7 +484,7 @@ export function AppearanceSettings({ scope = 'all', loadBackground = readBackgro
               */}
             <div className="appearance-range-grid">
               <label className="range-field">
-                <span><strong>{t('遮盖背景的界面不透明度')}</strong><small>{overlayOpacity}%</small></span>
+                <span><strong>{t('主界面不透明度')}</strong><small>{overlayOpacity}%</small></span>
                 <input
                   type="range"
                   min="30"
@@ -517,9 +517,9 @@ export function AppearanceSettings({ scope = 'all', loadBackground = readBackgro
                 />
               </label>
             </div>
-            <small className="appearance-hint">{t('勾选同步背景后，透明度才会透出背景')}</small>
-            <button type="button" className="compact-button" onClick={() => void sync()} disabled={syncing}>{t('让 DSH 使用当前主题')}</button>
-            <button type="button" className="compact-button" onClick={() => void unsync()} disabled={syncing}>{t('恢复 DSH 默认主题')}</button>
+            <small className="appearance-hint">{t('开启「同时同步背景」后，调低不透明度才能透出背景')}</small>
+            <button type="button" className="compact-button" onClick={() => void sync()} disabled={syncing}>{t('同步当前主题到对话页')}</button>
+            <button type="button" className="compact-button" onClick={() => void unsync()} disabled={syncing}>{t('恢复对话页默认主题')}</button>
             <p>{syncRecord ? `${t('上次同步')} ${new Date(syncRecord.syncedAt).toLocaleString()}` : t('还没有同步过')}</p>
             {syncMessage && <p role="status">{t(syncMessage)}</p>}
           </div>

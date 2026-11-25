@@ -52,7 +52,7 @@ export function AppOrientationSettings() {
   return <section className="settings-section" aria-labelledby="app-orientation-title">
     <div className="section-title">
       <span className="section-icon"><RotateCw size={19} /></span>
-      <div><h2 id="app-orientation-title">{t('应用方向')}</h2><p>{t('统一控制应用方向，选择后立即生效')}</p></div>
+      <div><h2 id="app-orientation-title">{t('应用方向')}</h2><p>{t('设置启动器与对话页的横竖屏方向，选择后立即生效')}</p></div>
     </div>
     <div className="appearance-options" role="radiogroup" aria-label={t('应用方向')} aria-busy={saving || (mode === null && !error)}>
       {OPTIONS.map(option => <label key={option.mode} className={mode === option.mode ? 'appearance-option active' : 'appearance-option'}>

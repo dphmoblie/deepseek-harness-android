@@ -203,14 +203,14 @@ describe('§5.6-B 逐组件渲染计数', () => {
    */
   it('拦截器自检：真实交互数得到渲染，且内联回调 prop 每次都换身份', async () => {
     render(<App />)
-    await openSettingsPage('诊断与日志', '日志与采集')
+    await openSettingsPage('诊断与自检', '日志记录与导出')
     probe.reset()
 
     // 一次真实的状态变化（切换采集开关）：App 重渲染，当前设置页跟着重渲染。
-    const toggle = await screen.findByRole('switch', { name: /收集诊断日志/ })
+    const toggle = await screen.findByRole('switch', { name: /记录诊断日志/ })
     await waitFor(() => expect(toggle).toBeEnabled())
     fireEvent.click(toggle)
-    await waitFor(() => expect(screen.getByRole('switch', { name: /收集诊断日志/ })).toBeChecked())
+    await waitFor(() => expect(screen.getByRole('switch', { name: /记录诊断日志/ })).toBeChecked())
 
     probe.report('自检：诊断页切换采集开关', WATCHED)
     const renders = probe.rendersSince('SettingsScreen')
@@ -237,7 +237,7 @@ describe('§5.6-B 逐组件渲染计数', () => {
     try {
       freshButEqualSnapshots()
       render(<App />)
-      await openSettingsPage('诊断与日志', '设备能力')
+      await openSettingsPage('诊断与自检', '环境自检与设备能力')
       await waitFor(() => expect(bridge.getKeepAliveState).toHaveBeenCalled())
       await tick(6_000)
 

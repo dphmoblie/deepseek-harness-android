@@ -47,7 +47,7 @@ describe('无障碍白名单与验证密码', () => {
     bridge.getAccessibilityAutomationState.mockResolvedValue(accessibilityState(passwordConfigured, allowed))
     render(<App />)
   await arriveAtShell()
-    await openSettingsPage('自动化设置', '无障碍')
+    await openSettingsPage('自动化', '无障碍与白名单')
   }
 
   it('本应用始终在白名单里，并如实显示当前白名单', async () => {
@@ -144,7 +144,7 @@ describe('无障碍白名单与验证密码', () => {
     bridge.getAccessibilityAutomationState.mockResolvedValue(accessibilityState(false, ['com.example.reader'], false))
     render(<App />)
   await arriveAtShell()
-    await openSettingsPage('自动化设置', '无障碍')
+    await openSettingsPage('自动化', '无障碍与白名单')
     expect(screen.getByRole('switch', { name: '启用无障碍白名单限制' })).not.toBeChecked()
     expect(screen.getByText('当前生效：白名单限制已关闭')).toBeInTheDocument()
     expect(screen.getByLabelText('目标应用包名')).toHaveValue('io.deepseekharness.mobile\ncom.example.reader')
@@ -251,7 +251,7 @@ describe('无障碍自动化控制台', () => {
     bridge.getAccessibilityAutomationState.mockResolvedValue({ ...BASE_STATE, ...target })
     render(<App />)
   await arriveAtShell()
-    await openSettingsPage('自动化设置', '自动参数')
+    await openSettingsPage('自动化', '运行控制与规则')
   }
 
   it('默认关闭时只放行「开始」，并如实说明系统里的服务没开', async () => {
@@ -360,18 +360,18 @@ describe('无障碍自动化控制台', () => {
     expect(screen.queryByTestId('automation-disclaimer')).not.toBeInTheDocument()
   })
 
-  /** 进「自动化设置」入口页：免责说明与三个三级页入口都在这一页。 */
+  /** 进「关于与反馈」页：自动化使用说明的回看入口统一收在这里。 */
   async function openAutomationEntry(target: ConsoleState): Promise<void> {
     bridge.getAccessibilityAutomationState.mockResolvedValue({ ...BASE_STATE, ...target })
     render(<App />)
     await arriveAtShell()
-    await openSettingsPage('自动化设置')
+    await openSettingsPage('关于与反馈')
   }
 
   it('回看入口常驻：只打开同一段说明，不改总开关也不写确认', async () => {
     await openAutomationEntry({ automationRuntime: 'off', serviceStatus: 'off' })
 
-    fireEvent.click(await screen.findByRole('button', { name: '查看完整免责说明' }))
+    fireEvent.click(await screen.findByRole('button', { name: '查看自动化使用说明' }))
 
     const dialog = await screen.findByTestId('automation-disclaimer')
     expect(within(dialog).getByText(/规则由你确认后长期生效/)).toBeInTheDocument()
@@ -477,7 +477,7 @@ describe('无障碍自动化规则卡片', () => {
     bridge.getAccessibilityAutomationState.mockResolvedValue(RULES_STATE)
     render(<App />)
   await arriveAtShell()
-    await openSettingsPage('自动化设置', '自动参数')
+    await openSettingsPage('自动化', '运行控制与规则')
   }
 
   it('进页面自动读白名单里第一个应用的规则，切换应用时按包名重读', async () => {
@@ -710,7 +710,7 @@ describe('无障碍自动化规则卡片', () => {
     // 第一下只问一句，说清是整条删除；这时桥一次都没调。
     const confirm = await screen.findByTestId('automation-rule-delete-confirm')
     expect(confirm).toHaveTextContent(
-      '删除「rule-1」是整条删除：规则本身、它的全部选择器和动作都不会留下，删了就没了。',
+      '确认删除规则「rule-1」？该规则及其所有选择器和动作将被永久清除，无法恢复。',
     )
     expect(bridge.deleteAccessibilityAutomationRule).not.toHaveBeenCalled()
 
@@ -802,7 +802,7 @@ describe(`每应用自动化参数`, () => {
     bridge.getAccessibilityAutomationState.mockResolvedValue(CONFIG_STATE)
     render(<App />)
   await arriveAtShell()
-    await openSettingsPage('自动化设置', '自动参数')
+    await openSettingsPage('自动化', '运行控制与规则')
   }
 
   it('快速换应用时迟到的旧规则与参数读数不会覆盖当前应用', async () => {

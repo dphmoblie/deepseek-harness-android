@@ -71,7 +71,7 @@ export function AppDisclaimer({
         <div className="app-disclaimer-body">
           <p>
             {gating
-              ? t('在使用 DeepSeek Harness 移动端前，请您仔细阅读并充分理解以下免责条款（特别是涉及风险告知与责任限制的内容）。如您不同意，本应用将直接退出；同意后可随时在「设置 → 免责条款」中查看。')
+              ? t('在使用 DeepSeek Harness 移动端前，请您仔细阅读并充分理解以下免责条款（特别是涉及风险告知与责任限制的内容）。如您不同意，本应用将直接退出；同意后可随时在「设置 → 关于与反馈」中查看。')
               : t('以下为 DeepSeek Harness 移动端的免责条款与使用风险告知，您可随时在此回看。')}
           </p>
           <ol>
