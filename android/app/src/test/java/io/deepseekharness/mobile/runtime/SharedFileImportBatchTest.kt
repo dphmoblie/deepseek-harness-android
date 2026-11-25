@@ -10,15 +10,15 @@ class SharedFileImportBatchTest {
     @Test
     fun sourceFailureKeepsTheAcceptedCountAndDeliveryResult() {
         val operations = mutableListOf<String>()
-        val result = SharedFileImportBatch.run(listOf("first", "oversized", "unattempted"), importOne = { _, name ->
+        val result = SharedFileImportBatch.run(listOf("first", "unreadable", "unattempted"), importOne = { _, name ->
             operations += "import:$name"
-            if (name == "first") SharedFileImportBatch.Status.SUCCESS else SharedFileImportBatch.Status.TOO_LARGE
+            if (name == "first") SharedFileImportBatch.Status.SUCCESS else SharedFileImportBatch.Status.SOURCE_UNREADABLE
         }, deliver = {
             operations += "deliver"
             true
         })
-        assertEquals(listOf("import:first", "deliver", "import:oversized"), operations)
-        assertEquals(SharedFileImportBatch.Status.TOO_LARGE, result.status)
+        assertEquals(listOf("import:first", "deliver", "import:unreadable"), operations)
+        assertEquals(SharedFileImportBatch.Status.SOURCE_UNREADABLE, result.status)
         assertEquals(1, result.acceptedCount)
         assertTrue(result.deliveryComplete)
     }

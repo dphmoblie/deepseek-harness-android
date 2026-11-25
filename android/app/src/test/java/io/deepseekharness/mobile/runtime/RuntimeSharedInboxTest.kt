@@ -1,10 +1,13 @@
 package io.deepseekharness.mobile.runtime
 
 import java.io.File
+import java.nio.ByteBuffer
+import java.nio.channels.FileChannel
 import java.nio.file.Files
 import java.nio.file.LinkOption
 import java.nio.file.Path
 import java.nio.file.SecureDirectoryStream
+import java.nio.file.StandardOpenOption
 import java.util.UUID
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -248,6 +251,31 @@ class RuntimeSharedInboxTest {
         val retries = Files.list(destination(root)).use { paths -> paths.filter { it != failedCopy }.toList() }
         assertEquals(1, retries.size)
         assertArrayEquals(bytes, Files.readAllBytes(retries.single()))
+    }
+
+    @Test
+    fun deliversFilesLargerThanTheFormer64MiBLimit() {
+        val root = temporaryFolder.root.toPath()
+        assumeTrue(supportsSecureStreams(root))
+        val inbox = manager(root)
+        val source = inbox.stagingDirectory().toPath().resolve("large.bin")
+        FileChannel.open(source, StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE).use { channel ->
+            channel.position(64L * 1024 * 1024)
+            channel.write(ByteBuffer.wrap(byteArrayOf(0x42)))
+        }
+        Files.createDirectories(current(root))
+        inbox.prepareWorkspace()
+
+        assertTrue(inbox.deliver())
+        assertFalse(Files.exists(source))
+        val copied = destination(root).resolve("large.bin")
+        assertEquals(64L * 1024 * 1024 + 1, Files.size(copied))
+        FileChannel.open(copied, StandardOpenOption.READ).use { channel ->
+            channel.position(64L * 1024 * 1024)
+            val lastByte = ByteBuffer.allocate(1)
+            assertEquals(1, channel.read(lastByte))
+            assertEquals(0x42.toByte(), lastByte.array()[0])
+        }
     }
 
     @Test

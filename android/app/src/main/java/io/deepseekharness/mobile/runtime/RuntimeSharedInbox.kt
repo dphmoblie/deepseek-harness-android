@@ -104,7 +104,7 @@ internal class RuntimeSharedInbox(
 
     private fun transfer(source: SecureDirectoryStream<Path>, target: SecureDirectoryStream<Path>, name: Path) {
         val attributes = source.getFileAttributeView(name, BasicFileAttributeView::class.java, LinkOption.NOFOLLOW_LINKS).readAttributes()
-        if (!attributes.isRegularFile || attributes.isSymbolicLink || attributes.size() > MAX_FILE_BYTES) {
+        if (!attributes.isRegularFile || attributes.isSymbolicLink) {
             throw RuntimeFailure("SHARED_FILE_INVALID", "分享暂存文件不可用")
         }
         var targetName = name
@@ -125,7 +125,6 @@ internal class RuntimeSharedInbox(
                         val read = input.read(buffer)
                         if (read < 0) break
                         total += read
-                        if (total > MAX_FILE_BYTES) throw RuntimeFailure("SHARED_FILE_INVALID", "分享文件超过大小限制")
                         digest.update(buffer.array(), 0, read)
                         buffer.flip()
                         while (buffer.hasRemaining()) {
@@ -151,7 +150,6 @@ internal class RuntimeSharedInbox(
                         val read = verification.read(buffer)
                         if (read < 0) break
                         total += read
-                        if (total > MAX_FILE_BYTES) throw RuntimeFailure("SHARED_FILE_CHANGED", "分享文件投递校验失败")
                         actual.update(buffer.array(), 0, read)
                         buffer.clear()
                     }
@@ -220,8 +218,6 @@ internal class RuntimeSharedInbox(
         private val lock = Any()
         private val activePending = mutableSetOf<Path>()
         private val PENDING_NAME = Regex("^\\.pending-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
-        private const val MAX_FILE_BYTES = 64L * 1024 * 1024
-
         fun <T> withLock(action: () -> T): T = synchronized(lock, action)
     }
 }

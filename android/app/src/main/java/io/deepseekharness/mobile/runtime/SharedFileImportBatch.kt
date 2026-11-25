@@ -5,7 +5,6 @@ internal object SharedFileImportBatch {
     enum class Status {
         SUCCESS,
         STAGED,
-        TOO_LARGE,
         PERMISSION_DENIED,
         SOURCE_UNREADABLE,
         DESTINATION_UNAVAILABLE,

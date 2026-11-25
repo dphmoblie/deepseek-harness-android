@@ -218,7 +218,6 @@ class MainActivity : BridgeActivity() {
                     if (partial) {
                         val received = if (result.deliveryComplete) "已导入" else "已暂存"
                         val failure = when (result.status) {
-                            ImportResult.TOO_LARGE -> "其余超过 64 MB"
                             ImportResult.PERMISSION_DENIED -> "其余无读取权限"
                             ImportResult.DESTINATION_UNAVAILABLE -> "其余无法保存"
                             else -> "其余来源不可读"
@@ -230,7 +229,6 @@ class MainActivity : BridgeActivity() {
                     when (result.status) {
                         ImportResult.SUCCESS -> showImportToast("文件已导入应用收件箱")
                         ImportResult.STAGED -> showImportToast("文件已安全暂存，运行时准备完成后可在工作区 inbox 中使用")
-                        ImportResult.TOO_LARGE -> showImportToast("文件超过 64 MB，无法导入")
                         ImportResult.PERMISSION_DENIED -> {
                             if (allowPermissionFallback) launchPermissionFallback()
                             else showImportToast("无法读取所选文件，请更换文件提供方")
@@ -297,7 +295,6 @@ class MainActivity : BridgeActivity() {
                         LinkOption.NOFOLLOW_LINKS,
                     ).use { output ->
                         val buffer = ByteArray(COPY_BUFFER_BYTES)
-                        var total = 0L
                         while (true) {
                             if (Thread.currentThread().isInterrupted) return ImportResult.SOURCE_UNREADABLE
                             val read = try {
@@ -308,8 +305,6 @@ class MainActivity : BridgeActivity() {
                                 return ImportResult.SOURCE_UNREADABLE
                             }
                             if (read < 0) break
-                            total += read
-                            if (total > MAX_IMPORT_BYTES) return ImportResult.TOO_LARGE
                             try {
                                 output.write(buffer, 0, read)
                             } catch (_: IOException) {
@@ -410,7 +405,6 @@ class MainActivity : BridgeActivity() {
 
         private const val ANY_MIME_TYPE = "*/*"
         private const val COPY_BUFFER_BYTES = 16 * 1024
-        private const val MAX_IMPORT_BYTES = 64L * 1024 * 1024
         private const val MAX_IMPORT_FILES = 16
         private const val MAX_FILE_NAME_LENGTH = 120
         private const val MAX_SOURCE_NAME_LENGTH = 512
