@@ -99,6 +99,17 @@ internal object HarnessProfilePatchDocument {
     )
 
     /**
+     * 运行时升级迁移旧 profile 中 `llm-pi-ai` 模型配置的合并结果。
+     *
+     * @property yamlText 合并后的完整 YAML 文本；**任一文档损坏或结构非法时为 `null`**（失败关闭）。
+     * @property changed 目标文档是否发生变化；为 `false` 时调用方无需写入文件。
+     */
+    data class PreservedMergeOutcome(
+        val yamlText: String?,
+        val changed: Boolean,
+    )
+
+    /**
      * 按 App 设置构建待同步的 `llm-pi-ai.config.providers` 映射。
      */
     fun buildAppProviders(
@@ -237,6 +248,71 @@ internal object HarnessProfilePatchDocument {
             managedDigests = currentDigests,
             changed = true,
         )
+    }
+
+    /**
+     * 把旧运行时里由 Harness Web / App 保存的 `llm-pi-ai` 供应商配置迁移到新 profile。
+     *
+     * 运行时升级会重建 `profiles/web`（避免携带指向旧 rootfs 的符号链接），因此只迁移
+     * `llm-pi-ai.config.providers`，保留新版本的其它 profile 条目与默认供应商。
+     */
+    fun mergePreservedLlmPiAi(
+        existingText: String?,
+        preservedText: String?,
+    ): PreservedMergeOutcome {
+        val preservedEntries = parseEntries(preservedText)
+            ?: return PreservedMergeOutcome(yamlText = null, changed = false)
+        val preservedRow = preservedEntries.lastOrNull { isLlmPiAiConfigRow(it) }
+            ?: return PreservedMergeOutcome(yamlText = existingText ?: "", changed = false)
+
+        val preservedConfig = when {
+            !preservedRow.containsKey("config") || preservedRow["config"] == null ->
+                return PreservedMergeOutcome(yamlText = existingText ?: "", changed = false)
+            preservedRow["config"] is Map<*, *> -> preservedRow["config"] as Map<*, *>
+            else -> return PreservedMergeOutcome(yamlText = null, changed = false)
+        }
+        val preservedProviders = when {
+            !preservedConfig.containsKey("providers") || preservedConfig["providers"] == null ->
+                return PreservedMergeOutcome(yamlText = existingText ?: "", changed = false)
+            preservedConfig["providers"] is Map<*, *> -> preservedConfig["providers"] as Map<*, *>
+            else -> return PreservedMergeOutcome(yamlText = null, changed = false)
+        }
+        if (preservedProviders.isEmpty()) {
+            return PreservedMergeOutcome(yamlText = existingText ?: "", changed = false)
+        }
+
+        val existingEntries = parseEntries(existingText)
+            ?: return PreservedMergeOutcome(yamlText = null, changed = false)
+        val rowIndex = existingEntries.indexOfLast { isLlmPiAiConfigRow(it) }
+        val updatedEntries = existingEntries.mapTo(mutableListOf()) { deepCopyMap(it) }
+
+        if (rowIndex >= 0) {
+            val row = updatedEntries[rowIndex]
+            val existingConfig: MutableMap<String, Any?> = when {
+                !row.containsKey("config") || row["config"] == null -> linkedMapOf()
+                row["config"] is Map<*, *> -> deepCopyMap(row["config"] as Map<*, *>)
+                else -> return PreservedMergeOutcome(yamlText = null, changed = false)
+            }
+            val mergedProviders: MutableMap<String, Any?> = when {
+                !existingConfig.containsKey("providers") || existingConfig["providers"] == null -> linkedMapOf()
+                existingConfig["providers"] is Map<*, *> -> deepCopyMap(existingConfig["providers"] as Map<*, *>)
+                else -> return PreservedMergeOutcome(yamlText = null, changed = false)
+            }
+            for ((id, spec) in preservedProviders) {
+                mergedProviders[id.toString()] = deepCopyValue(spec)
+            }
+            existingConfig["providers"] = mergedProviders
+            row["config"] = existingConfig
+        } else {
+            updatedEntries += linkedMapOf(
+                "id" to LLM_PI_AI_ID,
+                "name" to LLM_PI_AI_NAME,
+                "config" to deepCopyMap(preservedConfig),
+            )
+        }
+
+        val rendered = renderEntries(updatedEntries)
+        return PreservedMergeOutcome(yamlText = rendered, changed = rendered != (existingText ?: ""))
     }
 
     private fun parseEntries(text: String?): List<Map<*, *>>? {

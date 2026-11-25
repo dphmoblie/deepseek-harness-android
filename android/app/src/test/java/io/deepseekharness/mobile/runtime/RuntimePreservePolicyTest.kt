@@ -235,10 +235,12 @@ class RuntimePreservePolicyTest {
             ".dsh-mobile/sandbox-runner.sh",
             ".dsh/profiles",
             ".dsh/profiles/web",
+            RuntimePreservePolicy.GUEST_PROFILE_MODEL_PATCH,
             ".dsh/cache",
         )) {
             assertTrue(skip, RuntimePreservePolicy.shouldRestoreGuestPath(skip))
         }
+        assertEquals(".dsh/profiles/web/cordis.patch.yml", RuntimePreservePolicy.GUEST_PROFILE_MODEL_PATCH)
         for (keep in listOf(".dsh/sessions", ".dsh/settings.yaml", ".dsh-mobile/plugin-manager", "1/notes.md", "dsh/audit.md", ".bashrc")) {
             assertFalse(keep, RuntimePreservePolicy.shouldRestoreGuestPath(keep))
         }

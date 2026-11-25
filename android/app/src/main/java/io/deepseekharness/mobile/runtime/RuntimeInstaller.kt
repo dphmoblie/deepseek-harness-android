@@ -920,7 +920,9 @@ class RuntimeInstaller(
                         restored += 1
                     }
                     RuntimePreservePolicy.RestoreDecision.MERGE -> {
-                        // 整树回填时排除旧令牌/旧脚本/死链：它们会被新运行时重建（见 policy 注释）。
+                        // 整树回填时排除旧令牌/旧脚本/死链：它们会被新运行时重建（见 policy 注释）；
+                        // 但在丢弃旧 `.dsh/profiles` 前，先把用户在 Harness Web / App 保存的模型供应商配置合并进新 profile。
+                        if (guestHome) mergePreservedProfilePatch(source, target)
                         val result = PreservedMerge.merge(source, target) { relative ->
                             guestHome && RuntimePreservePolicy.shouldRestoreGuestPath(relative)
                         }
@@ -952,6 +954,91 @@ class RuntimeInstaller(
             }
         }
         return RestoreOutcome(unplaced, restored, merged, conflicts)
+    }
+
+    /**
+     * 迁移旧 `/root/.dsh/profiles/web/cordis.patch.yml` 中的 `llm-pi-ai` 供应商配置。
+     *
+     * [sourceGuestHome] 与 [targetGuestHome] 均指向访客 `/root` 目录（而非 rootfs 根），
+     * 逐级校验目录不跟随符号链接，失败时抛出受控错误并保留旧暂存目录。
+     */
+    private fun mergePreservedProfilePatch(sourceGuestHome: File, targetGuestHome: File) {
+        val relativeSegments = listOf(".dsh", "profiles", "web")
+        var sourceDir = sourceGuestHome
+        for (segment in relativeSegments) {
+            sourceDir = File(sourceDir, segment)
+            if (!RuntimeFiles.existsNoFollow(sourceDir)) return
+            if (!RuntimeFiles.isDirectoryNoFollow(sourceDir)) {
+                throw RuntimeFailure("RUNTIME_PRESERVE_FAILED", "旧模型配置目录类型无效")
+            }
+        }
+        val source = File(sourceGuestHome, RuntimePreservePolicy.GUEST_PROFILE_MODEL_PATCH)
+        if (!RuntimeFiles.existsNoFollow(source)) return
+        if (!RuntimeFiles.isRegularFileNoFollow(source)) {
+            throw RuntimeFailure("RUNTIME_PRESERVE_FAILED", "旧模型配置文件类型无效")
+        }
+        if (source.length() > HarnessProfilePatchDocument.MAX_DOCUMENT_BYTES.toLong()) {
+            throw RuntimeFailure("RUNTIME_PRESERVE_FAILED", "旧模型配置文件过大")
+        }
+        val preservedText = source.readText(Charsets.UTF_8)
+
+        var targetDir = targetGuestHome
+        var targetPathExists = RuntimeFiles.existsNoFollow(targetDir)
+        if (targetPathExists && !RuntimeFiles.isDirectoryNoFollow(targetDir)) {
+            throw RuntimeFailure("RUNTIME_PRESERVE_FAILED", "新模型配置根目录类型无效")
+        }
+        for (segment in relativeSegments) {
+            targetDir = File(targetDir, segment)
+            if (targetPathExists && RuntimeFiles.existsNoFollow(targetDir)) {
+                if (!RuntimeFiles.isDirectoryNoFollow(targetDir)) {
+                    throw RuntimeFailure("RUNTIME_PRESERVE_FAILED", "新模型配置目录类型无效")
+                }
+            } else {
+                targetPathExists = false
+            }
+        }
+        val target = File(targetGuestHome, RuntimePreservePolicy.GUEST_PROFILE_MODEL_PATCH)
+        val existingText = if (targetPathExists && RuntimeFiles.existsNoFollow(target)) {
+            if (!RuntimeFiles.isRegularFileNoFollow(target)) {
+                throw RuntimeFailure("RUNTIME_PRESERVE_FAILED", "新模型配置文件类型无效")
+            }
+            if (target.length() > HarnessProfilePatchDocument.MAX_DOCUMENT_BYTES.toLong()) {
+                throw RuntimeFailure("RUNTIME_PRESERVE_FAILED", "新模型配置文件过大")
+            }
+            target.readText(Charsets.UTF_8)
+        } else {
+            null
+        }
+
+        val outcome = HarnessProfilePatchDocument.mergePreservedLlmPiAi(existingText, preservedText)
+        val rendered = outcome.yamlText
+            ?: throw RuntimeFailure("RUNTIME_PRESERVE_FAILED", "模型配置文件格式无效")
+        if (!outcome.changed) return
+
+        var directory = targetGuestHome
+        if (!RuntimeFiles.existsNoFollow(directory) && !directory.mkdir()) {
+            throw RuntimeFailure("RUNTIME_PRESERVE_FAILED", "无法创建新模型配置根目录")
+        }
+        if (!RuntimeFiles.isDirectoryNoFollow(directory)) {
+            throw RuntimeFailure("RUNTIME_PRESERVE_FAILED", "新模型配置根目录类型无效")
+        }
+        for (segment in relativeSegments) {
+            directory = File(directory, segment)
+            if (!RuntimeFiles.existsNoFollow(directory) && !directory.mkdir()) {
+                throw RuntimeFailure("RUNTIME_PRESERVE_FAILED", "无法创建新模型配置目录")
+            }
+            if (!RuntimeFiles.isDirectoryNoFollow(directory)) {
+                throw RuntimeFailure("RUNTIME_PRESERVE_FAILED", "新模型配置目录类型无效")
+            }
+        }
+        val pending = File(directory, ".cordis.patch.yml.preserve.new")
+        try {
+            pending.writeText(rendered, Charsets.UTF_8)
+            Os.rename(pending.absolutePath, target.absolutePath)
+        } catch (error: Throwable) {
+            pending.delete()
+            throw RuntimeFailure("RUNTIME_PRESERVE_FAILED", "无法写入迁移后的模型配置", error)
+        }
     }
 
     /** 目录是否为空（不跟随符号链接）；读不到内容时按「不空」处理，绝不误删。 */

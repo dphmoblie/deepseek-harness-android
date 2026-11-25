@@ -32,6 +32,12 @@ object RuntimeFiles {
         if (error.errno == OsConstants.ENOENT) false else throw RuntimeFailure("FILESYSTEM_ERROR", "无法检查运行时目录", error)
     }
 
+    fun isRegularFileNoFollow(file: File): Boolean = try {
+        OsConstants.S_ISREG(Os.lstat(file.absolutePath).st_mode)
+    } catch (error: ErrnoException) {
+        if (error.errno == OsConstants.ENOENT) false else throw RuntimeFailure("FILESYSTEM_ERROR", "无法检查运行时文件", error)
+    }
+
     fun deleteTreeNoFollow(root: File, allowedParent: File) {
         val normalizedParent = allowedParent.toPath().toAbsolutePath().normalize()
         val normalizedRoot = root.toPath().toAbsolutePath().normalize()

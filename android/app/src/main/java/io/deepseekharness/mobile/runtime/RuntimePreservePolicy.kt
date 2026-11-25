@@ -95,6 +95,14 @@ object RuntimePreservePolicy {
     const val GUEST_HOME_ROOT = "root"
 
     /**
+     * Harness Web 模型页写入的 profile 补丁相对路径（相对 `/root`）。
+     *
+     * 位于 `.dsh/profiles` 之下：整树合并时会按排除表跳过（不直接搬运旧 profile 目录），
+     * 由 `RuntimeInstaller` 在回填阶段单独抽取其中的 `llm-pi-ai` 供应商配置并合并进新 profile。
+     */
+    const val GUEST_PROFILE_MODEL_PATCH = ".dsh/profiles/web/cordis.patch.yml"
+
+    /**
      * 回填时**不搬回新根目录**的访客路径（相对 `root/`）。
      *
      * 三条理由，逐条对应一类文件：

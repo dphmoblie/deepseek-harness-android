@@ -36,6 +36,14 @@ class RuntimePromotionWorkspaceTest {
         // 整树回填必须把旧令牌/旧脚本/死链排除在外；只剩这些时删掉暂存副本。
         assertTrue(installer.contains("RuntimePreservePolicy.shouldRestoreGuestPath(relative)"))
         assertTrue(installer.contains("PreservedMerge.hasOnlySkipped(source)"))
+        // 回填阶段必须先从旧 guest-home（相对 `/root`）迁移模型配置，再走排除表清理 `.dsh/profiles`。
+        assertTrue(installer.contains("if (guestHome) mergePreservedProfilePatch(source, target)"))
+        assertTrue(installer.contains("RuntimePreservePolicy.GUEST_PROFILE_MODEL_PATCH"))
+        assertTrue(
+            "guest-home 已指向 /root，不得在 mergePreservedProfilePatch 中再叠一层 root/ 前缀",
+            !installer.contains("File(sourceGuestHome, \"root/.dsh/profiles/web/cordis.patch.yml\")") &&
+                !installer.contains("File(sourceRoot, \"root/.dsh/profiles/web/cordis.patch.yml\")"),
+        )
         // 清单既是「去哪儿找冲突项」的说明，也是中断恢复时还原旧槽位的唯一依据。
         assertTrue(installer.contains("RuntimePreservePolicy.REPORT_FILE_NAME"))
     }

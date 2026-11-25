@@ -254,4 +254,126 @@ class HarnessProfilePatchDocumentTest {
         assertNull(brokenYaml.yamlText)
         assertFalse(brokenYaml.changed)
     }
+
+    @Test
+    fun `migrates preserved Web UI llm-pi-ai providers onto new runtime profile while keeping sibling rows`() {
+        val preserved = """
+            - id: old-stale-row
+              config:
+                root: /old/rootfs/path
+            - id: llm-pi-ai
+              name: "@deepseek-ai/dsh-llm-pi-ai"
+              config:
+                providers:
+                  web-custom:
+                    apiKeyEnv: WEB_CUSTOM_KEY
+                    displayName: Web Custom
+                    api: openai-completions
+                    baseURL: https://web.example.com/v1
+                    models:
+                      - id: vision-pro
+                        input:
+                          - text
+                          - image
+        """.trimIndent() + "\n"
+
+        val freshProfile = """
+            - id: new-runtime-row
+              config:
+                root: !!js "dshHomePath('sessions')"
+        """.trimIndent() + "\n"
+
+        val outcome = HarnessProfilePatchDocument.mergePreservedLlmPiAi(freshProfile, preserved)
+        assertTrue(outcome.changed)
+        assertNotNull(outcome.yamlText)
+        val yaml = outcome.yamlText!!
+        assertTrue(yaml.contains("new-runtime-row"))
+        assertTrue(yaml.contains("!!js"))
+        assertFalse(yaml.contains("old-stale-row"))
+        assertTrue(yaml.contains("web-custom"))
+        assertTrue(yaml.contains("vision-pro"))
+        assertTrue(yaml.contains("image"))
+    }
+
+    @Test
+    fun `merges preserved providers into existing new-runtime llm-pi-ai row without dropping bundled defaults`() {
+        val existing = """
+            - id: llm-pi-ai
+              name: "@deepseek-ai/dsh-llm-pi-ai"
+              config:
+                defaultTimeoutMs: 60000
+                providers:
+                  bundled-new:
+                    apiKeyEnv: BUNDLED_NEW_KEY
+                  custom-1:
+                    apiKeyEnv: OLD_DEFAULT
+        """.trimIndent() + "\n"
+
+        val preserved = """
+            - id: llm-pi-ai
+              name: "@deepseek-ai/dsh-llm-pi-ai"
+              config:
+                providers:
+                  custom-1:
+                    apiKeyEnv: DSH_CUSTOM_PROVIDER_CUSTOM_1_API_KEY
+                    baseURL: https://user.example.com/v1
+                  web-only:
+                    apiKeyEnv: WEB_ONLY_KEY
+        """.trimIndent() + "\n"
+
+        val outcome = HarnessProfilePatchDocument.mergePreservedLlmPiAi(existing, preserved)
+        assertTrue(outcome.changed)
+        val rows = parseYamlList(outcome.yamlText!!)
+        assertEquals(1, rows.size)
+        @Suppress("UNCHECKED_CAST")
+        val config = rows[0]["config"] as Map<String, Any?>
+        assertEquals(60000, config["defaultTimeoutMs"])
+        @Suppress("UNCHECKED_CAST")
+        val providers = config["providers"] as Map<String, Any?>
+        assertTrue(providers.containsKey("bundled-new"))
+        assertTrue(providers.containsKey("web-only"))
+        @Suppress("UNCHECKED_CAST")
+        val custom = providers["custom-1"] as Map<String, Any?>
+        assertEquals("https://user.example.com/v1", custom["baseURL"])
+    }
+
+    @Test
+    fun `ignores preserved profile without llm-pi-ai providers without failing upgrade`() {
+        val existing = "- id: other-row\n  config:\n    ok: true\n"
+        val noRow = HarnessProfilePatchDocument.mergePreservedLlmPiAi(existing, "- id: something-else\n")
+        assertFalse(noRow.changed)
+        assertEquals(existing, noRow.yamlText)
+
+        val emptyProviders = HarnessProfilePatchDocument.mergePreservedLlmPiAi(
+            existing,
+            "- id: llm-pi-ai\n  name: \"@deepseek-ai/dsh-llm-pi-ai\"\n  config:\n    providers: {}\n",
+        )
+        assertFalse(emptyProviders.changed)
+        assertEquals(existing, emptyProviders.yamlText)
+    }
+
+    @Test
+    fun `preserved migration fails closed on corrupted YAML or invalid config types`() {
+        val badPreserved = HarnessProfilePatchDocument.mergePreservedLlmPiAi(null, "- [unclosed")
+        assertNull(badPreserved.yamlText)
+        assertFalse(badPreserved.changed)
+
+        val badProvidersType = HarnessProfilePatchDocument.mergePreservedLlmPiAi(
+            null,
+            "- id: llm-pi-ai\n  config:\n    providers: not-a-map\n",
+        )
+        assertNull(badProvidersType.yamlText)
+        assertFalse(badProvidersType.changed)
+
+        val validPreserved = """
+            - id: llm-pi-ai
+              config:
+                providers:
+                  web-only:
+                    apiKeyEnv: WEB_ONLY_KEY
+        """.trimIndent() + "\n"
+        val badExisting = HarnessProfilePatchDocument.mergePreservedLlmPiAi("not: a-list\n", validPreserved)
+        assertNull(badExisting.yamlText)
+        assertFalse(badExisting.changed)
+    }
 }
