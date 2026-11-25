@@ -47,7 +47,8 @@ import {
   assertBase64Input,
   assertDiagnosticRetentionDays,
   assertMailboxSubdirectory,
-  assertRuntimeVersionTarget,
+  assertRuntimeVersionDeleteTarget,
+  assertRuntimeVersionSwitchTarget,
   assertRuntimeVersionPinTarget,
   assertSessionId,
   assertStorageDirPath,
@@ -665,13 +666,13 @@ function createNativeBridge(): RuntimeBridge {
     runRuntimeSelfCheck: operation => NativeRuntime
       .runRuntimeSelfCheck({ operation: validateSelfCheckOperation(operation) })
       .then(validateRuntimeSelfCheckReport),
-    // 版本槽与体积由原生侧回传；目标取值在前端就拦死（目前只有上一版本可切换或删除）。
+    // 切换支持上一版本和内置版本，删除只支持上一版本。
     getRuntimeVersions: () => NativeRuntime.runtimeVersions().then(validateRuntimeVersions),
     switchRuntimeVersion: target => NativeRuntime
-      .switchRuntimeVersion({ target: assertRuntimeVersionTarget(target) })
+      .switchRuntimeVersion({ target: assertRuntimeVersionSwitchTarget(target) })
       .then(validateRuntimeVersions),
     deleteRuntimeVersion: target => NativeRuntime
-      .deleteRuntimeVersion({ target: assertRuntimeVersionTarget(target) })
+      .deleteRuntimeVersion({ target: assertRuntimeVersionDeleteTarget(target) })
       .then(validateRuntimeVersions),
     // 锁定/解锁只改「满额时谁可以被自动淘汰」，不影响当前运行环境，所以随时可调。
     // 目标必须是版本库里的归档 ID（`previous` / `bundled` 是槽位、不是归档）；

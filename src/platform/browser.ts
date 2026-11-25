@@ -59,7 +59,7 @@ import type {
 } from './types'
 import { ALWAYS_ALLOWED_ACCESSIBILITY_PACKAGES, DIAGNOSTIC_RETENTION_DEFAULT, HIGH_RISK_PERMISSION_CATEGORIES, MAX_STORAGE_DIRECTORIES, MODEL_PROVIDER_IDS } from './types'
 import { validateSelfCheckOperation, type SelfCheckOperation, type SelfCheckReport } from '../runtimeSelfCheck'
-import { assertMailboxSubdirectory, assertAccessibilityAutomationAction, assertAccessibilityAutomationAppConfigInput, assertAccessibilityAutomationRuleInput, assertAccessibilityPackageName, assertAccessibilityRuleId, assertAccessibilityRuleWriteMode, assertBooleanFlag, assertRuntimeVersionPinTarget, assertRuntimeVersionTarget, assertSessionId, assertStorageDirPath, assertStorageGuestPath, validateAccessibilityPasswordInput, validateDeviceCommand, validateDeviceCommandParam, validateHighRiskPermissionsUpdate, validateSettings, validateSettingsUpdate, validateRuntimeSource, validatePluginCleanupRequest } from './validation'
+import { assertMailboxSubdirectory, assertAccessibilityAutomationAction, assertAccessibilityAutomationAppConfigInput, assertAccessibilityAutomationRuleInput, assertAccessibilityPackageName, assertAccessibilityRuleId, assertAccessibilityRuleWriteMode, assertBooleanFlag, assertRuntimeVersionDeleteTarget, assertRuntimeVersionPinTarget, assertRuntimeVersionSwitchTarget, assertSessionId, assertStorageDirPath, assertStorageGuestPath, validateAccessibilityPasswordInput, validateDeviceCommand, validateDeviceCommandParam, validateHighRiskPermissionsUpdate, validateSettings, validateSettingsUpdate, validateRuntimeSource, validatePluginCleanupRequest } from './validation'
 
 const SETTINGS_KEY = 'dsh-mobile-settings-v1'
 /** 文档里的固定投递区路径；浏览器预览只用来**展示**，不声称它可用（见 getMailboxState）。 */
@@ -728,11 +728,11 @@ export function createBrowserBridge(): RuntimeBridge {
     // 浏览器预览里没有访客运行时，也就没有版本槽可列出或切换：如实拒绝，不编造版本列表。
     getRuntimeVersions: (): Promise<RuntimeVersionsState> => Promise.reject(new Error('浏览器预览不支持运行时版本管理')),
     switchRuntimeVersion: (target): Promise<RuntimeVersionsState> => {
-      assertRuntimeVersionTarget(target)
+      assertRuntimeVersionSwitchTarget(target)
       return Promise.reject(new Error('浏览器预览不支持运行时版本管理'))
     },
     deleteRuntimeVersion: (target): Promise<RuntimeVersionsState> => {
-      assertRuntimeVersionTarget(target)
+      assertRuntimeVersionDeleteTarget(target)
       return Promise.reject(new Error('浏览器预览不支持运行时版本管理'))
     },
     // 预览里没有版本库，也就没有「锁一个归档」这回事：先校验取值（和原生侧同一套判据），

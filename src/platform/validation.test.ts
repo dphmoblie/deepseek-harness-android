@@ -11,7 +11,7 @@ import {
   assertDiagnosticRetentionDays,
   assertMailboxSubdirectory,
   assertRuntimeVersionPinTarget,
-  assertRuntimeVersionTarget,
+  assertRuntimeVersionDeleteTarget,
   assertSessionId,
   assertStorageDirPath,
   assertTerminalKind,
@@ -1648,10 +1648,10 @@ describe('运行时版本校验', () => {
     expect(() => validateRuntimeVersions(state({ canDelete: 'yes' }))).toThrow('运行时版本删除状态格式无效')
   })
 
-  it('操作目标只认「上一版本」', () => {
-    expect(assertRuntimeVersionTarget('previous')).toBe('previous')
+  it('删除目标只认「上一版本」', () => {
+    expect(assertRuntimeVersionDeleteTarget('previous')).toBe('previous')
     for (const target of ['current', 'bundled', 'retained', '', null, 7]) {
-      expect(() => assertRuntimeVersionTarget(target), String(target)).toThrow('运行时版本操作目标无效')
+      expect(() => assertRuntimeVersionDeleteTarget(target), String(target)).toThrow('运行时版本操作目标无效')
     }
   })
 

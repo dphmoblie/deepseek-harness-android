@@ -668,12 +668,12 @@ export function validateExternalBrowserState(value: unknown): ExternalBrowserSta
   return { browsers, selected: state.selected ?? null }
 }
 
-/**
- * 运行时版本操作目标：目前只有「上一版本」可切换或删除。
- *
- * 取值在前端就拦死，不让原生侧去猜未知目标。
- */
-export function assertRuntimeVersionTarget(value: unknown): 'previous' {
+export function assertRuntimeVersionSwitchTarget(value: unknown): 'previous' | 'bundled' {
+  if (value !== 'previous' && value !== 'bundled') throw new Error('运行时版本操作目标无效')
+  return value
+}
+
+export function assertRuntimeVersionDeleteTarget(value: unknown): 'previous' {
   if (value !== 'previous') throw new Error('运行时版本操作目标无效')
   return value
 }

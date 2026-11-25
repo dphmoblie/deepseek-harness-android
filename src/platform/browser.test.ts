@@ -103,6 +103,7 @@ describe('browser settings bridge', () => {
 
     await expect(bridge.getRuntimeVersions()).rejects.toThrow('浏览器预览不支持运行时版本管理')
     await expect(bridge.switchRuntimeVersion('previous')).rejects.toThrow('浏览器预览不支持运行时版本管理')
+    await expect(bridge.switchRuntimeVersion('bundled')).rejects.toThrow('浏览器预览不支持运行时版本管理')
     await expect(bridge.deleteRuntimeVersion('previous')).rejects.toThrow('浏览器预览不支持运行时版本管理')
     await expect(bridge.setRuntimeVersionPinned('a'.repeat(64), true)).rejects.toThrow('浏览器预览不支持运行时版本管理')
 
