@@ -1,0 +1,43 @@
+diff --git a/lib/index.js b/lib/index.js
+index 717b160..cedfd52 100644
+--- a/lib/index.js
++++ b/lib/index.js
+@@ -1,6 +1,6 @@
+ import { createHash } from "node:crypto";
+ import { readFile } from "node:fs/promises";
+-import { dirname, extname, join, normalize, resolve, sep } from "node:path";
++import { dirname, extname, join, normalize, relative, resolve, sep } from "node:path";
+ import z from "@deepseek-ai/schemastery";
+ //#region lib/types/index.js
+ /**
+@@ -42,6 +42,16 @@ const STATIC_MISS_CODES = new Set([
+ 	"EISDIR",
+ 	"ENOTDIR"
+ ]);
++// 保留上游 ETag 校验；内容哈希资源长缓存，入口和其余资源每次回源。
++function cacheControlFor(target, distRoot, distIndex) {
++	if (target === distRoot || target === distIndex) return "no-cache";
++	const relativePath = relative(distRoot, target);
++	if (relativePath === `assets${sep}` || relativePath.startsWith(`assets${sep}`)) {
++		return "public, max-age=31536000, immutable";
++	}
++	return "no-cache";
++}
++
+ /** A Response body that is `bytes` itself, without the copy a buffer body gets. */
+ function bytesBody(bytes) {
+ 	return new ReadableStream({ start(controller) {
+@@ -75,11 +85,11 @@ async function serveStatic(request, distRoot, distIndex, authorizeIndex, renderI
+ 			const refusal = authorizeIndex();
+ 			if (refusal !== void 0) return refusal;
+ 			body = renderIndex(await readFile(distIndex, "utf8"));
+-			headers = { "content-type": HTML_MIME };
++			headers = { "content-type": HTML_MIME, "cache-control": cacheControlFor(target, distRoot, distIndex) };
+ 		} else {
+ 			body = await readFile(target);
+ 			const cache = {
+-				"cache-control": "no-cache",
++				"cache-control": cacheControlFor(target, distRoot, distIndex),
+ 				etag: `W/"${createHash("sha1").update(body).digest("base64url")}"`
+ 			};
+ 			if (request.headers.get("if-none-match") === cache.etag) return new Response(null, {

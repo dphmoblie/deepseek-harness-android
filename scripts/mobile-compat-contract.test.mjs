@@ -6,7 +6,7 @@ import { spawnSync } from 'node:child_process'
 import { pathToFileURL } from 'node:url'
 
 const appRoot = resolve(import.meta.dirname, '..')
-const harnessVersion = '0.2.1-rc.1'
+const harnessVersion = '0.2.2-rc.5'
 
 test('副屏输入后首帧间隔字段在原生、平台与 AI 描述中一致', async () => {
   const native = await readFile(resolve(appRoot, 'android/app/src/main/java/io/deepseekharness/mobile/virtualscreen/ShellVirtualScreen.kt'), 'utf8')
@@ -501,10 +501,10 @@ test('the image ships the plugin market as a built-in third-party bundle', async
   // 直接依赖，并在构建期要求 dshmarket 与它的 peer 都落成 profiles/node_modules 的扁平链接。
   assert.equal(
     runtimePackage.dependencies?.['@deepseek-ai/schemastery'],
-    '3.18.5',
+    '3.19.0',
     'dshmarket 的可选 peer 必须作为直接依赖安装，否则 profile 里不会有它的扁平链接',
   )
-  assert.match(runtimeLock, /specifier: 3\.18\.5/u)
+  assert.match(runtimeLock, /specifier: 3\.19\.0/u)
   const buildScript = await readFile(resolve(appRoot, 'scripts/build-embedded-runtime.py'), 'utf8')
   assert.match(buildScript, /dshmarket requires peer/u, '构建期必须校验 dshmarket 的 peer 链接')
   assert.match(buildScript, /required_bundles=profile_bundles/u, '构建期必须把 profile bundles 交给链接校验')

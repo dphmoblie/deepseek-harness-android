@@ -1024,7 +1024,7 @@ jobs:
                 '2. 首次打开后点「安装并进入对话」；rootfs 从 APK 内置资产解压，无需联网下载。' \
                 '3. 断网也能安装；若提示「未内置运行时」请确认下载的是本 Release 的 APK。' '' '## 资产' \
                 "- $(basename "$APK")（APK，含 PRoot 运行器）" \
-                '- rootfs.bundle（Ubuntu 24.04 ARM64 + Node 24.19 + dsh 0.2.1-rc.1 + 官方 Harness 前端 Android 适配）' \
+                '- rootfs.bundle（Ubuntu 24.04 ARM64 + Node 24.19 + dsh 0.2.2-rc.5 + 官方 Harness 前端 Android 适配）' \
                 '- runtime-manifest.json' \
                 '- corresponding-source.tar.gz（PRoot/Operit 与 Ubuntu git 的对应源码及构建材料）' \
                 '- release-manifest.json（版本、标签、提交与各资产摘要/字节数的机器可读清单）' \

@@ -24,7 +24,7 @@ Root 権限は不要です。通常の Android 端末上で [PRoot](https://gith
 | 対応 OS | Android 8.0（API 26）以上 |
 | 対象アプリ用仮想ディスプレイ | Android 10（API 29）以上（Shizuku 連携が必要） |
 | 対応アーキテクチャ | `arm64-v8a`（64 ビット ARM）のみ |
-| 同梱ランタイム | Ubuntu 24.04 ARM64 · Node.js 24.19 · `@deepseek-ai/dsh` 0.2.1-rc.1 |
+| 同梱ランタイム | Ubuntu 24.04 ARM64 · Node.js 24.19 · `@deepseek-ai/dsh` 0.2.2-rc.5 |
 | ライセンス | MIT（同梱ランタイムの各コンポーネントはそれぞれのライセンスに従います。詳細は[ライセンス](#ライセンス)を参照） |
 
 ## 目次

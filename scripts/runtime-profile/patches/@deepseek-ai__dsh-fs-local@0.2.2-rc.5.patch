@@ -1,8 +1,8 @@
 diff --git a/lib/index.js b/lib/index.js
-index b77bf6c..e462e82 100644
+index 9ae199c..62c7c54 100644
 --- a/lib/index.js
 +++ b/lib/index.js
-@@ -123,6 +123,14 @@ function errorMessage(error) {
+@@ -125,6 +125,14 @@ function errorMessage(error) {
  function isPermissionError(error) {
  	return error instanceof Error && "code" in error && (error.code === "EACCES" || error.code === "EPERM");
  }
@@ -17,14 +17,14 @@ index b77bf6c..e462e82 100644
  function throwIfAborted(signal, verb) {
  	if (signal?.aborted) throw new FsError(`${verb} aborted`, "FS_ABORTED");
  }
-@@ -550,7 +558,24 @@ async function writeFileAtomic(absolutePath, content, mode, signal, internals =
- 		if (createIfAbsent !== void 0) try {
+@@ -566,7 +574,24 @@ async function writeFileAtomic(absolutePath, content, mode, signal, internals =
+ 		if (options.createIfAbsent) try {
  			await linkFile(tempPath, absolutePath);
  		} catch (error) {
--			await throwGuardedCreateFailure(error, absolutePath, createIfAbsent.displayPath, inspectPublicationTarget);
+-			await throwGuardedCreateFailure(error, absolutePath, displayPath, inspectPublicationTarget);
 +			/* 只有「硬链接在本环境不可用」才回退；其余 errno 一律走原有失败路径，
 +			 * 不做 catch-all，避免把 ENOENT / EEXIST 这类真实失败吞成一次成功写入。 */
-+			if (!isLinkUnavailableError(error)) await throwGuardedCreateFailure(error, absolutePath, createIfAbsent.displayPath, inspectPublicationTarget);
++			if (!isLinkUnavailableError(error)) await throwGuardedCreateFailure(error, absolutePath, displayPath, inspectPublicationTarget);
 +			/* 回退：暂存文件已在同目录、已 sync，改用 rename 发布（rename 本身是原子的）。
 +			 * rename 会**覆盖已存在的目标**，而 link 的「已存在即 EEXIST」拒绝与创建是同一步
 +			 * （内核级 no-replace），所以回退前必须重新确认目标不存在：已存在时按 createIfAbsent
@@ -36,10 +36,10 @@ index b77bf6c..e462e82 100644
 +			try {
 +				existing = await inspectPublicationTarget(absolutePath);
 +			} catch (metadataError) {
-+				if (!isENOENT(metadataError) && !isENOTDIR(metadataError)) await throwGuardedCreateFailure(metadataError, absolutePath, createIfAbsent.displayPath, inspectPublicationTarget);
++				if (!isENOENT(metadataError) && !isENOTDIR(metadataError)) await throwGuardedCreateFailure(metadataError, absolutePath, displayPath, inspectPublicationTarget);
 +			}
-+			if (existing !== void 0) await throwGuardedCreateFailure(error, absolutePath, createIfAbsent.displayPath, inspectPublicationTarget);
++			if (existing !== void 0) await throwGuardedCreateFailure(error, absolutePath, displayPath, inspectPublicationTarget);
 +			await rename(tempPath, absolutePath);
  		}
- 		else if (platform === "win32" && mode !== void 0) try {
+ 		else if (platform === "win32" && existingDestination) try {
  			await replaceFile(absolutePath, tempPath);

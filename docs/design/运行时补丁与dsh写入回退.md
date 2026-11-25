@@ -1,5 +1,7 @@
 # 运行时补丁与 dsh 写入回退（访客硬链接被拒，登记册 P0-1 / P0-2）
 
+> 2026-11-25：补丁已迁移至 dsh 0.2.2-rc.5；写入选项改为 `options.createIfAbsent` 和 `options.displayPath`。下文旧版本源码位置为历史取证，新版行为由 `scripts/runtime-link-fallback.test.mjs` 验证。
+
 本文说明：访客侧 dsh 两处写入路径为什么在真机上必然失败、仓库如何用**既有的 pnpm 补丁通道**
 （`scripts/runtime-profile/pnpm-workspace.yaml` 的 `patchedDependencies`）给它们加回退、
 回退在语义上放弃了什么、本机能验证到哪一步、以及 dsh 升级时怎么重做补丁。
@@ -58,15 +60,15 @@ P0-2（附件落盘全废）。触发方是 PRoot / 主机策略（访客内 `li
    `patches/` / `plugins/` 复制到 `/tmp/dsh-root` 后 `pnpm install --frozen-lockfile`，
    再把整棵 `node_modules` 打进 `opt/dsh`（`scripts/build-embedded-runtime.py`）。
    **因此补丁代码随 rootfs 一起进设备**，设备侧不需要任何后处理。
-4. 本仓库既有的同类先例是 `patches/@earendil-works__pi-ai@1.1.0.patch`（同一个通道）。
+4. 本仓库既有的同类先例是 `patches/@earendil-works__pi-ai@1.3.0.patch`（同一个通道）。
 
 ### 2.1 键名写法与 peer 关系
 
 ```yaml
 patchedDependencies:
-  '@earendil-works/pi-ai@1.1.0': patches/@earendil-works__pi-ai@1.1.0.patch
-  '@deepseek-ai/dsh-fs-local@0.2.1-rc.1': patches/@deepseek-ai__dsh-fs-local@0.2.1-rc.1.patch
-  '@deepseek-ai/dsh-attachment-local@0.2.1-rc.1': patches/@deepseek-ai__dsh-attachment-local@0.2.1-rc.1.patch
+  '@earendil-works/pi-ai@1.3.0': patches/@earendil-works__pi-ai@1.3.0.patch
+  '@deepseek-ai/dsh-fs-local@0.2.2-rc.5': patches/@deepseek-ai__dsh-fs-local@0.2.2-rc.5.patch
+  '@deepseek-ai/dsh-attachment-local@0.2.2-rc.5': patches/@deepseek-ai__dsh-attachment-local@0.2.2-rc.5.patch
 ```
 
 - 键用 **精确版本**：`pnpm-workspace.yaml` 的 `overrides` 已把 `@deepseek-ai/dsh-*` 钉死在
@@ -84,7 +86,7 @@ patchedDependencies:
 
 ## 三、补丁内容（最小化：只改 `lib/index.js`，只加回退必需的行）
 
-### 3.1 `patches/@deepseek-ai__dsh-fs-local@0.2.1-rc.1.patch`
+### 3.1 `patches/@deepseek-ai__dsh-fs-local@0.2.2-rc.5.patch`
 
 - 新增模块内私有判定 `isLinkUnavailableError(error)`：`EACCES` / `EPERM` / `EXDEV`。
 - `writeFileAtomic()` 的 `createIfAbsent` 分支的 `catch` 里：
@@ -106,7 +108,7 @@ patchedDependencies:
 未改动：其它分支、错误消息、导出签名、依赖、`internals` 测试钩子（`linkFile` 仍然是
 `internals.linkFile ?? link`，回退只在 `link` 真的抛错后发生）。
 
-### 3.2 `patches/@deepseek-ai__dsh-attachment-local@0.2.1-rc.1.patch`
+### 3.2 `patches/@deepseek-ai__dsh-attachment-local@0.2.2-rc.5.patch`
 
 - `node:fs/promises` 的导入增加 `lstat`（复核目标存在性用）。
 - 新增 `isLinkUnavailableError(error)` 与 `renameStagedObject(staged, target)`：

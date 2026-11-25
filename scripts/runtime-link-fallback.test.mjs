@@ -1,7 +1,7 @@
 // 访客侧 dsh 写入回退的回归防线（登记册 P0-1 / P0-2）。
 //
 // 背景：Android 16 / PRoot 访客内 `link(2)` 一律被拒（同目录、跨目录都是 EACCES），
-// `rename` 正常。上游 `@deepseek-ai/dsh 0.2.1-rc.1` 有两处写入路径依赖硬链接：
+// `rename` 正常。上游 `@deepseek-ai/dsh 0.2.2-rc.5` 有两处写入路径依赖硬链接：
 //   * `dsh-fs-local` 的 `writeFileAtomic()`：`createIfAbsent` 分支用 `linkFile()` 新建文件；
 //   * `dsh-attachment-local` 的 `publishStagedObject()`：用 `link()` 发布内容寻址对象；
 //   * `dsh-attachment-local` 的 `publishImmutableAlias()`：用 `link()` 给同一个对象再挂一个只读名字，
@@ -49,13 +49,13 @@ const PATCHED_PACKAGES = [
     name: '@deepseek-ai/dsh-fs-local',
     kind: 'link-fallback',
     marker: 'isLinkUnavailableError',
-    key: '@deepseek-ai/dsh-fs-local@0.2.1-rc.1',
-    patchFile: '@deepseek-ai__dsh-fs-local@0.2.1-rc.1.patch',
+    key: '@deepseek-ai/dsh-fs-local@0.2.2-rc.5',
+    patchFile: '@deepseek-ai__dsh-fs-local@0.2.2-rc.5.patch',
     entry: 'writeFileAtomic',
     addedLines: [
       'function isLinkUnavailableError(error) {',
-      'if (!isLinkUnavailableError(error)) await throwGuardedCreateFailure(error, absolutePath, createIfAbsent.displayPath, inspectPublicationTarget);',
-      'if (existing !== void 0) await throwGuardedCreateFailure(error, absolutePath, createIfAbsent.displayPath, inspectPublicationTarget);',
+      'if (!isLinkUnavailableError(error)) await throwGuardedCreateFailure(error, absolutePath, displayPath, inspectPublicationTarget);',
+      'if (existing !== void 0) await throwGuardedCreateFailure(error, absolutePath, displayPath, inspectPublicationTarget);',
       'await rename(tempPath, absolutePath);',
     ],
   },
@@ -63,8 +63,8 @@ const PATCHED_PACKAGES = [
     name: '@deepseek-ai/dsh-attachment-local',
     kind: 'link-fallback',
     marker: 'isLinkUnavailableError',
-    key: '@deepseek-ai/dsh-attachment-local@0.2.1-rc.1',
-    patchFile: '@deepseek-ai__dsh-attachment-local@0.2.1-rc.1.patch',
+    key: '@deepseek-ai/dsh-attachment-local@0.2.2-rc.5',
+    patchFile: '@deepseek-ai__dsh-attachment-local@0.2.2-rc.5.patch',
     entry: 'publishStagedObject',
     // 同一个包里有两条被补的发布路径：对象发布（rename 回退）与别名发布（copy 回退）。
     entries: ['publishStagedObject', 'publishImmutableAlias'],
@@ -79,13 +79,12 @@ const PATCHED_PACKAGES = [
     ],
   },
   {
-    // 登记册 5.6-H：上游对控制台静态资源不发任何缓存头，宿主侧改 WebView 缓存策略的收益
-    // 因此接近 0。本补丁按「产物是否内容寻址」分岔补上 cache-control。
+    // 登记册 5.6-H：保留上游 ETag 校验，内容哈希资源使用长缓存。
     name: '@deepseek-ai/dsh-host-frontend-static',
     kind: 'static-cache',
     marker: 'cacheControlFor',
-    key: '@deepseek-ai/dsh-host-frontend-static@0.2.1-rc.1',
-    patchFile: '@deepseek-ai__dsh-host-frontend-static@0.2.1-rc.1.patch',
+    key: '@deepseek-ai/dsh-host-frontend-static@0.2.2-rc.5',
+    patchFile: '@deepseek-ai__dsh-host-frontend-static@0.2.2-rc.5.patch',
     entry: 'cacheControlFor',
     entries: ['cacheControlFor', 'serveStatic'],
     addedLines: [
@@ -277,7 +276,7 @@ test('dsh-fs-local：link 被拒时回退 rename 新建文件，且 createIfAbse
   const created = path.join(work, 'new.txt')
   linkControl.mode = 'eacces'
   linkControl.calls = 0
-  await patched.writeFileAtomic(created, '访客内容\n', undefined, undefined, { platform: 'linux' }, { displayPath: 'new.txt' })
+  await patched.writeFileAtomic(created, '访客内容\n', undefined, undefined, { platform: 'linux' }, { createIfAbsent: true, displayPath: 'new.txt' })
   assert.equal(linkControl.calls, 1, '应该先尝试一次 link 再回退')
   assert.equal(fs.readFileSync(created, 'utf8'), '访客内容\n', '回退后的目标内容不正确')
   assert.deepEqual(fs.readdirSync(work), ['new.txt'], '回退后暂存目录没有被清理')
@@ -286,7 +285,7 @@ test('dsh-fs-local：link 被拒时回退 rename 新建文件，且 createIfAbse
   for (const errno of ['eperm', 'exdev']) {
     const target = path.join(work, `${errno}.txt`)
     linkControl.mode = errno
-    await patched.writeFileAtomic(target, errno, undefined, undefined, { platform: 'linux' }, { displayPath: `${errno}.txt` })
+    await patched.writeFileAtomic(target, errno, undefined, undefined, { platform: 'linux' }, { createIfAbsent: true, displayPath: `${errno}.txt` })
     assert.equal(fs.readFileSync(target, 'utf8'), errno, `${errno} 没有被当成硬链接不可用`)
   }
 
@@ -295,7 +294,7 @@ test('dsh-fs-local：link 被拒时回退 rename 新建文件，且 createIfAbse
   fs.writeFileSync(occupied, '既有内容')
   linkControl.mode = 'eacces'
   await assert.rejects(
-    patched.writeFileAtomic(occupied, '新内容', undefined, undefined, { platform: 'linux' }, { displayPath: 'occupied.txt' }),
+    patched.writeFileAtomic(occupied, '新内容', undefined, undefined, { platform: 'linux' }, { createIfAbsent: true, displayPath: 'occupied.txt' }),
     error => {
       assert.equal(error.code, 'FS_NOT_OBSERVED', `目标已存在时应报 FS_NOT_OBSERVED，实际 ${error.code}`)
       return true
@@ -308,7 +307,7 @@ test('dsh-fs-local：link 被拒时回退 rename 新建文件，且 createIfAbse
   fs.mkdirSync(notAFile)
   linkControl.mode = 'eacces'
   await assert.rejects(
-    patched.writeFileAtomic(notAFile, '新内容', undefined, undefined, { platform: 'linux' }, { displayPath: 'directory.txt' }),
+    patched.writeFileAtomic(notAFile, '新内容', undefined, undefined, { platform: 'linux' }, { createIfAbsent: true, displayPath: 'directory.txt' }),
     error => {
       assert.equal(error.code, 'FS_NOT_REGULAR_FILE', `目标不是普通文件时应报 FS_NOT_REGULAR_FILE，实际 ${error.code}`)
       return true
@@ -319,7 +318,7 @@ test('dsh-fs-local：link 被拒时回退 rename 新建文件，且 createIfAbse
   const missing = path.join(work, 'enoent.txt')
   linkControl.mode = 'enoent'
   await assert.rejects(
-    patched.writeFileAtomic(missing, 'x', undefined, undefined, { platform: 'linux' }, { displayPath: 'enoent.txt' }),
+    patched.writeFileAtomic(missing, 'x', undefined, undefined, { platform: 'linux' }, { createIfAbsent: true, displayPath: 'enoent.txt' }),
     error => {
       assert.equal(error.code, 'FS_IO_ERROR', `ENOENT 应保持原有失败路径，实际 ${error.code}`)
       assert.equal(error.cause?.code, 'ENOENT', 'ENOENT 原因被吞掉了')
@@ -332,7 +331,7 @@ test('dsh-fs-local：link 被拒时回退 rename 新建文件，且 createIfAbse
   // 6) EEXIST（目标真的存在）仍是原有语义，没有被回退分支改写。
   linkControl.mode = 'eexist'
   await assert.rejects(
-    patched.writeFileAtomic(occupied, '新内容', undefined, undefined, { platform: 'linux' }, { displayPath: 'occupied.txt' }),
+    patched.writeFileAtomic(occupied, '新内容', undefined, undefined, { platform: 'linux' }, { createIfAbsent: true, displayPath: 'occupied.txt' }),
     error => {
       assert.equal(error.code, 'FS_NOT_OBSERVED', `EEXIST 应保持原有语义，实际 ${error.code}`)
       return true
@@ -353,7 +352,7 @@ test('dsh-fs-local：link 被拒时回退 rename 新建文件，且 createIfAbse
   linkControl.mode = 'real'
   linkControl.calls = 0
   const linked = path.join(work, 'linked.txt')
-  await patched.writeFileAtomic(linked, '硬链接', undefined, undefined, { platform: 'linux' }, { displayPath: 'linked.txt' })
+  await patched.writeFileAtomic(linked, '硬链接', undefined, undefined, { platform: 'linux' }, { createIfAbsent: true, displayPath: 'linked.txt' })
   assert.equal(linkControl.calls, 1)
   assert.equal(fs.readFileSync(linked, 'utf8'), '硬链接')
 })
@@ -584,14 +583,9 @@ test('dsh-host-frontend-static：按路径给出 cache-control，且响应真的
   )
 
   // 5) 真正驱动 serveStatic：响应头必须落到 200 响应上，而不只是分类函数返回得对。
-  const serve = async (pathname) => {
-    const seen = { status: 0, headers: undefined, body: undefined }
-    const res = {
-      writeHead(status, headers) { seen.status = status; seen.headers = headers },
-      end(body) { seen.body = body },
-    }
-    await patched.serveStatic(pathname, res, distRoot, distIndex, () => true, async () => '<html>index</html>')
-    return seen
+  const serve = async (pathname, init) => {
+    const response = await patched.serveStatic(new Request(`http://localhost${pathname}`, init), distRoot, distIndex, () => undefined, () => '<html>index</html>')
+    return { status: response.status, headers: Object.fromEntries(response.headers), body: await response.text() }
   }
   const indexResponse = await serve('/')
   assert.equal(indexResponse.status, 200)
@@ -609,9 +603,17 @@ test('dsh-host-frontend-static：按路径给出 cache-control，且响应真的
   const iconResponse = await serve('/favicon.ico')
   assert.equal(iconResponse.status, 200)
   assert.equal(iconResponse.headers['cache-control'], 'no-cache')
+  const cached = await serve('/assets/index-Cr2OHXyD.js', { headers: { 'if-none-match': assetResponse.headers.etag } })
+  assert.equal(cached.status, 304)
+  assert.equal(cached.body, '')
+  assert.equal(cached.headers['cache-control'], assetResponse.headers['cache-control'])
+  const head = await serve('/assets/index-Cr2OHXyD.js', { method: 'HEAD' })
+  assert.equal(head.status, 200)
+  assert.equal(head.body, '')
+  assert.equal(head.headers.etag, assetResponse.headers.etag)
 
   // 6) 路径穿越仍必须是 403（上游行为，补丁不该动它）。
-  const traversal = await serve('/../../etc/passwd')
+  const traversal = await serve('/..%2f..%2fetc/passwd')
   assert.equal(traversal.status, 403)
   // 7) 不存在的资源仍是 404。
   const missing = await serve('/nope.js')

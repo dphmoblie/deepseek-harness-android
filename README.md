@@ -24,7 +24,7 @@
 | 系统要求 | Android 8.0（API 26）及以上 |
 | 目标应用副屏 | Android 10（API 29）及以上，需配合 Shizuku 使用 |
 | CPU 架构 | 仅支持 `arm64-v8a`（64 位 ARM） |
-| 内置环境 | Ubuntu 24.04 ARM64 · Node.js 24.19 · `@deepseek-ai/dsh` 0.2.1-rc.1 |
+| 内置环境 | Ubuntu 24.04 ARM64 · Node.js 24.19 · `@deepseek-ai/dsh` 0.2.2-rc.5 |
 | 开源协议 | MIT（内置运行时组件沿用各自协议，见[许可证](#许可证)） |
 
 ## 目录

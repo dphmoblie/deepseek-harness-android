@@ -24,7 +24,7 @@ No root access required. Ubuntu runs in userspace via [PRoot](https://github.com
 | Minimum Android | Android 8.0 (API 26) or later |
 | Target-app virtual display | Android 10 (API 29) or later, requires Shizuku |
 | Architecture | `arm64-v8a` only (64-bit ARM) |
-| Bundled runtime | Ubuntu 24.04 ARM64 · Node.js 24.19 · `@deepseek-ai/dsh` 0.2.1-rc.1 |
+| Bundled runtime | Ubuntu 24.04 ARM64 · Node.js 24.19 · `@deepseek-ai/dsh` 0.2.2-rc.5 |
 | License | MIT (bundled runtime components keep their own licenses; see [License](#license)) |
 
 ## Contents

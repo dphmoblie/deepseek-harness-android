@@ -24,7 +24,7 @@
 | 지원 OS | Android 8.0(API 26) 이상 |
 | 대상 앱 가상 화면 | Android 10(API 29) 이상(Shizuku 연동 필요) |
 | 지원 아키텍처 | `arm64-v8a`(64비트 ARM) 전용 |
-| 내장 런타임 | Ubuntu 24.04 ARM64 · Node.js 24.19 · `@deepseek-ai/dsh` 0.2.1-rc.1 |
+| 내장 런타임 | Ubuntu 24.04 ARM64 · Node.js 24.19 · `@deepseek-ai/dsh` 0.2.2-rc.5 |
 | 라이선스 | MIT(내장 런타임 구성 요소는 각 라이선스를 따르며, 자세한 내용은 [라이선스](#라이선스) 참조) |
 
 ## 목차
