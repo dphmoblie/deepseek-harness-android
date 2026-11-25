@@ -943,7 +943,7 @@ interface ConversationScreenProps {
 function ConversationScreen({ busy, harnessVersionBusy, keepAlive, runtime, onInstall, onLaunch, onStop, onOpenTerminal, onUpdate }: ConversationScreenProps) {
   const installed = runtimeInstalled(runtime)
   const transitioning = runtimeTransitioning(runtime)
-  const updateRequired = installed && runtime.updateAvailable && !transitioning
+  const updateAvailable = installed && runtime.updateAvailable && !transitioning
   const progress = runtime.totalBytes > 0
     ? Math.min(100, Math.round((runtime.downloadedBytes / runtime.totalBytes) * 100))
     : 0
@@ -967,20 +967,18 @@ function ConversationScreen({ busy, harnessVersionBusy, keepAlive, runtime, onIn
       <div className="screen-heading">
         <div>
           <p className="eyebrow">{t("Harness 对话")}</p>
-          <h1>{versionBusy ? t("正在处理版本") : updateRequired ? t("更新运行环境") : runtime.phase === 'error' ? t("运行环境出现问题") : installed ? (launchingHarness ? t("正在进入对话") : stoppingHarness ? t("正在停止运行环境") : t("对话已就绪")) : t("准备运行环境")}</h1>
+          <h1>{versionBusy ? t("正在处理版本") : runtime.phase === 'error' ? t("运行环境出现问题") : installed ? (launchingHarness ? t("正在进入对话") : stoppingHarness ? t("正在停止运行环境") : t("对话已就绪")) : t("准备运行环境")}</h1>
         </div>
       </div>
 
       <section className="launch-panel">
         <span className="launch-icon" aria-hidden="true">
-          {busy === 'launch' || transitioning || versionBusy ? <Loader2 className="spin" size={30} /> : updateRequired ? <RefreshCw size={30} /> : <img src={appMark} alt="" width={38} height={38} />}
+          {busy === 'launch' || transitioning || versionBusy ? <Loader2 className="spin" size={30} /> : <img src={appMark} alt="" width={38} height={38} />}
         </span>
         <div className="launch-copy">
           <h2>
             {versionBusy
               ? t("版本操作进行中")
-              : updateRequired
-              ? t("安装包内置了新版运行环境")
               : runtime.phase === 'error'
               ? installed
                 ? t("运行环境启动失败")
@@ -1000,8 +998,6 @@ function ConversationScreen({ busy, harnessVersionBusy, keepAlive, runtime, onIn
           <p>
             {versionBusy
               ? t("版本操作完成后才能打开对话，请等待当前操作结束。")
-              : updateRequired
-              ? t("需要先更新运行环境，才能继续打开 Harness；更新会替换其中的本地修改。")
               : runtime.phase === 'error'
               ? runtimeErrorMessage(runtime.errorCode)
               : transitioning
@@ -1046,15 +1042,15 @@ function ConversationScreen({ busy, harnessVersionBusy, keepAlive, runtime, onIn
               {runtime.phase === 'error' ? t("重试安装") : t("安装并进入对话")}
             </button>
           )}
-          {updateRequired && (
+          {updateAvailable && (
             <button className="button button-primary" type="button" onClick={onUpdate} disabled={busy !== null || versionBusy || !runtime.runnerAvailable}>
               <RefreshCw size={18} />{t("更新运行环境")}</button>
           )}
-          {installed && !transitioning && !updateRequired && busy !== 'launch' && (
+          {installed && !transitioning && busy !== 'launch' && (
             <button className="button button-primary" type="button" onClick={() => onLaunch()} disabled={busy !== null || versionBusy}>
               <Play size={18} fill="currentColor" />{t("打开对话")}</button>
           )}
-          {runtime.phase === 'error' && installed && !updateRequired && (
+          {runtime.phase === 'error' && installed && (
             <button className="button button-secondary" type="button" onClick={onOpenTerminal} disabled={busy !== null || versionBusy}>
               <SquareTerminal size={18} />{t("打开终端排查")}</button>
           )}
@@ -1086,7 +1082,7 @@ function ConversationScreen({ busy, harnessVersionBusy, keepAlive, runtime, onIn
           <div><strong>{t("缺少本机运行组件")}</strong><span>{t("请安装支持当前 arm64 设备的新版应用。")}</span></div>
         </div>
       )}
-      {installed && !transitioning && !updateRequired && <SessionManager embedded disabled={busy !== null || versionBusy} onBack={() => undefined} onOpenHarness={onLaunch} />}
+      {installed && !transitioning && <SessionManager embedded disabled={busy !== null || versionBusy} onBack={() => undefined} onOpenHarness={onLaunch} />}
     </div>
   )
 }
@@ -1236,7 +1232,7 @@ function EnvironmentScreen({ busy, bundledSource, harnessVersionBusy, runtime, o
               <RefreshCw size={18} />{runtime.phase === 'running' ? t("停止后更新") : t("更新运行环境")}
             </button>
           )}
-          {runtime.phase === 'ready' && !runtime.updateAvailable && (
+          {runtime.phase === 'ready' && (
             <button className="button button-primary" type="button" onClick={onStart} disabled={busy !== null || harnessVersionBusy}>
               {busy === 'launch' ? <Loader2 className="spin" size={18} /> : <Play size={18} fill="currentColor" />}
               {t("启动")}</button>
@@ -1463,8 +1459,8 @@ function SettingsHomeScreen({ busy, launchBlocked, diagnostic, keepAlive, runtim
           <h1>{t("设置")}</h1>
         </div>
         <button className="button button-primary conversation-button" type="button" onClick={onLaunch} disabled={busy !== null || launchBlocked || !runtimeInstalled(runtime)}>
-          {busy === 'launch' ? <Loader2 className="spin" size={18} /> : runtime.updateAvailable ? <RefreshCw size={18} /> : <Bot size={18} />}
-          {runtime.updateAvailable ? t("更新运行环境") : t("打开 Harness")}
+          {busy === 'launch' ? <Loader2 className="spin" size={18} /> : <Bot size={18} />}
+          {t("打开 Harness")}
         </button>
       </div>
 
@@ -2298,7 +2294,6 @@ function SettingsScreen({ accessibility, busy, harnessVersionBusy, diagnostic, d
    */
   const inputLocked = busy !== null && busy !== AUTOSAVE_BUSY_ID
   const canOpenHarness = (runtime.phase === 'ready' || runtime.phase === 'running')
-    && !runtime.updateAvailable
     && !harnessVersionBusy
     && !inputLocked
   const keepAliveRecordedAt = formatRecordedAt(keepAlive.lastUpdatedAtMillis)
@@ -4630,7 +4625,6 @@ export function App() {
     // Harness 版本安装/切换期间原生生命周期锁被占着：预启动只会在启动入口被拒绝，
     // 这次由关变开留到操作结束后的渲染再触发（不消费 seen）。
     if (versionOperationBusy) return
-    if (runtime.updateAvailable) return
     // 没有可投递的模型凭据时启动没有意义（含用户只在 Harness 内配过密钥的情况）。
     if (!hasConfiguredModelCredential(settings)) return
     // 资格齐了才记「已触发」：条件不满足的那几次渲染不消费这次变更。
@@ -5081,10 +5075,6 @@ export function App() {
     if (!skipCredentialGate && settings !== null && !hasConfiguredModelCredential(settings)) {
       notify(t("未检测到模型凭据：请先在「模型与密钥」登录 DeepSeek 账号或保存一次 API Key 再打开 Harness"), 'error')
       setActiveView(SETTINGS_PAGE_META.models.view)
-      return
-    }
-    if (runtime.updateAvailable) {
-      requestRuntimeUpdate()
       return
     }
     const token = ++busyToken.current

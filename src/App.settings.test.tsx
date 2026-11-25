@@ -433,7 +433,6 @@ describe('设置草稿与未保存的输入', () => {
 
   it.each([
     { name: '未安装', runtime: notInstalledState },
-    { name: '待更新', runtime: { ...readyState, updateAvailable: true } },
     { name: '正在安装', runtime: { ...readyState, phase: 'extracting' as const } },
     { name: '正在停止', runtime: { ...readyState, phase: 'stopping' as const } },
   ])('$name 时模型页不允许启动账号登录或绕过凭据入口', async ({ runtime }) => {

@@ -36,24 +36,18 @@ async function flushOnHide(): Promise<void> {
 describe('App conversation gate', () => {
   beforeEach(beforeEachAppTest)
 
-  it('blocks the old Harness until the bundled runtime update is explicitly confirmed', async () => {
+  it('allows the installed runtime while keeping the bundled update optional', async () => {
     bridge.getState
       .mockResolvedValueOnce({ ...readyState, updateAvailable: true })
       .mockResolvedValueOnce({ ...readyState })
 
     render(<App />)
 
-    const updateButton = await screen.findByRole('button', { name: '更新运行环境' })
-    expect(bridge.startHarness).not.toHaveBeenCalled()
-    expect(bridge.openHarness).not.toHaveBeenCalled()
-
-    fireEvent.click(updateButton)
-    const updateDialog = await screen.findByRole('dialog', { name: '更新 Ubuntu 运行环境' })
-    expect(updateDialog).toHaveTextContent('整个用户空间 /root（会话、模型密钥、Harness 设置、附件、技能、插件、工作区文件，以及你自己在 /root 下建的目录）都会保留')
-    expect(updateDialog).toHaveTextContent('撞名没搬回的项会留在「数据保留」里可取回')
-    fireEvent.click(screen.getByRole('button', { name: '确认更新' }))
-
-    await waitFor(() => expect(bridge.install).toHaveBeenCalledWith({ manifestUrl: '', manifestSha256: '' }))
+    expect(await screen.findByRole('button', { name: '打开对话' })).toBeVisible()
+    expect(await screen.findByRole('button', { name: '更新运行环境' })).toBeVisible()
+    fireEvent.click(screen.getByRole('button', { name: '打开对话' }))
+    await waitFor(() => expect(bridge.startHarness).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
   await arriveAtSettingsHome()
   })
 
