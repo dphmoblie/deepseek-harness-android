@@ -6,10 +6,12 @@ import java.nio.file.AccessDeniedException
 import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.Files
 import java.nio.file.LinkOption
+import java.nio.file.NoSuchFileException
 import java.nio.file.Path
 import java.nio.file.Paths
 import java.nio.file.StandardCopyOption
 import java.nio.file.StandardOpenOption
+import java.nio.file.attribute.BasicFileAttributes
 import java.util.Base64
 
 /**
@@ -45,18 +47,21 @@ internal object LocalDeviceFileStore {
         command: DeviceCommand,
         param: String,
         rootResolver: (DeviceFilePolicy.Root) -> Path = { Paths.get(it.absolutePath) },
+        allowUnrestricted: Boolean = false,
     ): DeviceCommandResult? {
         if (!isFileCommand(command)) return null
         val requireContent = command == DeviceCommand.FILE_WRITE || command == DeviceCommand.FILE_UPLOAD
-        val request = DeviceFilePolicy.parse(param, requireContent = requireContent)
+        val request = DeviceFilePolicy.parse(param, requireContent = requireContent, allowUnrestricted = allowUnrestricted)
         val rootPath = rootResolver(request.root)
+        val maxFileBytes = if (allowUnrestricted) DeviceFilePolicy.UNRESTRICTED_MAX_FILE_BYTES else DeviceFilePolicy.MAX_FILE_BYTES
+        val unrestrictedAbsolute = allowUnrestricted && request.root == DeviceFilePolicy.Root.DEVICE && request.path.startsWith("/")
 
         return try {
             when (command) {
-                DeviceCommand.FILE_LIST -> executeList(rootPath, request)
-                DeviceCommand.FILE_READ, DeviceCommand.FILE_DOWNLOAD -> executeRead(rootPath, request)
-                DeviceCommand.FILE_WRITE, DeviceCommand.FILE_UPLOAD -> executeWrite(rootPath, request)
-                DeviceCommand.FILE_MKDIR -> executeMkdir(rootPath, request)
+                DeviceCommand.FILE_LIST -> executeList(rootPath, request, unrestrictedAbsolute)
+                DeviceCommand.FILE_READ, DeviceCommand.FILE_DOWNLOAD -> executeRead(rootPath, request, maxFileBytes, unrestrictedAbsolute)
+                DeviceCommand.FILE_WRITE, DeviceCommand.FILE_UPLOAD -> executeWrite(rootPath, request, maxFileBytes, unrestrictedAbsolute)
+                DeviceCommand.FILE_MKDIR -> executeMkdir(rootPath, request, unrestrictedAbsolute)
                 else -> null
             }
         } catch (_: AccessDeniedException) {
@@ -71,13 +76,30 @@ internal object LocalDeviceFileStore {
         }
     }
 
-    private fun executeList(rootPath: Path, request: DeviceFilePolicy.Request): DeviceCommandResult {
-        val realRoot = resolveVerifiedRoot(rootPath, createIfMissing = false)
-            ?: return failureResult("DEVICE_FILE_NOT_FOUND", "投递区目录不存在。")
-        val target = resolveSafeTarget(realRoot, request.path, requireExistingParents = true)
-            ?: return failureResult("DEVICE_FILE_ESCAPE", "投递区路径解析越出固定目录，或目录包含不受信任的符号链接；本次调用已拒绝。")
-        if (Files.isSymbolicLink(target) || !Files.isDirectory(target, LinkOption.NOFOLLOW_LINKS)) {
-            return failureResult("DEVICE_FILE_NOT_FOUND", "投递区目录不存在。")
+    private fun readAttributesOrNull(path: Path, vararg options: LinkOption): BasicFileAttributes? = try {
+        Files.readAttributes(path, BasicFileAttributes::class.java, *options)
+    } catch (_: NoSuchFileException) {
+        null
+    }
+
+    private fun executeList(rootPath: Path, request: DeviceFilePolicy.Request, unrestrictedAbsolute: Boolean): DeviceCommandResult {
+        val target = if (unrestrictedAbsolute) {
+            val direct = Paths.get(request.path).normalize()
+            val attrs = readAttributesOrNull(direct)
+                ?: return failureResult("DEVICE_FILE_NOT_FOUND", "目标目录不存在。")
+            if (!attrs.isDirectory) {
+                return failureResult("DEVICE_FILE_NOT_FOUND", "目标目录不存在。")
+            }
+            direct
+        } else {
+            val realRoot = resolveVerifiedRoot(rootPath, createIfMissing = false)
+                ?: return failureResult("DEVICE_FILE_NOT_FOUND", "投递区目录不存在。")
+            val resolved = resolveSafeTarget(realRoot, request.path, requireExistingParents = true)
+                ?: return failureResult("DEVICE_FILE_ESCAPE", "投递区路径解析越出固定目录，或目录包含不受信任的符号链接；本次调用已拒绝。")
+            if (Files.isSymbolicLink(resolved) || !Files.isDirectory(resolved)) {
+                return failureResult("DEVICE_FILE_NOT_FOUND", "目标目录不存在。")
+            }
+            resolved
         }
         val names = mutableListOf<String>()
         Files.newDirectoryStream(target).use { stream ->
@@ -94,49 +116,84 @@ internal object LocalDeviceFileStore {
         return DeviceCommandResult(ok = true, exitCode = 0, text = text, truncated = truncated, errorCode = null)
     }
 
-    private fun executeRead(rootPath: Path, request: DeviceFilePolicy.Request): DeviceCommandResult {
-        if (request.path.isEmpty()) throw RuntimeFailure("DEVICE_FILE_INVALID", "读取目标不能为空")
-        val realRoot = resolveVerifiedRoot(rootPath, createIfMissing = false)
-            ?: return failureResult("DEVICE_FILE_NOT_FOUND", "投递区文件不存在。")
-        val target = resolveSafeTarget(realRoot, request.path, requireExistingParents = true)
-            ?: return failureResult("DEVICE_FILE_ESCAPE", "投递区路径解析越出固定目录，或目录包含不受信任的符号链接；本次调用已拒绝。")
-        if (Files.isSymbolicLink(target) || !Files.isRegularFile(target, LinkOption.NOFOLLOW_LINKS)) {
-            return failureResult("DEVICE_FILE_NOT_FOUND", "投递区文件不存在。")
+    private fun executeRead(
+        rootPath: Path,
+        request: DeviceFilePolicy.Request,
+        maxFileBytes: Int,
+        unrestrictedAbsolute: Boolean,
+    ): DeviceCommandResult {
+        if (request.path.isEmpty() || request.path == "/") {
+            throw RuntimeFailure("DEVICE_FILE_INVALID", "读取目标不能为空或根目录")
         }
-        val realTarget = target.toRealPath()
-        if (!isInsideRoot(realRoot, realTarget)) {
-            return failureResult("DEVICE_FILE_ESCAPE", "投递区路径解析越出固定目录，或目录包含不受信任的符号链接；本次调用已拒绝。")
+        val target = if (unrestrictedAbsolute) {
+            val direct = Paths.get(request.path).normalize()
+            val attrs = readAttributesOrNull(direct)
+                ?: return failureResult("DEVICE_FILE_NOT_FOUND", "目标文件不存在。")
+            if (!attrs.isRegularFile) {
+                return failureResult("DEVICE_FILE_NOT_FOUND", "目标文件不存在。")
+            }
+            direct
+        } else {
+            val realRoot = resolveVerifiedRoot(rootPath, createIfMissing = false)
+                ?: return failureResult("DEVICE_FILE_NOT_FOUND", "投递区文件不存在。")
+            val resolved = resolveSafeTarget(realRoot, request.path, requireExistingParents = true)
+                ?: return failureResult("DEVICE_FILE_ESCAPE", "投递区路径解析越出固定目录，或目录包含不受信任的符号链接；本次调用已拒绝。")
+            if (Files.isSymbolicLink(resolved) || !Files.isRegularFile(resolved, LinkOption.NOFOLLOW_LINKS)) {
+                return failureResult("DEVICE_FILE_NOT_FOUND", "投递区文件不存在。")
+            }
+            val realTarget = resolved.toRealPath()
+            if (!isInsideRoot(realRoot, realTarget)) {
+                return failureResult("DEVICE_FILE_ESCAPE", "投递区路径解析越出固定目录，或目录包含不受信任的符号链接；本次调用已拒绝。")
+            }
+            resolved
         }
         val size = Files.size(target)
-        if (size > DeviceFilePolicy.MAX_FILE_BYTES.toLong()) {
-            return failureResult("DEVICE_FILE_TOO_LARGE", "文件超过单次传输 128 KiB 上限。")
+        val limitLabel = if (maxFileBytes >= 1024 * 1024) "${maxFileBytes / (1024 * 1024)} MiB" else "${maxFileBytes / 1024} KiB"
+        if (size > maxFileBytes.toLong()) {
+            return failureResult("DEVICE_FILE_TOO_LARGE", "文件超过单次传输 $limitLabel 上限。")
         }
         val bytes = Files.readAllBytes(target)
-        if (bytes.size > DeviceFilePolicy.MAX_FILE_BYTES) {
-            return failureResult("DEVICE_FILE_TOO_LARGE", "文件超过单次传输 128 KiB 上限。")
+        if (bytes.size > maxFileBytes) {
+            return failureResult("DEVICE_FILE_TOO_LARGE", "文件超过单次传输 $limitLabel 上限。")
         }
         val encoded = Base64.getEncoder().encodeToString(bytes)
         return DeviceCommandResult(ok = true, exitCode = 0, text = encoded, truncated = false, errorCode = null)
     }
 
-    private fun executeWrite(rootPath: Path, request: DeviceFilePolicy.Request): DeviceCommandResult {
-        if (request.path.isEmpty()) throw RuntimeFailure("DEVICE_FILE_INVALID", "写入目标不能为空")
+    private fun executeWrite(
+        rootPath: Path,
+        request: DeviceFilePolicy.Request,
+        maxFileBytes: Int,
+        unrestrictedAbsolute: Boolean,
+    ): DeviceCommandResult {
+        if (request.path.isEmpty() || request.path == "/") {
+            throw RuntimeFailure("DEVICE_FILE_INVALID", "写入目标不能为空或根目录")
+        }
         val encoded = request.contentBase64 ?: throw RuntimeFailure("DEVICE_FILE_INVALID", "文件内容缺失")
-        val bytes = DeviceFilePolicy.validateBase64(encoded)
-        val realRoot = resolveVerifiedRoot(rootPath, createIfMissing = true)
-            ?: return failureResult("DEVICE_FILE_FAILED", "无法准备投递区目录。")
-        val target = resolveSafeTarget(realRoot, request.path, requireExistingParents = true)
-            ?: return failureResult("DEVICE_FILE_ESCAPE", "投递区路径解析越出固定目录，或目录包含不受信任的符号链接；本次调用已拒绝。")
-        if (Files.isSymbolicLink(target)) {
+        val bytes = DeviceFilePolicy.validateBase64(encoded, maxBytes = maxFileBytes)
+        val target = if (unrestrictedAbsolute) {
+            val direct = Paths.get(request.path).normalize()
+            direct.parent?.let { parent ->
+                if (readAttributesOrNull(parent) == null) Files.createDirectories(parent)
+            }
+            direct
+        } else {
+            val realRoot = resolveVerifiedRoot(rootPath, createIfMissing = true)
+                ?: return failureResult("DEVICE_FILE_FAILED", "无法准备投递区目录。")
+            resolveSafeTarget(realRoot, request.path, requireExistingParents = true)
+                ?: return failureResult("DEVICE_FILE_ESCAPE", "投递区路径解析越出固定目录，或目录包含不受信任的符号链接；本次调用已拒绝。")
+        }
+        if (!unrestrictedAbsolute && Files.isSymbolicLink(target)) {
             return failureResult("DEVICE_FILE_ESCAPE", "投递区路径解析越出固定目录，或目录包含不受信任的符号链接；本次调用已拒绝。")
         }
-        if (Files.exists(target, LinkOption.NOFOLLOW_LINKS)) {
-            if (!request.overwrite || Files.isDirectory(target, LinkOption.NOFOLLOW_LINKS)) {
+        val existing = readAttributesOrNull(target, LinkOption.NOFOLLOW_LINKS)
+        if (existing != null) {
+            if (!request.overwrite || existing.isDirectory) {
                 return failureResult("DEVICE_FILE_EXISTS", "目标文件已存在且未允许覆盖。")
             }
         }
         val parent = target.parent
-            ?: return failureResult("DEVICE_FILE_ESCAPE", "投递区路径解析越出固定目录。")
+            ?: return failureResult("DEVICE_FILE_ESCAPE", "目标路径缺少父目录。")
         val pending = Files.createTempFile(parent, ".dsh-upload-", ".tmp")
         try {
             Files.write(pending, bytes, StandardOpenOption.WRITE, StandardOpenOption.TRUNCATE_EXISTING)
@@ -151,8 +208,23 @@ internal object LocalDeviceFileStore {
         return DeviceCommandResult(ok = true, exitCode = 0, text = "", truncated = false, errorCode = null)
     }
 
-    private fun executeMkdir(rootPath: Path, request: DeviceFilePolicy.Request): DeviceCommandResult {
-        if (request.path.isEmpty()) throw RuntimeFailure("DEVICE_FILE_INVALID", "目录目标不能为空")
+    private fun executeMkdir(
+        rootPath: Path,
+        request: DeviceFilePolicy.Request,
+        unrestrictedAbsolute: Boolean,
+    ): DeviceCommandResult {
+        if (request.path.isEmpty() || request.path == "/") {
+            throw RuntimeFailure("DEVICE_FILE_INVALID", "目录目标不能为空或根目录")
+        }
+        if (unrestrictedAbsolute) {
+            val target = Paths.get(request.path).normalize()
+            val existing = readAttributesOrNull(target)
+            if (existing != null && !existing.isDirectory) {
+                return failureResult("DEVICE_FILE_EXISTS", "目标位置已存在同名文件，无法创建目录。")
+            }
+            if (existing == null) Files.createDirectories(target)
+            return DeviceCommandResult(ok = true, exitCode = 0, text = "", truncated = false, errorCode = null)
+        }
         val realRoot = resolveVerifiedRoot(rootPath, createIfMissing = true)
             ?: return failureResult("DEVICE_FILE_FAILED", "无法准备投递区目录。")
         var cursor = realRoot

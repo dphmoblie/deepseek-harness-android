@@ -103,6 +103,7 @@ describe('browser settings bridge', () => {
 
     await expect(bridge.getRuntimeVersions()).rejects.toThrow('浏览器预览不支持运行时版本管理')
     await expect(bridge.switchRuntimeVersion('previous')).rejects.toThrow('浏览器预览不支持运行时版本管理')
+    await expect(bridge.switchRuntimeVersion('bundled')).rejects.toThrow('浏览器预览不支持运行时版本管理')
     await expect(bridge.deleteRuntimeVersion('previous')).rejects.toThrow('浏览器预览不支持运行时版本管理')
     await expect(bridge.setRuntimeVersionPinned('a'.repeat(64), true)).rejects.toThrow('浏览器预览不支持运行时版本管理')
 
@@ -353,6 +354,7 @@ describe('浏览器桥的更新渠道与应用自更新', () => {
     const bridge = createBrowserBridge()
 
     await expect(bridge.listRuntimeReleases()).rejects.toThrow('浏览器模式下没有更新渠道')
+    await expect(bridge.getAppUpdateLocalState()).rejects.toThrow('浏览器模式下没有应用更新')
     await expect(bridge.getAppUpdateState()).rejects.toThrow('浏览器模式下没有应用更新')
     await expect(bridge.getAppUpdateState(false)).rejects.toThrow('浏览器模式下没有应用更新')
     await expect(bridge.getAppUpdateState(true)).rejects.toThrow('浏览器模式下没有应用更新')

@@ -15,9 +15,9 @@ import java.util.concurrent.atomic.AtomicReference
 class AppUpdateCacheTest {
     private val installed = InstalledAppInfo("0.2.0", 22L)
     private class MemoryStorage : AppUpdateCache.Storage {
-        var text: String? = null
-        override fun read() = text
-        override fun write(value: String) { text = value }
+        private val entries = mutableMapOf<String, String>()
+        override fun read(key: String) = entries[key]
+        override fun write(key: String, value: String) { entries[key] = value }
     }
 
     private fun payload(version: String = "0.2.1", notes: String = "更新说明"): ByteArray = JSONArray().put(
@@ -86,10 +86,10 @@ class AppUpdateCacheTest {
             payload()
         }, { 1000 })
         cache.state(installed, false, AppUpdateChannel.STABLE)
-        val saved = storage.text
+        val saved = storage.read("snapshot_stable")
         offline = true
         assertThrows(RuntimeFailure::class.java) { cache.state(installed, false, AppUpdateChannel.STABLE, true) }
-        assertEquals(saved, storage.text)
+        assertEquals(saved, storage.read("snapshot_stable"))
         assertTrue(cache.state(installed, true, AppUpdateChannel.STABLE).getBoolean("cached"))
     }
 
@@ -151,7 +151,7 @@ class AppUpdateCacheTest {
         val storage = MemoryStorage()
         var requests = 0
         val cache = AppUpdateCache(storage, AppReleaseCatalog { requests++; payload() }, { 1000 })
-        storage.text = JSONObject()
+        storage.write("snapshot", JSONObject()
             .put("schema", 1)
             .put("installedVersion", "0.2.0")
             .put("installedVersionCode", 22L)
@@ -162,7 +162,7 @@ class AppUpdateCacheTest {
                 .put("bytes", 4096L)
                 .put("sha256", "b".repeat(64))
                 .put("notes", "更新说明"))
-            .toString()
+            .toString())
         val state = cache.state(installed, false, AppUpdateChannel.STABLE)
         assertFalse(state.getBoolean("cached"))
         assertEquals(1, requests)
@@ -175,7 +175,7 @@ class AppUpdateCacheTest {
         var requests = 0
         val cache = AppUpdateCache(storage, AppReleaseCatalog { requests++; payload() }, { 1000 })
         cache.state(installed, false, AppUpdateChannel.STABLE)
-        val valid = storage.text!!
+        val valid = storage.read("snapshot_stable")!!
         val mutations: List<(JSONObject) -> Unit> = listOf(
             { it.put("schema", 99) },
             { it.put("channel", "nightly") },
@@ -194,16 +194,16 @@ class AppUpdateCacheTest {
         val badEntries = listOf("{broken", "x".repeat(AppUpdateCache.MAX_CACHE_CHARS + 1)) +
             mutations.map { mutate -> JSONObject(valid).also(mutate).toString() }
         badEntries.forEach { corrupt ->
-            storage.text = corrupt
+            storage.write("snapshot_stable", corrupt)
             assertFalse(cache.state(installed, false, AppUpdateChannel.STABLE).getBoolean("cached"))
-            assertEquals(valid, storage.text)
+            assertEquals(valid, storage.read("snapshot_stable"))
         }
         assertEquals(1 + badEntries.size, requests)
     }
 
     @Test
     fun invalidCacheAndOfflineDoesNotPretendTheCheckSucceeded() {
-        val storage = MemoryStorage().apply { text = "not-json" }
+        val storage = MemoryStorage().apply { write("snapshot_stable", "not-json") }
         val cache = AppUpdateCache(storage, AppReleaseCatalog { throw RuntimeFailure("DOWNLOAD_HTTP_ERROR", "offline") })
         assertThrows(RuntimeFailure::class.java) { cache.state(installed, true, AppUpdateChannel.STABLE) }
     }
@@ -256,38 +256,77 @@ class AppUpdateCacheTest {
     }
 
     @Test
-    fun concurrentChecksOnDifferentChannelsDoNotShareOneRequest() {
+    fun concurrentChecksOnDifferentChannelsPreserveBothSnapshots() {
+        val storage = MemoryStorage()
         val requests = AtomicInteger()
-        val entered = CountDownLatch(1)
-        val release = CountDownLatch(1)
+        val stableEntered = CountDownLatch(1)
+        val releaseStable = CountDownLatch(1)
         val error = AtomicReference<Throwable>()
-        val cache = AppUpdateCache(MemoryStorage(), AppReleaseCatalog {
-            requests.incrementAndGet()
-            entered.countDown()
-            check(release.await(5, TimeUnit.SECONDS))
-            payload()
+        val cache = AppUpdateCache(storage, AppReleaseCatalog {
+            if (requests.incrementAndGet() == 1) {
+                stableEntered.countDown()
+                check(releaseStable.await(5, TimeUnit.SECONDS))
+                payload("0.2.1")
+            } else {
+                payload("0.2.1-mobile-65")
+            }
         }, { 1000 })
-        fun worker(channel: AppUpdateChannel) = Thread {
-            try { assertEquals(channel.id, cache.state(installed, false, channel, true).getString("channel")) }
+        val stable = Thread {
+            try { cache.state(installed, false, AppUpdateChannel.STABLE, true) }
             catch (failure: Throwable) { error.set(failure) }
         }
-        val first = worker(AppUpdateChannel.STABLE)
-        val second = worker(AppUpdateChannel.BETA)
         try {
-            first.start()
-            assertTrue(entered.await(3, TimeUnit.SECONDS))
-            second.start()
-            // 第二个频道不复用第一个频道的在途请求：它自己也发起了一次抓取。
-            val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3)
-            while (requests.get() < 2 && System.nanoTime() < deadline) Thread.yield()
+            stable.start()
+            assertTrue(stableEntered.await(3, TimeUnit.SECONDS))
+            val beta = cache.state(installed, false, AppUpdateChannel.BETA, true)
+            assertEquals("0.2.1-mobile-65", beta.getJSONObject("available").getString("version"))
         } finally {
-            release.countDown()
-            first.join(3000)
-            second.join(3000)
+            releaseStable.countDown()
+            stable.join(3000)
         }
         error.get()?.let { throw it }
         assertEquals(2, requests.get())
-        assertFalse(first.isAlive)
-        assertFalse(second.isAlive)
+        assertFalse(stable.isAlive)
+        val offline = AppUpdateCache(storage, AppReleaseCatalog { error("must not fetch") }, { 2000 })
+        assertEquals("0.2.1", offline.availableRelease(installed, AppUpdateChannel.STABLE)?.version)
+        assertEquals("0.2.1-mobile-65", offline.availableRelease(installed, AppUpdateChannel.BETA)?.version)
+    }
+
+    @Test
+    fun localStateNeverHitsNetworkAndDropsStaleVersionOrChannelCandidates() {
+        val currentStorage = MemoryStorage()
+        AppUpdateCache(currentStorage, AppReleaseCatalog { payload("0.2.1") }, { 1000 })
+            .state(installed, installAllowed = false, AppUpdateChannel.STABLE)
+        // 旧版只有一个键，升级后仍可离线读到同版本同频道的快照。
+        val storage = MemoryStorage().apply { write("snapshot", currentStorage.read("snapshot_stable")!!) }
+
+        val offline = AppUpdateCache(storage, AppReleaseCatalog { error("localState must not touch network") }, { 2000 })
+
+        // 同版本同频道：命中本地缓存。
+        val hit = offline.localState(installed, installAllowed = true, AppUpdateChannel.STABLE)
+        assertEquals("stable", hit.getString("channel"))
+        assertTrue(hit.getBoolean("cached"))
+        assertEquals(1000L, hit.getLong("checkedAt"))
+        assertTrue(hit.getBoolean("installAllowed"))
+        assertEquals("0.2.1", hit.getJSONObject("available").getString("version"))
+        assertFalse(hit.has("refreshFailed"))
+
+        // 应用更新后（版本变化）：不触网、保留已装版本与 beta 频道，且绝不泄露旧版本候选。
+        val upgraded = InstalledAppInfo("0.4.6-mobile-690", 54L)
+        val afterUpgrade = offline.localState(upgraded, installAllowed = true, AppUpdateChannel.BETA)
+        assertEquals("0.4.6-mobile-690", afterUpgrade.getString("installedVersion"))
+        assertEquals(54L, afterUpgrade.getLong("installedVersionCode"))
+        assertEquals("beta", afterUpgrade.getString("channel"))
+        assertFalse(afterUpgrade.has("available"))
+        assertFalse(afterUpgrade.has("cached"))
+        assertFalse(afterUpgrade.has("checkedAt"))
+
+        // 离线切换频道（refreshFailed=true）：回传新频道与失败标记，绝不泄露旧频道候选。
+        val switchedOffline = offline.localState(installed, installAllowed = false, AppUpdateChannel.BETA, refreshFailed = true)
+        assertEquals("beta", switchedOffline.getString("channel"))
+        assertTrue(switchedOffline.getBoolean("refreshFailed"))
+        assertFalse(switchedOffline.has("available"))
+        assertFalse(switchedOffline.has("cached"))
+        assertFalse(switchedOffline.has("checkedAt"))
     }
 }

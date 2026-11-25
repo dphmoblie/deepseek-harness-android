@@ -140,4 +140,76 @@ class AccessibilityAutomationPolicyTest {
         assertEquals("scroll", AccessibilityAutomationPolicy.parseAction(value)?.action)
         assertNull(AccessibilityAutomationPolicy.parseAction(value.replace("forward", "up")))
     }
+
+    @Test
+    fun hostUnlockFlagsToggleReservedSystemPackagesAndSensitiveText() {
+        val reserved = listOf(
+            "android",
+            "com.android.settings",
+            "com.android.systemui",
+            "com.android.packageinstaller",
+            "com.android.permissioncontroller",
+        )
+        for (pkg in reserved) {
+            assertFalse("默认拒绝系统包 $pkg", AccessibilityAutomationPolicy.packageAllowed(pkg, emptySet(), true, allowReserved = false))
+            assertTrue("开启开关后放行系统包 $pkg", AccessibilityAutomationPolicy.packageAllowed(pkg, emptySet(), true, allowReserved = true))
+        }
+        val androidDialogClick = "{" +
+            "\"packageName\":\"android\"," +
+            "\"action\":\"click\"," +
+            "\"selector\":{\"viewId\":\"android:id/button1\"}}"
+        assertNull(AccessibilityAutomationPolicy.parseAction(androidDialogClick, allowReserved = false))
+        assertNotNull(AccessibilityAutomationPolicy.parseAction(androidDialogClick, allowReserved = true))
+
+        val settingsDialogClick = "{" +
+            "\"packageName\":\"com.android.settings\"," +
+            "\"action\":\"click\"," +
+            "\"selector\":{\"viewId\":\"android:id/button1\"}}"
+        assertNull(AccessibilityAutomationPolicy.parseAction(settingsDialogClick, allowReserved = false))
+        assertNotNull(AccessibilityAutomationPolicy.parseAction(settingsDialogClick, allowReserved = true))
+
+        val ordinaryAppCrossPkg = "{" +
+            "\"packageName\":\"com.example.reader\"," +
+            "\"action\":\"click\"," +
+            "\"selector\":{\"viewId\":\"android:id/button1\"}}"
+        assertNull(AccessibilityAutomationPolicy.parseAction(ordinaryAppCrossPkg, allowReserved = true))
+
+        val sensitiveInput = "{" +
+            "\"packageName\":\"com.example.reader\"," +
+            "\"action\":\"setText\"," +
+            "\"selector\":{\"viewId\":\"com.example.reader:id/input\"}," +
+            "\"text\":\"验证码123456\"}"
+        assertNull(AccessibilityAutomationPolicy.parseAction(sensitiveInput, allowSensitiveText = false))
+        assertEquals("验证码123456", AccessibilityAutomationPolicy.parseAction(sensitiveInput, allowSensitiveText = true)?.text)
+
+        // Root / Shizuku 管理器与国产 OEM 安全中心默认禁止，开启开关后才放行
+        val privilegedManagers = listOf(
+            "me.weishu.kernelsu",
+            "com.rifsxd.ksunext",
+            "me.bmax.apatch",
+            "com.topjohnwu.magisk",
+            "moe.shizuku.privileged.api",
+            "com.miui.securitycenter",
+            "com.oplus.securitypermission",
+            "com.vivo.permissionmanager",
+            "com.huawei.systemmanager",
+            "com.hihonor.systemmanager",
+            "com.samsung.android.packageinstaller",
+        )
+        for (pkg in privilegedManagers) {
+            assertTrue("$pkg 应属于受保护包", AccessibilityAutomationPolicy.isReservedPackage(pkg))
+            assertFalse("默认必须禁止 $pkg", AccessibilityAutomationPolicy.packageAllowed(pkg, emptySet(), false, allowReserved = false))
+            assertTrue("显式开启系统包开关后放行 $pkg", AccessibilityAutomationPolicy.packageAllowed(pkg, emptySet(), true, allowReserved = true))
+        }
+
+        // 本应用高危权限开关页与 Root 确认页防 AI 自我提权文本识别（五语 + 防拆字）
+        assertTrue(AccessibilityAutomationPolicy.containsSelfPrivilegeGuardText("AI 高危文件与命令权限"))
+        assertTrue(AccessibilityAutomationPolicy.containsSelfPrivilegeGuardText("高 危 文 件 与 命 令 权 限"))
+        assertTrue(AccessibilityAutomationPolicy.containsSelfPrivilegeGuardText("AI High-Risk File & Command Permissions"))
+        assertTrue(AccessibilityAutomationPolicy.containsSelfPrivilegeGuardText("AI 高リスクファイル・コマンド権限"))
+        assertTrue(AccessibilityAutomationPolicy.containsSelfPrivilegeGuardText("AI 고위험 파일 및 명령 권한"))
+        assertTrue(AccessibilityAutomationPolicy.containsSelfPrivilegeGuardText("【极危 Root 命令】"))
+        assertFalse(AccessibilityAutomationPolicy.containsSelfPrivilegeGuardText("开始新对话"))
+        assertFalse(AccessibilityAutomationPolicy.containsSelfPrivilegeGuardText("模型与外观设置"))
+    }
 }

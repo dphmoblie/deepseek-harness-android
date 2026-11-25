@@ -50,6 +50,47 @@ class VirtualScreenLaunchTest {
         assertTrue(oversized.message!!, oversized.message!!.contains("链接长度必须在 1～2048 个字符内"))
     }
 
+    @Test fun `开启任意 URI Scheme 后放行自定义应用协议，仍硬拒绝 file javascript data`() {
+        assertThrows(IllegalArgumentException::class.java) {
+            VirtualScreenPolicy.launchUri("weixin://dl/scan", allowAnyScheme = false)
+        }
+        assertEquals("weixin://dl/scan", VirtualScreenPolicy.launchUri("weixin://dl/scan", allowAnyScheme = true))
+        assertEquals("alipays://platformapi/startapp", VirtualScreenPolicy.launchUri("alipays://platformapi/startapp", allowAnyScheme = true))
+        assertEquals(
+            VirtualScreenPolicy.LaunchRequest.Uri("weixin://dl/scan"),
+            VirtualScreenPolicy.launchRequest(
+                JSONObject()
+                    .put("uri", "weixin://dl/scan")
+                    .put(VirtualScreenPolicy.ALLOW_ANY_URI_SCHEME_FIELD, true),
+            ),
+        )
+        for (blocked in listOf("file:///sdcard/secret", "javascript:alert(1)", "data:text/html,hi")) {
+            assertThrows(IllegalArgumentException::class.java) {
+                VirtualScreenPolicy.launchUri(blocked, allowAnyScheme = true)
+            }
+        }
+    }
+
+    @Test fun `副屏防自我提权门控：始终禁止本应用，系统与Root管理器受开关控制`() {
+        // 本应用无论开关开合都禁止拉入 AI 副屏
+        for (allowSystem in listOf(false, true)) {
+            val err = assertThrows(io.deepseekharness.mobile.runtime.RuntimeFailure::class.java) {
+                VirtualScreenPolicy.requireAgentTargetAllowed("io.deepseekharness.mobile", allowSystem)
+            }
+            assertEquals(VirtualScreenPolicy.TARGET_FORBIDDEN_CODE, err.code)
+        }
+        // 受保护系统组件与 Root/Shizuku 管理器：关则拒、开则放行
+        for (pkg in listOf("com.android.settings", "me.weishu.kernelsu", "moe.shizuku.privileged.api", "com.miui.securitycenter")) {
+            val err = assertThrows(io.deepseekharness.mobile.runtime.RuntimeFailure::class.java) {
+                VirtualScreenPolicy.requireAgentTargetAllowed(pkg, allowSystemApps = false)
+            }
+            assertEquals(VirtualScreenPolicy.TARGET_FORBIDDEN_CODE, err.code)
+            VirtualScreenPolicy.requireAgentTargetAllowed(pkg, allowSystemApps = true)
+        }
+        // 普通第三方应用始终放行
+        VirtualScreenPolicy.requireAgentTargetAllowed("com.tencent.mm", allowSystemApps = false)
+    }
+
     @Test fun `包名与组件规则沿用既有校验`() {
         assertEquals("com.tencent.mm", VirtualScreenPolicy.launchPackage("com.tencent.mm"))
         for (value in listOf("com", "1com.a", "com.tencent.mm/", "", "com..a")) {

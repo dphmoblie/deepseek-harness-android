@@ -223,3 +223,42 @@ test('installPtyGuard 通过可选 inject 挂接延迟注册的 workingDirectory
     /PTY shell exited during startup \(.*exit=125.*dsh-sandbox-runner: landlock launcher not found/u,
   )
 })
+
+test('installPtyGuard 在 Cordis v4 严格代理禁止读取未声明 inject 属性时不会抛错且能正常挂接', async () => {
+  const fsOps = mockFs({
+    '/root/bad': { type: 'dir', executable: false },
+    '/root': { type: 'dir', executable: true },
+  })
+  const injections = new Map()
+  const disposedFibers = []
+  const allowed = new Set(['inject', 'effect', 'on', 'tools', 'systemPrompt', 'attachments', 'llm'])
+  const strictCordisCtx = new Proxy({
+    inject(names, callback) {
+      injections.set(names.join(','), callback)
+      return { dispose: () => disposedFibers.push(names.join(',')) }
+    },
+  }, {
+    get(target, prop, receiver) {
+      if (typeof prop === 'string' && !allowed.has(prop)) {
+        throw new Error(`cannot get property "${prop}" without inject`)
+      }
+      return Reflect.get(target, prop, receiver)
+    },
+  })
+
+  const disposeGuard = installPtyGuard(strictCordisCtx, { fsOps, settleWaitMs: 50 })
+  assert.equal(injections.has('workingDirectory'), true)
+  assert.equal(injections.has('terminals'), true)
+
+  const workingDirectory = {
+    defaultDirectory: '/root',
+    async ensure() { return '/root/bad' },
+    async set(_agent, target) { return target },
+  }
+  injections.get('workingDirectory')({ workingDirectory })
+  const healed = await workingDirectory.ensure({ session: { header: {} } })
+  assert.equal(healed, '/root')
+
+  disposeGuard()
+  assert.deepEqual(disposedFibers, ['workingDirectory', 'terminals'])
+})

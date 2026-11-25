@@ -9,6 +9,8 @@ const CHECK_TIMEOUT_MS = 10_000
 const memoryStorage = new Map<string, string>()
 let storageAvailable = true
 let dailyCheck: { day: string; result: Promise<AppUpdateState | null> } | null = null
+let channelRevision = 0
+let channelChangesPending = 0
 
 export function updateReminderDay(date = new Date()): string {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
@@ -49,9 +51,10 @@ function checkOnce(day: string, loadUpdate: (forceRefresh?: boolean) => Promise<
     // 每日提醒要拿远端最新发布；失败时由调用方静默降级，不阻断启动。
     void Promise.resolve().then(() => loadUpdate(true)).then(resolve, () => resolve(null)).finally(() => window.clearTimeout(timeout))
   }).then(state => {
+    if (dailyCheck?.result !== result) return null
     if (!state?.available) {
       writeStored(APP_UPDATE_REMINDER_CHECKED_KEY, day)
-      if (dailyCheck?.result === result) dailyCheck = null
+      dailyCheck = null
     }
     return state
   })
@@ -74,14 +77,32 @@ export function useAppUpdateReminder(ready: boolean, loadUpdate: (forceRefresh?:
     return saved
   }, [])
   const dismiss = useCallback(() => setAvailable(null), [])
+  const changeChannel = useCallback(async (save: () => Promise<AppUpdateState>): Promise<AppUpdateState> => {
+    channelRevision++
+    channelChangesPending++
+    dailyCheck = null
+    setAvailable(null)
+    setChecking(false)
+    try {
+      const next = await save()
+      if (readStored(APP_UPDATE_REMINDER_CHECKED_KEY) === updateReminderDay()) {
+        writeStored(APP_UPDATE_REMINDER_CHECKED_KEY, '')
+      }
+      return next
+    } finally {
+      channelChangesPending--
+      setPersistent(storageAvailable)
+    }
+  }, [])
 
   useEffect(() => {
     if (!ready || !enabled) return
     let active = true
     let request = 0
     const check = (): void => {
-      if (document.visibilityState === 'hidden') return
+      if (channelChangesPending > 0 || document.visibilityState === 'hidden') return
       const current = ++request
+      const checkedChannelRevision = channelRevision
       const day = updateReminderDay()
       if (readStored(APP_UPDATE_REMINDER_SHOWN_KEY) === day) {
         setChecking(false)
@@ -91,7 +112,7 @@ export function useAppUpdateReminder(ready: boolean, loadUpdate: (forceRefresh?:
       setChecking(true)
       const result = checkOnce(day, loadUpdate)
       void result.then(state => {
-        if (!active || current !== request) return
+        if (!active || current !== request || checkedChannelRevision !== channelRevision) return
         setChecking(false)
         if (state?.available && document.visibilityState !== 'hidden' && day === updateReminderDay()) {
           writeStored(APP_UPDATE_REMINDER_SHOWN_KEY, day)
@@ -112,5 +133,5 @@ export function useAppUpdateReminder(ready: boolean, loadUpdate: (forceRefresh?:
     }
   }, [ready, enabled, loadUpdate])
 
-  return { enabled, setEnabled, available: ready && enabled ? available : null, dismiss, checking: enabled && checking, storageAvailable: persistent }
+  return { enabled, setEnabled, available: ready && enabled ? available : null, dismiss, changeChannel, checking: enabled && checking, storageAvailable: persistent }
 }

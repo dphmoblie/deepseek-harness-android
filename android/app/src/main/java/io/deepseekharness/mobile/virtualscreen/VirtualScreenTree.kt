@@ -287,8 +287,9 @@ object VirtualScreenTree {
                     emptyList(),
                 ),
             )
+        val allowSensitive = service.allowSensitiveWindows()
         val focused = windowRoot.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
-        val hasFocusedEditable = focused != null && focused.isEditable && !focused.isPassword
+        val hasFocusedEditable = focused != null && focused.isEditable && (allowSensitive || !focused.isPassword)
         val candidate = findFocusable(windowRoot)
         val hasFocusTarget = hasFocusedEditable || candidate != null
         // 上面三个节点都只用于判定「有没有候选输入框」：查完立刻回收，绝不交给执行层持有，
@@ -598,9 +599,10 @@ object VirtualScreenTree {
      */
     private fun imeText(service: DeepSeekAccessibilityService, displayId: Int): String {
         val root = runCatching { service.displayImeRootFor(displayId) }.getOrNull() ?: return ""
+        val allowSensitive = service.allowSensitiveWindows()
         return try {
             val candidates = ArrayList<VirtualScreenImeText.Candidate>()
-            collectImeCandidates(root, 0, candidates)
+            collectImeCandidates(root, 0, candidates, allowSensitive)
             VirtualScreenImeText.pick(candidates)
         } catch (_: Throwable) {
             ""
@@ -614,12 +616,13 @@ object VirtualScreenTree {
         node: AccessibilityNodeInfo,
         depth: Int,
         out: MutableList<VirtualScreenImeText.Candidate>,
+        allowSensitive: Boolean = false,
     ) {
         if (out.size >= VirtualScreenImeText.MAX_NODES) return
         val text = runCatching { node.text?.toString().orEmpty() }.getOrDefault("")
-        // 密码类候选不输出：输入法里也可能出现密码框的候选，那不该进 AI 的上下文。
+        // 密码类候选默认不输出；仅在显式开启「无障碍读取与操作敏感窗口及密码框」时放行。
         val password = runCatching { node.isPassword }.getOrDefault(false)
-        if (!password) {
+        if (allowSensitive || !password) {
             out.add(
                 VirtualScreenImeText.Candidate(
                     text = text,
@@ -635,7 +638,7 @@ object VirtualScreenTree {
             if (out.size >= VirtualScreenImeText.MAX_NODES) return
             val child = runCatching { node.getChild(index) }.getOrNull() ?: continue
             try {
-                collectImeCandidates(child, depth + 1, out)
+                collectImeCandidates(child, depth + 1, out, allowSensitive)
             } finally {
                 runCatching { child.recycle() }
             }

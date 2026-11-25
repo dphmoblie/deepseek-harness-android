@@ -361,5 +361,7 @@ class AutomationTaskLedgerTest {
         // 在计划期回一句「包名不合法」会把「不允许」说成「你写错了」。
         val reserved = AutomationTaskLedger().plan("task-1", "com.android.settings", "d1", listOf(spec("s1")))
         assertTrue("保留包名在计划期不拦：$reserved", reserved is AutomationTaskGate.Proceed)
+        val framework = AutomationTaskLedger().plan("task-2", "android", "d1", listOf(spec("s1")))
+        assertTrue("系统框架包 android 在计划期不拦：$framework", framework is AutomationTaskGate.Proceed)
     }
 }

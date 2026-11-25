@@ -1124,6 +1124,7 @@ class RootSecurityTest {
             port = 0,
             shellEnabled = { false },
             rootStatusProvider = { strictRootStatus },
+            highRiskPermissionsProvider = { HighRiskPermissions.COMMAND_CATEGORIES_ONLY },
         )
         bridge.start()
         try {
@@ -1223,6 +1224,499 @@ class RootSecurityTest {
             RootApprovalCoordinator.presenter = prevPresenter
             RootApprovalCoordinator.dismissNotificationHook = prevDismiss
             RootApprovalRegistry.clear()
+        }
+    }
+
+    @Test
+    fun `高危权限 17 项细分硬编码拦截规则逐类验证`() {
+        val sampleByCategory: Map<HighRiskCategory, String> = mapOf(
+            HighRiskCategory.CORE_PARTITION_WRITE to "echo x > /system/etc/hosts",
+            HighRiskCategory.SYSTEM_DATA_DESTRUCTION to "rm -rf /data/system",
+            HighRiskCategory.SHARED_STORAGE_DELETE to "rm -rf /sdcard/DCIM",
+            HighRiskCategory.APP_PRIVATE_DATA_MODIFY to "rm -rf /data/data/com.example.app/files",
+            HighRiskCategory.SYSTEM_PERMISSIONS_OWNER to "chmod 777 /system/bin/sh",
+            HighRiskCategory.DEV_NODE_WRITE to "echo x > /dev/kmsg",
+            HighRiskCategory.DYNAMIC_SHELL_EVAL to "eval \"echo hi\"",
+            HighRiskCategory.FILESYSTEM_MOUNT to "mount -o remount,rw /data",
+            HighRiskCategory.RAW_DEVICE_IMAGE_TOOL to "dd if=/dev/zero of=/data/local/tmp/x",
+            HighRiskCategory.KERNEL_MODULE_CONTROL to "insmod /data/local/tmp/mod.ko",
+            HighRiskCategory.KERNEL_SYSFS_PROC_WRITE to "echo 1 > /proc/sys/kernel/perf_event_paranoid",
+            HighRiskCategory.SYSTEM_PROPERTIES_WRITE to "setprop dsh.probe 1",
+            HighRiskCategory.PACKAGE_INSTALL_REMOVE to "pm uninstall com.example.app",
+            HighRiskCategory.SYSTEM_SERVICE_PRIVILEGE to "stop zygote",
+            HighRiskCategory.SELINUX_SECURITY_POLICY to "setenforce 0",
+            HighRiskCategory.DEVICE_POWER_CONTROL to "reboot",
+            HighRiskCategory.BLOCK_FLASH_MEMORY_RAW to "cat /dev/block/sda",
+        )
+        assertEquals("必须覆盖全部 17 类高危命令细分权限", HighRiskCategory.COMMAND_CATEGORIES.size, sampleByCategory.size)
+        assertEquals("应包含 8 类宿主能力放开细分开关", 8, HighRiskCategory.HOST_UNLOCK_CATEGORIES.size)
+        assertEquals("总计应为 25 类高危权限细分开关", 25, HighRiskCategory.entries.size)
+
+        // 1. 低风险常规命令在总开关关闭时依然放行
+        val safeCommands = listOf(
+            "ls -la /data/data",
+            "cat /proc/version",
+            "getprop ro.product.model",
+            "pm list packages",
+            "chmod +x /data/local/tmp/run.sh",
+            "rm -rf /data/local/tmp/build",
+            "rm -f /data/local/tmp/*.tmp",
+            "tar -czf /sdcard/backup.tar.gz /data/data/com.test.app/files",
+            "cp /data/data/com.test.app/files/log.txt /data/local/tmp/log.txt",
+        )
+        for (cmd in safeCommands) {
+            val assessment = RootCommandGuard.verifyPermitted(
+                cmd,
+                RootCommandGuard.Profile.STRICT,
+                HighRiskPermissions.ALL_DISABLED,
+            )
+            assertTrue("安全命令不应命中高危分类: $cmd", assessment.categories.isEmpty())
+        }
+
+        // 额外变体：cp/sed -i 修改应用私有数据、/storage/self/primary 别名删除必须命中对应分类
+        assertTrue(
+            HighRiskCategory.APP_PRIVATE_DATA_MODIFY in RootCommandGuard.classify(
+                "cp /data/local/tmp/x /data/data/com.example.app/shared_prefs/a.xml",
+            ).categories,
+        )
+        assertTrue(
+            HighRiskCategory.APP_PRIVATE_DATA_MODIFY in RootCommandGuard.classify(
+                "sed -i 's/false/true/' /data/data/com.example.app/shared_prefs/a.xml",
+            ).categories,
+        )
+        assertTrue(
+            HighRiskCategory.SHARED_STORAGE_DELETE in RootCommandGuard.classify(
+                "rm -rf /storage/self/primary/DCIM",
+            ).categories,
+        )
+        // /sdcard 通配删除仅归入 SHARED_STORAGE_DELETE，不误伤 SYSTEM_DATA_DESTRUCTION；
+        // 但包含路径穿越的 /sdcard/../data 仍归入 SYSTEM_DATA_DESTRUCTION。
+        assertEquals(
+            listOf(HighRiskCategory.SHARED_STORAGE_DELETE),
+            RootCommandGuard.classify("rm -rf /sdcard/*").categories,
+        )
+        assertEquals(
+            listOf(HighRiskCategory.SHARED_STORAGE_DELETE),
+            RootCommandGuard.classify("rm -f /sdcard/Download/*.apk").categories,
+        )
+        assertTrue(
+            HighRiskCategory.SYSTEM_DATA_DESTRUCTION in RootCommandGuard.classify("rm -rf /sdcard/../data").categories,
+        )
+        assertTrue(
+            HighRiskCategory.SYSTEM_DATA_DESTRUCTION in RootCommandGuard.classify("rm -rf /data/local/tmp/../../system").categories,
+        )
+
+        // 绕过回归：行内环境变量赋值、带参包装器、SAR 路径、find -exec、unlink/rmdir、SELinux tee/cp
+        val bypassRegressions: List<Pair<String, HighRiskCategory>> = listOf(
+            "A=1 reboot" to HighRiskCategory.DEVICE_POWER_CONTROL,
+            "FOO=1 rm -rf /data" to HighRiskCategory.SYSTEM_DATA_DESTRUCTION,
+            "LANG=C pm uninstall com.example.app" to HighRiskCategory.PACKAGE_INSTALL_REMOVE,
+            "X=1 su -c id" to HighRiskCategory.SYSTEM_SERVICE_PRIVILEGE,
+            "A=1 setprop ro.debuggable 1" to HighRiskCategory.SYSTEM_PROPERTIES_WRITE,
+            "A=1 mount -o remount,rw /data" to HighRiskCategory.FILESYSTEM_MOUNT,
+            "env -i reboot" to HighRiskCategory.DEVICE_POWER_CONTROL,
+            "timeout 5 rm -rf /data" to HighRiskCategory.SYSTEM_DATA_DESTRUCTION,
+            "nice -n 10 pm clear com.example.app" to HighRiskCategory.PACKAGE_INSTALL_REMOVE,
+            "busybox -- reboot" to HighRiskCategory.DEVICE_POWER_CONTROL,
+            "/bin/reboot" to HighRiskCategory.DEVICE_POWER_CONTROL,
+            "/sbin/reboot" to HighRiskCategory.DEVICE_POWER_CONTROL,
+            "/bin/rm -rf /data" to HighRiskCategory.SYSTEM_DATA_DESTRUCTION,
+            "/system/xbin/su -c id" to HighRiskCategory.SYSTEM_SERVICE_PRIVILEGE,
+            "find /data/system -exec rm -rf {} +" to HighRiskCategory.SYSTEM_DATA_DESTRUCTION,
+            "find /sdcard/DCIM -exec rm -rf {} \\;" to HighRiskCategory.SHARED_STORAGE_DELETE,
+            "unlink /data/system/locksettings.db" to HighRiskCategory.SYSTEM_DATA_DESTRUCTION,
+            "rmdir /sdcard/DCIM" to HighRiskCategory.SHARED_STORAGE_DELETE,
+            "unlink /data/data/com.example.app/files/a" to HighRiskCategory.APP_PRIVATE_DATA_MODIFY,
+            "echo 0 | tee /sys/fs/selinux/enforce" to HighRiskCategory.SELINUX_SECURITY_POLICY,
+            "cp /data/local/tmp/z /sys/fs/selinux/enforce" to HighRiskCategory.SELINUX_SECURITY_POLICY,
+        )
+        for ((script, expectedCategory) in bypassRegressions) {
+            val assessment = RootCommandGuard.classify(script, RootCommandGuard.Profile.MAXIMUM)
+            assertTrue(
+                "绕过变体必须命中 $expectedCategory: $script（实际命中 ${assessment.categories}）",
+                expectedCategory in assessment.categories,
+            )
+            try {
+                RootCommandGuard.verifyPermitted(script, RootCommandGuard.Profile.MAXIMUM, HighRiskPermissions.ALL_DISABLED)
+                fail("绕过变体在总开关关闭时必须被硬拦截: $script")
+            } catch (e: RuntimeFailure) {
+                assertEquals("ROOT_SECURITY_VIOLATION", e.code)
+            }
+        }
+        assertEquals(RootCommandGuard.RiskTier.HIGH, HighRiskCategory.SYSTEM_PROPERTIES_WRITE.tier)
+
+        // 2. 逐类校验：总开关关必拦；总开关开但该细分关必拦；仅开对应细分时放行
+        for ((category, script) in sampleByCategory) {
+            // 总开关关
+            try {
+                RootCommandGuard.verifyPermitted(script, RootCommandGuard.Profile.MAXIMUM, HighRiskPermissions.ALL_DISABLED)
+                fail("总开关关闭时必须硬拦截: $category -> $script")
+            } catch (e: RuntimeFailure) {
+                assertEquals("ROOT_SECURITY_VIOLATION", e.code)
+                assertTrue(e.message?.contains("总开关已关闭") == true)
+            }
+
+            // 总开关开，但所有细分项都关
+            val masterOnly = HighRiskPermissions(enabled = true)
+            try {
+                RootCommandGuard.verifyPermitted(script, RootCommandGuard.Profile.MAXIMUM, masterOnly)
+                fail("细分开关关闭时必须硬拦截: $category -> $script")
+            } catch (e: RuntimeFailure) {
+                assertEquals("ROOT_SECURITY_VIOLATION", e.code)
+                assertTrue(e.message?.contains("未开启高危权限细分开关") == true)
+            }
+
+            // 仅开启命中的所有分类（少数命令如 echo x > /system/etc/hosts 只命中一类，部分命令可能跨两类）
+            val matchedCats = RootCommandGuard.classify(script, RootCommandGuard.Profile.MAXIMUM).categories
+            assertTrue("样本命令应命中自身分类 $category: $script", category in matchedCats)
+            val onlyMatched = HighRiskPermissions(
+                enabled = true,
+                categories = HighRiskCategory.entries.associateWith { it in matchedCats },
+            )
+            RootCommandGuard.verifyPermitted(script, RootCommandGuard.Profile.MAXIMUM, onlyMatched)
+        }
+
+        // 3. 组合脚本命中「已开启分类 + 未开启分类」必须依然拦截
+        val partialPerms = HighRiskPermissions(
+            enabled = true,
+            categories = HighRiskCategory.entries.associateWith { it == HighRiskCategory.SYSTEM_PROPERTIES_WRITE },
+        )
+        try {
+            RootCommandGuard.verifyPermitted(
+                "setprop dsh.probe 1 && reboot",
+                RootCommandGuard.Profile.MAXIMUM,
+                partialPerms,
+            )
+            fail("组合脚本只要命中任一未开启细分项就必须硬拦截")
+        } catch (e: RuntimeFailure) {
+            assertEquals("ROOT_SECURITY_VIOLATION", e.code)
+            assertTrue(e.message?.contains(HighRiskCategory.DEVICE_POWER_CONTROL.title) == true)
+        }
+    }
+
+    @Test
+    fun `DeviceBridgeServer 在高危权限关闭时直接硬拦截 Root、shellApproved 与 Shizuku 通道`() {
+        val prevLauncher = RootCommandRunner.processLauncher
+        val launched = mutableListOf<List<String>>()
+        RootCommandRunner.processLauncher = { argv ->
+            launched += argv
+            FakeProcess("ran-ok\n", 0)
+        }
+        val token = "B".repeat(43)
+        var currentPermissions = HighRiskPermissions.ALL_DISABLED
+        var useRoot = true
+        val strictRootStatus = RootEngineAccess.Status(
+            enabled = true,
+            mode = RootEngineAccess.Mode.READ_WRITE,
+            guardProfile = RootCommandGuard.Profile.MAXIMUM,
+            kernelSuStatus = KernelSuProbe.STATUS_READY,
+            reason = KernelSuProbe.REASON_READY,
+            degraded = false,
+            degradations = emptyList(),
+            suVersion = "3.1.0:KernelSU",
+        )
+        val bridge = DeviceBridgeServer(
+            shizuku = null,
+            runner = DeviceCommandRunner { _, _ -> },
+            token = token,
+            port = 0,
+            shellEnabled = { true },
+            rootStatusProvider = { if (useRoot) strictRootStatus else null },
+            highRiskPermissionsProvider = { currentPermissions },
+        )
+        bridge.start()
+        try {
+            fun post(command: String, param: String): JSONObject {
+                val conn = URL("http://127.0.0.1:${bridge.localPort}/device-command").openConnection() as HttpURLConnection
+                conn.requestMethod = "POST"
+                conn.setRequestProperty("Content-Type", "application/json")
+                conn.setRequestProperty("Authorization", "Bearer $token")
+                conn.doOutput = true
+                val payload = JSONObject().put("command", command).put("param", param).toString().toByteArray(StandardCharsets.UTF_8)
+                conn.outputStream.use { it.write(payload) }
+                val body = conn.inputStream.bufferedReader(StandardCharsets.UTF_8).readText()
+                return JSONObject(body)
+            }
+
+            // 1. 总开关关闭：Root shell 直接硬拦截，不发 challenge、不拉 su
+            val rootBlocked = post("shell", "setprop dsh.probe 1")
+            assertFalse(rootBlocked.getBoolean("ok"))
+            assertEquals("ROOT_SECURITY_VIOLATION", rootBlocked.getString("errorCode"))
+            assertEquals(0, launched.size)
+
+            // 2. 总开关关闭：shellApproved 也直接硬拦截，不能绕过
+            val approvedBlocked = post(
+                "shellApproved",
+                JSONObject().put("script", "setprop dsh.probe 1").put("approvalMode", "dsh_full_access").toString(),
+            )
+            assertFalse(approvedBlocked.getBoolean("ok"))
+            assertEquals("ROOT_SECURITY_VIOLATION", approvedBlocked.getString("errorCode"))
+            assertEquals(0, launched.size)
+
+            // 3. 总开关关闭：Shizuku shell 通道同样直接硬拦截（连 Shizuku 会话都不会建）
+            useRoot = false
+            val shizukuBlocked = post("shell", "pm uninstall com.example.app")
+            assertFalse(shizukuBlocked.getBoolean("ok"))
+            assertEquals("ROOT_SECURITY_VIOLATION", shizukuBlocked.getString("errorCode"))
+
+            // 4. 开启总开关 + 开启 SYSTEM_PROPERTIES_WRITE 后，Root 最大档直接放行 setprop，但仍拦截未开启的 reboot
+            useRoot = true
+            currentPermissions = HighRiskPermissions(
+                enabled = true,
+                categories = HighRiskCategory.entries.associateWith { it == HighRiskCategory.SYSTEM_PROPERTIES_WRITE },
+            )
+            val propAllowed = post("shell", "setprop dsh.probe 1")
+            assertTrue(propAllowed.getBoolean("ok"))
+            assertEquals(1, launched.size)
+
+            val rebootStillBlocked = post("shell", "reboot")
+            assertFalse(rebootStillBlocked.getBoolean("ok"))
+            assertEquals("ROOT_SECURITY_VIOLATION", rebootStillBlocked.getString("errorCode"))
+            assertEquals(1, launched.size)
+        } finally {
+            bridge.stop()
+            RootCommandRunner.processLauncher = prevLauncher
+        }
+    }
+
+    @Test
+    fun `HighRiskPermissionStore parseUpdate 拒绝非法参数并接受增量更新`() {
+        val (enabled, updates) = HighRiskPermissionStore.parseUpdate(
+            enabledRaw = true,
+            categoriesObj = JSONObject().put("device_power_control", true).put("filesystem_mount", false),
+        )
+        assertEquals(true, enabled)
+        assertEquals(mapOf(HighRiskCategory.DEVICE_POWER_CONTROL to true, HighRiskCategory.FILESYSTEM_MOUNT to false), updates)
+
+        try {
+            HighRiskPermissionStore.parseUpdate(null, null)
+            fail("空更新必须拒绝")
+        } catch (e: RuntimeFailure) {
+            assertEquals("HIGH_RISK_PERMISSION_INVALID", e.code)
+        }
+
+        try {
+            HighRiskPermissionStore.parseUpdate(null, JSONObject().put("unknown_cat", true))
+            fail("未知细分项必须拒绝")
+        } catch (e: RuntimeFailure) {
+            assertEquals("HIGH_RISK_PERMISSION_INVALID", e.code)
+        }
+
+        try {
+            HighRiskPermissionStore.parseUpdate("true", null)
+            fail("非布尔总开关必须拒绝")
+        } catch (e: RuntimeFailure) {
+            assertEquals("HIGH_RISK_PERMISSION_INVALID", e.code)
+        }
+    }
+
+    @Test
+    fun `ROOT_UNCONFINED_SANDBOX 与 ROOT_SKIP_APP_CONFIRM 开关开合可完整放开并恢复硬编码防护`() {
+        val prevLauncher = RootCommandRunner.processLauncher
+        val launched = mutableListOf<List<String>>()
+        RootCommandRunner.processLauncher = { argv ->
+            launched += argv
+            FakeProcess("ok\n", 0)
+        }
+        val token = "C".repeat(43)
+        var currentPermissions = HighRiskPermissions.ALL_DISABLED
+        val strictRootStatus = RootEngineAccess.Status(
+            enabled = true,
+            mode = RootEngineAccess.Mode.READ_WRITE,
+            guardProfile = RootCommandGuard.Profile.STRICT,
+            kernelSuStatus = KernelSuProbe.STATUS_READY,
+            reason = KernelSuProbe.REASON_READY,
+            degraded = false,
+            degradations = emptyList(),
+            suVersion = "3.1.0:KernelSU",
+        )
+        val bridge = DeviceBridgeServer(
+            shizuku = null,
+            runner = DeviceCommandRunner { _, _ -> },
+            token = token,
+            port = 0,
+            shellEnabled = { false },
+            rootStatusProvider = { strictRootStatus },
+            highRiskPermissionsProvider = { currentPermissions },
+        )
+        bridge.start()
+        try {
+            fun post(command: String, param: String): JSONObject {
+                val conn = URL("http://127.0.0.1:${bridge.localPort}/device-command").openConnection() as HttpURLConnection
+                conn.requestMethod = "POST"
+                conn.setRequestProperty("Content-Type", "application/json")
+                conn.setRequestProperty("Authorization", "Bearer $token")
+                conn.doOutput = true
+                val payload = JSONObject().put("command", command).put("param", param).toString().toByteArray(StandardCharsets.UTF_8)
+                conn.outputStream.use { it.write(payload) }
+                val body = conn.inputStream.bufferedReader(StandardCharsets.UTF_8).readText()
+                return JSONObject(body)
+            }
+
+            // 1. 开关关闭时，低风险 Root 命令仍经过 RootSecurityWrapper（含 unshare 沙箱包装）
+            val sandboxed = post("shell", "id -u")
+            assertTrue(sandboxed.getBoolean("ok"))
+            assertEquals(1, launched.size)
+            assertTrue("默认必须带 unshare 沙箱包装", launched.last().last().contains("unshare"))
+
+            // 2. 开启 ROOT_UNCONFINED_SANDBOX 后，直接以无沙箱 Base64 方式执行（不含 unshare/setpriv）
+            currentPermissions = HighRiskPermissions(
+                enabled = true,
+                categories = HighRiskCategory.entries.associateWith { it == HighRiskCategory.ROOT_UNCONFINED_SANDBOX },
+            )
+            val unconfined = post("shell", "id -u")
+            assertTrue(unconfined.getBoolean("ok"))
+            assertEquals(2, launched.size)
+            assertFalse("开启解除沙箱后不应再套 unshare", launched.last().last().contains("unshare"))
+            assertFalse("开启解除沙箱后不应再套 setpriv", launched.last().last().contains("setpriv"))
+
+            // 3. 仅开启 ROOT_SKIP_APP_CONFIRM 但未开启 DEVICE_POWER_CONTROL 时，reboot 仍硬拦截
+            currentPermissions = HighRiskPermissions(
+                enabled = true,
+                categories = HighRiskCategory.entries.associateWith { it == HighRiskCategory.ROOT_SKIP_APP_CONFIRM },
+            )
+            val blockedWithoutCategory = post("shell", "reboot")
+            assertFalse(blockedWithoutCategory.getBoolean("ok"))
+            assertEquals("ROOT_SECURITY_VIOLATION", blockedWithoutCategory.getString("errorCode"))
+            assertEquals(2, launched.size)
+
+            // 4. 同时开启 ROOT_SKIP_APP_CONFIRM + DEVICE_POWER_CONTROL 时，跳过应用警告页直通执行
+            currentPermissions = HighRiskPermissions(
+                enabled = true,
+                categories = HighRiskCategory.entries.associateWith {
+                    it == HighRiskCategory.ROOT_SKIP_APP_CONFIRM || it == HighRiskCategory.DEVICE_POWER_CONTROL
+                },
+            )
+            val autoAllowed = post("shell", "reboot")
+            assertTrue(autoAllowed.getBoolean("ok"))
+            assertEquals(3, launched.size)
+
+            // 5. 关闭 ROOT_SKIP_APP_CONFIRM（保留 DEVICE_POWER_CONTROL）后，立刻恢复强制应用警告页审批
+            currentPermissions = HighRiskPermissions(
+                enabled = true,
+                categories = HighRiskCategory.entries.associateWith { it == HighRiskCategory.DEVICE_POWER_CONTROL },
+            )
+            val restoredConfirm = post("shell", "reboot")
+            assertFalse(restoredConfirm.getBoolean("ok"))
+            assertEquals("ROOT_APPROVAL_REQUIRED", restoredConfirm.getString("errorCode"))
+            assertEquals("host_confirm", JSONObject(restoredConfirm.getString("text")).getString("route"))
+            assertEquals(3, launched.size)
+        } finally {
+            bridge.stop()
+            RootCommandRunner.processLauncher = prevLauncher
+        }
+    }
+
+    @Test
+    fun `红队绕过回归：变量命令、通配符、ANSI-C、alias、管道Shell、cd相对路径、前置重定向、高危缺口与误伤修正`() {
+        val redTeamCases: List<Pair<String, HighRiskCategory>> = listOf(
+            // 1. 变量展开、通配符、ANSI-C 转义、mksh alias、管道与二次 Shell
+            "a=reb; b=oot; \$a\$b" to HighRiskCategory.DYNAMIC_SHELL_EVAL,
+            "c=rm; p=/data; \$c -rf \$p" to HighRiskCategory.DYNAMIC_SHELL_EVAL,
+            "/system/bin/reboo?" to HighRiskCategory.DYNAMIC_SHELL_EVAL,
+            "/system/bin/r[e]boot" to HighRiskCategory.DYNAMIC_SHELL_EVAL,
+            "/bin/r? -rf /data" to HighRiskCategory.DYNAMIC_SHELL_EVAL,
+            "\$'\\x72\\x65\\x62\\x6f\\x6f\\x74'" to HighRiskCategory.DYNAMIC_SHELL_EVAL,
+            "alias x=reboot; x" to HighRiskCategory.DYNAMIC_SHELL_EVAL,
+            "echo cmVib290 | base64 -d | sh" to HighRiskCategory.DYNAMIC_SHELL_EVAL,
+            "printf 'rm -rf /data' | /system/bin/sh -s" to HighRiskCategory.DYNAMIC_SHELL_EVAL,
+            "sh -e -c 'echo x'" to HighRiskCategory.DYNAMIC_SHELL_EVAL,
+            "sh -xc 'id'" to HighRiskCategory.DYNAMIC_SHELL_EVAL,
+            "sh /data/local/tmp/a.sh" to HighRiskCategory.DYNAMIC_SHELL_EVAL,
+            "busybox ash -c id" to HighRiskCategory.DYNAMIC_SHELL_EVAL,
+            "awk 'BEGIN{system(\"reboot\")}'" to HighRiskCategory.DYNAMIC_SHELL_EVAL,
+            "python3 -c 'import os; os.system(\"reboot\")'" to HighRiskCategory.DYNAMIC_SHELL_EVAL,
+            // 2. 无前导斜杠的不确定路径
+            "p=/data; rm -rf \$p" to HighRiskCategory.SYSTEM_DATA_DESTRUCTION,
+            "p=/system/etc/hosts; echo x > \$p" to HighRiskCategory.SYSTEM_DATA_DESTRUCTION,
+            // 3. cd / pushd 相对路径绕过全链路
+            "cd / && rm -rf data" to HighRiskCategory.SYSTEM_DATA_DESTRUCTION,
+            "cd /data && rm -rf system" to HighRiskCategory.SYSTEM_DATA_DESTRUCTION,
+            "cd /data && cd system && rm -rf locksettings.db" to HighRiskCategory.SYSTEM_DATA_DESTRUCTION,
+            "cd /data/local/tmp/../../system && rm -f build.prop" to HighRiskCategory.SYSTEM_DATA_DESTRUCTION,
+            "cd /data/local/tmp/../../../system && rm -f build.prop" to HighRiskCategory.CORE_PARTITION_WRITE,
+            "rm -rf /data/local/tmp/../../../system/bin" to HighRiskCategory.CORE_PARTITION_WRITE,
+            "echo evil > /data/adb/modules/../service.d/backdoor.sh" to HighRiskCategory.SYSTEM_DATA_DESTRUCTION,
+            "rm -rf //data" to HighRiskCategory.SYSTEM_DATA_DESTRUCTION,
+            "command reboot" to HighRiskCategory.DEVICE_POWER_CONTROL,
+            "command -p reboot" to HighRiskCategory.DEVICE_POWER_CONTROL,
+            "cd /sdcard && rm -rf DCIM" to HighRiskCategory.SHARED_STORAGE_DELETE,
+            "cd /sdcard && find . -delete" to HighRiskCategory.SHARED_STORAGE_DELETE,
+            "cd /sys/fs/selinux && echo 0 > enforce" to HighRiskCategory.SELINUX_SECURITY_POLICY,
+            "cd /proc && echo b > sysrq-trigger" to HighRiskCategory.DEVICE_POWER_CONTROL,
+            "cd /dev/block && cat sda" to HighRiskCategory.BLOCK_FLASH_MEMORY_RAW,
+            "cd /dev/block && dd if=sda of=/data/local/tmp/dump" to HighRiskCategory.BLOCK_FLASH_MEMORY_RAW,
+            "cd /data/data/com.example.app && rm -rf shared_prefs" to HighRiskCategory.APP_PRIVATE_DATA_MODIFY,
+            "cd /data/adb/service.d && echo evil > pwn.sh" to HighRiskCategory.SYSTEM_DATA_DESTRUCTION,
+            "cd /system && sed -i -e 's/a/b/' build.prop" to HighRiskCategory.CORE_PARTITION_WRITE,
+            // 4. 前置重定向与包装器路径/选项变体
+            "</dev/null reboot" to HighRiskCategory.DEVICE_POWER_CONTROL,
+            "2>/dev/null rm -rf /data" to HighRiskCategory.SYSTEM_DATA_DESTRUCTION,
+            "2>/dev/null pm uninstall com.example.app" to HighRiskCategory.PACKAGE_INSTALL_REMOVE,
+            "</dev/null su -c id" to HighRiskCategory.SYSTEM_SERVICE_PRIVILEGE,
+            "/system/bin/env reboot" to HighRiskCategory.DEVICE_POWER_CONTROL,
+            "busybox env -i -u PATH reboot" to HighRiskCategory.DEVICE_POWER_CONTROL,
+            "/system/vendor/bin/reboot" to HighRiskCategory.DEVICE_POWER_CONTROL,
+            // 5. 高危文件与命令补全
+            "rm -rf /" to HighRiskCategory.SYSTEM_DATA_DESTRUCTION,
+            "rm -rf --no-preserve-root /" to HighRiskCategory.SYSTEM_DATA_DESTRUCTION,
+            "rm -rf /system/bin" to HighRiskCategory.CORE_PARTITION_WRITE,
+            "unlink /vendor/etc/hosts" to HighRiskCategory.CORE_PARTITION_WRITE,
+            "echo evil > /data/adb/service.d/backdoor.sh" to HighRiskCategory.SYSTEM_DATA_DESTRUCTION,
+            "echo x > /data/system/locksettings.db" to HighRiskCategory.SYSTEM_DATA_DESTRUCTION,
+            "cp /data/local/tmp/evil /system/etc/hosts 2>/dev/null" to HighRiskCategory.CORE_PARTITION_WRITE,
+            "cp -t /system/etc /data/local/tmp/hosts" to HighRiskCategory.CORE_PARTITION_WRITE,
+            "tar -xf /data/local/tmp/p.tar -C /system" to HighRiskCategory.CORE_PARTITION_WRITE,
+            "cp /data/local/tmp/x /data/data/com.example.app/shared_prefs/a.xml 2>/dev/null" to HighRiskCategory.APP_PRIVATE_DATA_MODIFY,
+            "rm -rf /data/media/0/Android/data/com.example.app" to HighRiskCategory.APP_PRIVATE_DATA_MODIFY,
+            "find /data/system -ok rm -rf {} +" to HighRiskCategory.SYSTEM_DATA_DESTRUCTION,
+            "echo reboot | su" to HighRiskCategory.SYSTEM_SERVICE_PRIVILEGE,
+            "su 0 reboot" to HighRiskCategory.SYSTEM_SERVICE_PRIVILEGE,
+            "killall system_server" to HighRiskCategory.SYSTEM_SERVICE_PRIVILEGE,
+            "pkill -9 zygote" to HighRiskCategory.SYSTEM_SERVICE_PRIVILEGE,
+            "settings put secure enabled_accessibility_services com.evil/.Svc" to HighRiskCategory.SYSTEM_PROPERTIES_WRITE,
+            "pm grant com.example.app android.permission.READ_SMS" to HighRiskCategory.PACKAGE_INSTALL_REMOVE,
+            "appops set com.example.app RUN_IN_BACKGROUND ignore" to HighRiskCategory.PACKAGE_INSTALL_REMOVE,
+            "dpm set-device-owner com.example.app/.Admin" to HighRiskCategory.PACKAGE_INSTALL_REMOVE,
+            "magiskpolicy --live \"allow untrusted_app * * *\"" to HighRiskCategory.SELINUX_SECURITY_POLICY,
+            "ksud sepolicy check \"allow untrusted_app * * *\"" to HighRiskCategory.SELINUX_SECURITY_POLICY,
+            "dd if=/dev/block/sda of=/data/local/tmp/x" to HighRiskCategory.BLOCK_FLASH_MEMORY_RAW,
+        )
+        for ((script, expectedCategory) in redTeamCases) {
+            val assessment = RootCommandGuard.classify(script, RootCommandGuard.Profile.MAXIMUM)
+            assertTrue(
+                "红队样例必须命中 $expectedCategory: $script（实际命中 ${assessment.categories}）",
+                expectedCategory in assessment.categories,
+            )
+            try {
+                RootCommandGuard.verifyPermitted(script, RootCommandGuard.Profile.MAXIMUM, HighRiskPermissions.ALL_DISABLED)
+                fail("红队样例在总开关关闭时必须被硬拦截: $script")
+            } catch (e: RuntimeFailure) {
+                assertEquals("ROOT_SECURITY_VIOLATION", e.code)
+            }
+        }
+
+        // 误伤修正：合法只读与临时工作目录命令必须保持 LOW（不拦截）
+        val safeRegressions = listOf(
+            "sed -n '1,5p' /system/build.prop",
+            "find /data/local/tmp/build -delete",
+            "find /data/adb/modules/demo -delete",
+            "cd /data && ls -la",
+            "cd /data/local/tmp && rm -rf build",
+            "cd /system && sed -n '1,5p' build.prop",
+            "settings get global adb_enabled",
+            "[ -f /data/local/tmp/a ] && echo ok",
+            "find . -name '*.txt'",
+            "command -v su >/dev/null 2>&1",
+            "command -V reboot",
+        )
+        for (cmd in safeRegressions) {
+            val assessment = RootCommandGuard.verifyPermitted(
+                cmd,
+                RootCommandGuard.Profile.STRICT,
+                HighRiskPermissions.ALL_DISABLED,
+            )
+            assertTrue("合法只读/工作区命令不应被误杀: $cmd（实际命中 ${assessment.categories}）", assessment.categories.isEmpty())
         }
     }
 

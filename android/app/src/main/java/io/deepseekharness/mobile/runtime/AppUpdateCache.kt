@@ -12,8 +12,8 @@ internal class AppUpdateCache(
     private val now: () -> Long = System::currentTimeMillis,
 ) {
     interface Storage {
-        fun read(): String?
-        fun write(value: String)
+        fun read(key: String): String?
+        fun write(key: String, value: String)
     }
 
     private data class Snapshot(
@@ -40,6 +40,29 @@ internal class AppUpdateCache(
             .put("channel", channel.id)
     }
 
+    /**
+     * 纯本地状态（绝不触网）：立即返回本机已装版本、安装权限与已持久化频道；
+     * 仅当缓存里存在同版本同频道的有效快照时附带 `cached`/`checkedAt`/`available`，
+     * 绝不泄露旧版本或另一频道的候选。远端刷新失败时可带 `refreshFailed = true`。
+     */
+    fun localState(
+        installed: InstalledAppInfo,
+        installAllowed: Boolean,
+        channel: AppUpdateChannel,
+        refreshFailed: Boolean = false,
+    ): JSONObject {
+        val stored = synchronized(this) { read(channel)?.takeIf { usable(it, installed, channel) } }
+        val payload = catalog.state(installed, installAllowed, stored?.available)
+            .put("channel", channel.id)
+        if (stored != null) {
+            payload.put("cached", true).put("checkedAt", stored.checkedAt)
+        }
+        if (refreshFailed) {
+            payload.put("refreshFailed", true)
+        }
+        return payload
+    }
+
     fun availableRelease(installed: InstalledAppInfo, channel: AppUpdateChannel): AppReleaseCatalog.Release? =
         lookup(installed, channel, forceRefresh = false).snapshot.available
 
@@ -48,7 +71,7 @@ internal class AppUpdateCache(
         val pending: CompletableFuture<Snapshot>
         val refresh: Boolean
         synchronized(this) {
-            val stored = read()
+            val stored = read(channel)
             if (!forceRefresh && stored != null && usable(stored, installed, channel)) return Result(stored, cached = true)
             val existing = inFlight[key]
             if (existing == null) {
@@ -63,7 +86,7 @@ internal class AppUpdateCache(
             try {
                 val available = catalog.availableRelease(installed, channel)
                 val snapshot = Snapshot(installed, channel, now(), available)
-                synchronized(this) { storage.write(encode(snapshot)) }
+                synchronized(this) { storage.write(snapshotKey(channel), encode(snapshot)) }
                 pending.complete(snapshot)
             } catch (error: Throwable) {
                 // A failed forced check must not replace a previously verified release.
@@ -89,8 +112,10 @@ internal class AppUpdateCache(
             ?: (now() - snapshot.checkedAt < NO_UPDATE_TTL_MILLIS)
     }
 
-    private fun read(): Snapshot? = try {
-        val text = storage.read()
+    private fun snapshotKey(channel: AppUpdateChannel): String = "snapshot_${channel.id}"
+
+    private fun read(channel: AppUpdateChannel): Snapshot? = try {
+        val text = storage.read(snapshotKey(channel)) ?: storage.read(LEGACY_SNAPSHOT_KEY)
         if (text == null || text.length > MAX_CACHE_CHARS) null else decode(JSONObject(text))
     } catch (_: Exception) {
         null
@@ -145,6 +170,7 @@ internal class AppUpdateCache(
     companion object {
         const val NO_UPDATE_TTL_MILLIS = 24 * 60 * 60 * 1000L
         const val MAX_CACHE_CHARS = 32 * 1024
+        private const val LEGACY_SNAPSHOT_KEY = "snapshot"
         private var instance: AppUpdateCache? = null
 
         @Synchronized
@@ -152,9 +178,9 @@ internal class AppUpdateCache(
             instance?.let { return it }
             val preferences = context.applicationContext.getSharedPreferences("dsh-app-update-cache", Context.MODE_PRIVATE)
             return AppUpdateCache(object : Storage {
-                override fun read(): String? = preferences.getString("snapshot", null)
-                override fun write(value: String) {
-                    preferences.edit().putString("snapshot", value).apply()
+                override fun read(key: String): String? = preferences.getString(key, null)
+                override fun write(key: String, value: String) {
+                    preferences.edit().putString(key, value).apply()
                 }
             }).also { instance = it }
         }

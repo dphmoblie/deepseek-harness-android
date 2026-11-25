@@ -391,15 +391,21 @@ class RuntimeLaunchResolver(
     /** 投递区门面；只用于追加可选绑定与判断可用性，不接触凭据路径。 */
     private fun mailbox(): RuntimeMailbox = RuntimeMailbox(store)
 
+    /** 整卡直挂可选绑定提供者：仅在显式开启高危开关 `STORAGE_FULL_SDCARD_MOUNT` 时将共享存储根挂入 `/mnt/sdcard`。 */
+    private val fullSdcardBind: RuntimeFullSdcardBindProvider by lazy {
+        RuntimeFullSdcardBindProvider.from(appContext, store)
+    }
+
     /**
      * 可选绑定提供者，**顺序即绑定顺序**：投递区（`/mnt/inbox`、`/mnt/outbox`）在前，
-     * 用户目录白名单（`/mnt/user/<序号>`）在后。
+     * 用户目录白名单（`/mnt/user/<序号>`）居中，整卡直挂（`/mnt/sdcard`，默认关闭）在后。
      *
-     * 两条链路在「不可用返回空列表」「可用性/内容折进缓存键」上共用同一个接口
+     * 三条链路在「不可用返回空列表」「可用性/内容折进缓存键」上共用同一个接口
      * （见 `OptionalBindProvider`），这里只负责把它们按固定顺序摆好；顺序变了，
      * 启动档里的挂载顺序与缓存键都会跟着变，因此不要随手调整。
      */
-    private val optionalBinds: List<OptionalBindProvider> get() = listOf(mailbox(), storageDirs)
+    private val optionalBinds: List<OptionalBindProvider>
+        get() = listOf(mailbox(), storageDirs, fullSdcardBind)
 
     private fun probeProfiles(
         initial: CachedProfile,
@@ -484,7 +490,7 @@ class RuntimeLaunchResolver(
             manifest.version,
             manifest.rootfs.sha256,
             PROFILE_KEY_SANDBOX_BIND,
-        ) + optionalBinds.map { it.cacheToken() }
+        ) + optionalBinds.mapNotNull { it.cacheToken().takeIf(String::isNotEmpty) }
         ).joinToString(":")
 
     private fun throwIfStartCancelled(externalCancellation: () -> Boolean) {
@@ -595,7 +601,7 @@ internal object RuntimeDiagnostics {
                 ClassifiedFailure("PROOT_PTRACE_DENIED", "系统内核拒绝 PRoot 所需的 ptrace 操作")
             "seccomp" in output && ("not supported" in output || "operation not permitted" in output) ->
                 ClassifiedFailure("PROOT_SECCOMP_UNAVAILABLE", "系统内核的 seccomp 策略与 PRoot 不兼容")
-            "proot error" in output || "execve(" in output || "loader" in output ->
+            isProotExecFailureOutput(output) ->
                 ClassifiedFailure("PROOT_GUEST_EXEC_FAILED", "PRoot 无法加载 Ubuntu 程序")
             else -> null
         }
@@ -640,11 +646,22 @@ internal object RuntimeDiagnostics {
                 ClassifiedFailure("HARNESS_NATIVE_MODULE_FAILED", "Harness 原生模块无法在当前设备运行")
             "illegal instruction" in normalized ->
                 ClassifiedFailure("NODE_CPU_UNSUPPORTED", "设备 CPU 无法执行内置 Node.js")
-            "proot error" in normalized || "execve(" in normalized || "loader" in normalized ->
+            isProotExecFailureOutput(normalized) ->
                 ClassifiedFailure("PROOT_GUEST_EXEC_FAILED", "PRoot 无法加载 Ubuntu 程序")
             else -> ClassifiedFailure("HARNESS_EXITED", "Harness 在完成启动前已退出")
         }
     }
+
+    /**
+     * 仅匹配 PRoot 自身的加载失败特征，不能匹配泛化的 `loader` 子串：
+     * Node/Cordis 的任何告警堆栈都包含 `@deepseek-ai+cordis-plugin-loader` 或 `esm/loader`，
+     * 泛化匹配会把普通插件告警误判为 `PROOT_GUEST_EXEC_FAILED`。
+     */
+    private fun isProotExecFailureOutput(normalized: String): Boolean =
+        "proot error" in normalized ||
+            "execve(" in normalized ||
+            "proot_loader" in normalized ||
+            "libdsh_proot_loader" in normalized
 }
 
 internal object ProcessProbe {

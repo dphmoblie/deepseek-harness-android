@@ -13,6 +13,7 @@ import android.util.TypedValue
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
+import android.view.WindowManager
 import android.widget.Button
 import android.widget.CheckBox
 import android.widget.LinearLayout
@@ -60,6 +61,8 @@ class RootCommandApprovalActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // 禁止截屏与副屏录制，防止 AI 通过视觉通道抓取或诱导点击高危 Root 确认页。
+        window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
         AppOrientationPreference.apply(this)
         AppThemePreference.applySafely(this)
 
@@ -92,17 +95,22 @@ class RootCommandApprovalActivity : AppCompatActivity() {
         AppForeground.onActivityResumed(this)
         val id = requestId
         if (!settled && (id == null || RootApprovalCoordinator.currentRequest(id) == null)) {
+            activeApprovalWindowOpen = false
             settled = true
             finish()
+            return
         }
+        activeApprovalWindowOpen = !settled
     }
 
     override fun onPause() {
+        activeApprovalWindowOpen = false
         AppForeground.onActivityPaused(this)
         super.onPause()
     }
 
     override fun onStop() {
+        activeApprovalWindowOpen = false
         AppForeground.onActivityStopped()
         super.onStop()
     }
@@ -113,6 +121,7 @@ class RootCommandApprovalActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        activeApprovalWindowOpen = false
         pendingBiometricPrompt?.cancelAuthentication()
         pendingBiometricPrompt = null
         if (!settled && !isChangingConfigurations) {
@@ -146,6 +155,7 @@ class RootCommandApprovalActivity : AppCompatActivity() {
 
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
+            filterTouchesWhenObscured = true
             setBackgroundColor(pageBg)
             layoutParams = ViewGroup.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
@@ -406,6 +416,7 @@ class RootCommandApprovalActivity : AppCompatActivity() {
     private fun settleAndFinish(outcome: RootApprovalCoordinator.Outcome) {
         if (settled) return
         settled = true
+        activeApprovalWindowOpen = false
         requestId?.let { RootApprovalCoordinator.resolve(it, outcome) }
         finish()
     }
@@ -454,6 +465,10 @@ class RootCommandApprovalActivity : AppCompatActivity() {
 
     companion object {
         private const val EXTRA_REQUEST_ID = "io.deepseekharness.mobile.root.APPROVAL_REQUEST_ID"
+
+        /** 当前是否正展示 Root 高危命令警告确认页：供无障碍服务硬拦截，彻底阻断 AI 自我点击确认。 */
+        @Volatile
+        internal var activeApprovalWindowOpen: Boolean = false
 
         fun createIntent(context: Context, requestId: String): Intent =
             Intent(context, RootCommandApprovalActivity::class.java).apply {

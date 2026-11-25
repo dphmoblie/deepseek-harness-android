@@ -31,6 +31,8 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.ViewCompat
+import androidx.webkit.WebSettingsCompat
+import androidx.webkit.WebViewFeature
 import io.deepseekharness.mobile.runtime.HarnessAccess
 import io.deepseekharness.mobile.runtime.PageNetworkAccess
 import io.deepseekharness.mobile.runtime.RuntimeFailure
@@ -52,6 +54,8 @@ class HarnessActivity : AppCompatActivity() {
     private var entryUrlForRetry: String? = null
     /** 已经装过 document-start 补丁的源；同一个 WebView 重绑定时不重复安装。 */
     private var polyfilledOriginRule: String? = null
+    /** 已经装过 document-start 主题脚本的源；换源时重装（主题值变化由 HarnessThemeBridge 自己换）。 */
+    private var themedOriginRule: String? = null
     /** The OAuth page is opened by Harness with window.open(); keep its transport WebView detached. */
     private var authorizationPopup: WebView? = null
     private val pageRetryHandler = Handler(Looper.getMainLooper())
@@ -236,6 +240,12 @@ class HarnessActivity : AppCompatActivity() {
             // fontScale 不在 configChanges 里，系统改字号会重建本 Activity，因此读一次即可。
             textZoom = AppTextScale.percentOf(resources.configuration.fontScale)
         }
+        // 页面自带完整的两套调色板（官方 ui-theme），算法加深会在这个基础上再反相一次；
+        // 而且它的判定发生在页面加载时、重载后重新判定——表现正好是「刷新前后方向相反」。
+        // 关掉之后，深浅只由外壳同步过来的那一个结论（HarnessThemeBridge）决定。
+        if (WebViewFeature.isFeatureSupported(WebViewFeature.ALGORITHMIC_DARKENING)) {
+            runCatching { WebSettingsCompat.setAlgorithmicDarkeningAllowed(webView.settings, false) }
+        }
         // 没有 WebChromeClient 时 <input type="file"> 点了毫无反应：这是插件"从相册导入"
         // 这类入口在手机上完全不可用的根因（皮肤中心只能靠手填容器路径绕过）。
         webView.webChromeClient = HarnessWebChromeClient()
@@ -337,6 +347,13 @@ class HarnessActivity : AppCompatActivity() {
         if (polyfilledOriginRule != originRule) {
             HarnessPolyfill.installDocumentStart(webView, originRule)
             polyfilledOriginRule = originRule
+        }
+        // 主题也要在页面脚本之前落地：只在 onPageFinished 注入时，页面 boot 脚本已经按它
+        // 自己的明暗偏好画过一帧（「刷新前后方向相反」的观感来源之一）。注册的那份脚本带的是
+        // 当前主题常量，设置里改主题时由 HarnessThemeBridge 自己换掉；这里只负责首次安装。
+        if (themedOriginRule != originRule) {
+            HarnessThemeBridge.installDocumentStart(webView, originRule)
+            themedOriginRule = originRule
         }
         clearHttpAuthCredentialsAsync()
         val cookies = CookieManager.getInstance().apply {

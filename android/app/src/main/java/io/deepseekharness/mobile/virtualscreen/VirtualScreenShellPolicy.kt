@@ -49,9 +49,19 @@ object VirtualScreenShellPolicy {
      * 不该随副屏开没开而变——同一个坏脚本在任何时刻都必须报同一个错误码，
      * 模型才学得到稳定规则，而不是把「脚本写错」误读成「副屏不可用」。
      */
-    fun plan(script: String?, requestedDisplayId: Int?, active: Boolean, sessionDisplayId: Int): Plan {
+    fun plan(
+        script: String?,
+        requestedDisplayId: Int?,
+        active: Boolean,
+        sessionDisplayId: Int,
+        allowMainDisplay: Boolean = false,
+    ): Plan {
         val body = requireScript(script)
-        val displayId = resolveDisplayId(requireSessionDisplayId(active, sessionDisplayId), requestedDisplayId)
+        val displayId = if (allowMainDisplay && requestedDisplayId == 0) {
+            0
+        } else {
+            resolveDisplayId(requireSessionDisplayId(active, sessionDisplayId), requestedDisplayId, allowMainDisplay)
+        }
         return Plan(displayId, command(body, displayId))
     }
 
@@ -94,13 +104,18 @@ object VirtualScreenShellPolicy {
      *   一个码），但消息写清原因——主屏请继续用 `mobile_device_shell` / `mobile_device_tap`
      *   等既有工具，它们本来就打在主屏上。
      */
-    fun resolveDisplayId(sessionDisplayId: Int, requestedDisplayId: Int?): Int {
+    fun resolveDisplayId(
+        sessionDisplayId: Int,
+        requestedDisplayId: Int?,
+        allowMainDisplay: Boolean = false,
+    ): Int {
         if (requestedDisplayId == null) return sessionDisplayId
-        if (requestedDisplayId == 0) {
-            throw RuntimeFailure(DISPLAY_INVALID_CODE, "displayId=0 是主屏；本通道只服务副屏，主屏请使用既有设备工具")
-        }
         if (requestedDisplayId < 0) {
             throw RuntimeFailure(DISPLAY_INVALID_CODE, "displayId 不能为负数")
+        }
+        if (allowMainDisplay && requestedDisplayId == 0) return 0
+        if (requestedDisplayId == 0) {
+            throw RuntimeFailure(DISPLAY_INVALID_CODE, "displayId=0 是主屏；本通道只服务副屏，主屏请使用既有设备工具")
         }
         if (requestedDisplayId != sessionDisplayId) {
             throw RuntimeFailure(

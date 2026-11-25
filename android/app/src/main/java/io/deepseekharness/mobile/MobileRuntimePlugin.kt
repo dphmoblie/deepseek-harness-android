@@ -1013,17 +1013,37 @@ class MobileRuntimePlugin : Plugin() {
 
     /**
      * 权限：应用内桥接。
+     * 纯本地应用更新状态（绝不联网、不抢占远端更新锁）：立即回传本机已装版本、安装权限、
+     * 已持久化频道及同版本同频道的有效缓存（若有）。用于版本管理页首帧与离线降级，
+     * 避免应用更新后缓存失效或 GitHub 波动时把「接收测试版本」开关回弹关闭并锁死。
+     */
+    @PluginMethod
+    fun getAppUpdateLocalState(call: PluginCall) {
+        execute(call) {
+            AppUpdateCache.from(context).localState(
+                AppReleaseCatalog.installed(context),
+                AppReleaseCatalog.installAllowed(context),
+                AppUpdateChannel.load(context),
+            ).toJsObject()
+        }
+    }
+
+    /**
+     * 权限：应用内桥接。
      * 应用自身更新状态：本机已安装版本、是否已授权安装未知应用，以及**严格更新**时才出现的 available。
      *
      * 默认读取有效缓存；调用方可显式传 true 检查远端最新版。
      * 没有更新时 available 键缺失，
      * cached / checkedAt 说明元数据来源；channel 是当前生效的更新频道（stable / beta），
      * 界面据此渲染「接收测试版本」开关；本机版本和安装权限始终实时读取，不回传下载地址。
+     *
+     * 只读元数据查询走 [AppUpdateCache] 内部 `inFlight` 按 `(installed, channel)` 去重，
+     * 不再占用 [appUpdateOperationLock]，避免开机每日提醒与版本页/频道切换互相阻塞。
      */
     @PluginMethod
     fun getAppUpdateState(call: PluginCall) {
         execute(call) {
-            audited(AuditEvent.APP_UPDATE, appUpdateOperationLock) {
+            auditedUnlocked(AuditEvent.APP_UPDATE) {
                 val forceRefresh = if (call.data.has("forceRefresh")) {
                     call.data.opt("forceRefresh") as? Boolean
                         ?: throw RuntimeFailure("APP_UPDATE_INPUT_INVALID", "更新检查参数无效")
@@ -1040,10 +1060,13 @@ class MobileRuntimePlugin : Plugin() {
 
     /**
      * 权限：应用内桥接。
-     * 切换应用更新频道（stable / beta）：频道持久化在原生 SharedPreferences，前端不存、不传参。
+     * 切换应用更新频道（stable / beta）：频道持久化在原生 SharedPreferences + 文件副本，前端不存、不传参。
      *
-     * 频道决定下载哪个 APK，与「目录与地址由原生自己决定」是同一条安全边界。先以
-     * forceRefresh 检查目标频道，成功后才保存并返回完整 state；检查失败保持原频道。
+     * 频道决定下载哪个 APK，与「目录与地址由原生自己决定」是同一条安全边界。
+     * **先同步落盘频道选择**，再以 `forceRefresh = true` 拉取目标频道候选：
+     * - 联网成功：返回新频道完整 state；
+     * - 联网失败：不丢弃已保存的频道，返回新频道的本地态（`refreshFailed = true`，不带旧频道 `available`，
+     *   因此既不会按旧频道误下载，也不会把开关回弹锁死）。
      */
     @PluginMethod
     fun setAppUpdateChannel(call: PluginCall) {
@@ -1051,14 +1074,15 @@ class MobileRuntimePlugin : Plugin() {
             audited(AuditEvent.APP_UPDATE, appUpdateOperationLock) {
                 val channel = AppUpdateChannel.fromId(call.data.opt("channel") as? String)
                     ?: throw RuntimeFailure("APP_UPDATE_INPUT_INVALID", "更新频道参数无效")
-                val state = AppUpdateCache.from(context).state(
-                    AppReleaseCatalog.installed(context),
-                    AppReleaseCatalog.installAllowed(context),
-                    channel,
-                    forceRefresh = true,
-                ).toJsObject()
                 AppUpdateChannel.save(context, channel)
-                state
+                val installed = AppReleaseCatalog.installed(context)
+                val installAllowed = AppReleaseCatalog.installAllowed(context)
+                val cache = AppUpdateCache.from(context)
+                try {
+                    cache.state(installed, installAllowed, channel, forceRefresh = true).toJsObject()
+                } catch (_: RuntimeFailure) {
+                    cache.localState(installed, installAllowed, channel, refreshFailed = true).toJsObject()
+                }
             }
         }
     }
@@ -1841,6 +1865,28 @@ class MobileRuntimePlugin : Plugin() {
     }
 
     /**
+     * 删除一条**已归档**会话（会话日志目录 + 投影缓存 + workspace 注册表记账）。
+     *
+     * 三点刻意设计：
+     * - 只接受已归档会话：未归档的会话可能正被使用，删除没有补救余地；
+     * - Harness 运行期间直接回 `RUNTIME_RUNNING`：会话日志正被追加，删目录只会留下半个会话；
+     * - 结果走 **resolve**（`{deleted:false,reason}`）而不是 reject：每种拒绝原因都要能被界面
+     *   分别说明，折叠成一句「删除失败」等于不解释。只有标识形态非法才 reject。
+     */
+    @PluginMethod
+    fun deleteSession(call: PluginCall) {
+        execute(call) {
+            controller.withLifecycleLock {
+                val sessionId = call.data.opt("sessionId") as? String
+                    ?: throw RuntimeFailure(SessionDeletion.SESSION_ID_INVALID, "会话标识缺失")
+                val running = controller.state().phase == RuntimePhase.RUNNING
+                // SessionDeletion 回的是 org.json（与访客脚本载荷同一套构造）；桥接层只认 JSObject。
+                JSObject(SessionDeletion.delete(controller.store.currentRoot, sessionId, running).toString())
+            }
+        }
+    }
+
+    /**
      * 会话快照总览。
      *
      * 只返回**快照元数据**：标识、创建时间、版本、文件数与字节数，以及快照根目录（应用私有路径）。
@@ -2111,15 +2157,32 @@ class MobileRuntimePlugin : Plugin() {
             if (!rootEngine && !controller.hasDeviceSession(sessionId)) {
                 throw RuntimeFailure("SESSION_NOT_FOUND", "设备 Shell 会话不存在或已结束")
             }
+            val highRiskPermissions = io.deepseekharness.mobile.shizuku.HighRiskPermissionStore.status(context)
             val rootGuardProfile = io.deepseekharness.mobile.shizuku.RootEngineAccess.guardProfile(context)
+            val param = call.getString("param") ?: ""
+            var rootExecutionGrant: io.deepseekharness.mobile.shizuku.RootExecutionGrant? = null
+            if (command == DeviceCommand.SHELL) {
+                val assessment = io.deepseekharness.mobile.shizuku.RootCommandGuard.verifyPermitted(
+                    script = param,
+                    profile = if (rootEngine) rootGuardProfile else io.deepseekharness.mobile.shizuku.RootCommandGuard.Profile.STRICT,
+                    permissions = highRiskPermissions,
+                )
+                if (rootEngine && assessment.route == io.deepseekharness.mobile.shizuku.RootCommandGuard.ApprovalRoute.ALLOW) {
+                    rootExecutionGrant = io.deepseekharness.mobile.shizuku.RootApprovalRegistry.grantDirect(param, assessment)
+                }
+            }
             val result = RuntimeHost.deviceCommands()
                 .execute(
                     sessionId,
                     command,
-                    call.getString("param") ?: "",
+                    param,
                     DEVICE_COMMAND_TIMEOUT_MS,
                     useRootEngine = rootEngine,
                     rootGuardProfile = rootGuardProfile,
+                    rootExecutionGrant = rootExecutionGrant,
+                    allowUnrestrictedFiles = highRiskPermissions.isAllowed(
+                        io.deepseekharness.mobile.shizuku.HighRiskCategory.DEVICE_FILE_UNRESTRICTED,
+                    ),
                 )
             JSObject()
                 .put("ok", result.ok)
@@ -2191,6 +2254,59 @@ class MobileRuntimePlugin : Plugin() {
                     context,
                     packageChecker = io.deepseekharness.mobile.shizuku.RootEngineAccess.packageChecker(context),
                 ).toJs()
+            }
+        }
+    }
+
+    /**
+     * 读取「AI 高危文件与命令权限」设置（1 个总开关 + 17 个细分开关）。
+     */
+    @PluginMethod
+    fun getHighRiskPermissions(call: PluginCall) {
+        execute(call) {
+            io.deepseekharness.mobile.shizuku.HighRiskPermissionStore.status(context).toJs()
+        }
+    }
+
+    /**
+     * 更新「AI 高危文件与命令权限」设置（支持只改总开关、只改部分细分开关或同时修改）。
+     *
+     * 所有高危操作均由宿主硬编码规则在 [io.deepseekharness.mobile.shizuku.RootCommandGuard.verifyPermitted]
+     * 中主动拦截，绝不交由 AI 自行决定。
+     */
+    @PluginMethod
+    fun setHighRiskPermissions(call: PluginCall) {
+        execute(call) {
+            val data = call.data
+                ?: throw RuntimeFailure("HIGH_RISK_PERMISSION_INVALID", "高危权限更新参数缺失")
+            val enabledRaw = if (data.has("enabled")) data.opt("enabled") else null
+            val categoriesRaw = if (data.has("categories")) {
+                val raw = data.opt("categories")
+                if (raw == null || raw == JSONObject.NULL) {
+                    null
+                } else {
+                    raw as? JSONObject
+                        ?: throw RuntimeFailure("HIGH_RISK_PERMISSION_INVALID", "高危权限细分项格式无效")
+                }
+            } else {
+                null
+            }
+            val (enabled, categoryUpdates) = io.deepseekharness.mobile.shizuku.HighRiskPermissionStore.parseUpdate(
+                enabledRaw = enabledRaw,
+                categoriesObj = categoriesRaw,
+            )
+            audited(AuditEvent.ROOT_ENGINE_SETTING) {
+                val updated = io.deepseekharness.mobile.shizuku.HighRiskPermissionStore.update(
+                    context = context,
+                    enabled = enabled,
+                    categoryUpdates = categoryUpdates,
+                )
+                // 收紧总开关或关闭任意细分权限时，立即吊销所有在途审批挑战并关闭等待确认的警告窗。
+                if (enabled == false || categoryUpdates.values.any { !it }) {
+                    io.deepseekharness.mobile.shizuku.RootApprovalCoordinator.cancelAll()
+                    io.deepseekharness.mobile.shizuku.RootApprovalRegistry.clear()
+                }
+                updated.toJs()
             }
         }
     }
@@ -2377,12 +2493,22 @@ class MobileRuntimePlugin : Plugin() {
             if (!io.deepseekharness.mobile.shizuku.DeviceShellAccess.enabled(context)) {
                 throw RuntimeFailure("DEVICE_SHELL_DISABLED", "请先开启 AI Shell")
             }
+            val highRiskPermissions = io.deepseekharness.mobile.shizuku.HighRiskPermissionStore.status(context)
             val state = io.deepseekharness.mobile.virtualscreen.VirtualScreenService.current?.state()
+            val script = call.getString("script")
             val plan = io.deepseekharness.mobile.virtualscreen.VirtualScreenShellPolicy.plan(
-                script = call.getString("script"),
+                script = script,
                 requestedDisplayId = call.getInt("displayId"),
                 active = state?.optBoolean("active") == true,
                 sessionDisplayId = state?.optInt("displayId", 0) ?: 0,
+                allowMainDisplay = highRiskPermissions.isAllowed(
+                    io.deepseekharness.mobile.shizuku.HighRiskCategory.VIRTUAL_SCREEN_UNRESTRICTED,
+                ),
+            )
+            io.deepseekharness.mobile.shizuku.RootCommandGuard.verifyPermitted(
+                script = requireNotNull(script),
+                profile = io.deepseekharness.mobile.shizuku.RootCommandGuard.Profile.STRICT,
+                permissions = highRiskPermissions,
             )
             val sessionId = controller.createTerminal("device", VIRTUAL_SCREEN_COLUMNS, VIRTUAL_SCREEN_ROWS)
             val result = try {
@@ -2926,16 +3052,20 @@ class MobileRuntimePlugin : Plugin() {
         }
     }
 
+    private fun workspaceFileManager() = controller.store.let { store ->
+        RuntimeWorkspaceFiles.forDefaultWorkspace(store.currentRoot, context.cacheDir, store.runtimeParent.parentFile!!)
+    }
+
     @PluginMethod
     fun listRuntimeWorkspaceFiles(call: PluginCall) {
         execute(call) {
-            val snapshot = RuntimeWorkspaceFiles(controller.store, context.cacheDir).list()
+            val snapshot = workspaceFileManager().list()
             JSObject().put("files", org.json.JSONArray(snapshot.files)).put("truncated", snapshot.truncated)
         }
     }
 
     private fun shareWorkspaceFile(relative: String, open: Boolean) {
-        val manager = RuntimeWorkspaceFiles(controller.store, context.cacheDir)
+        val manager = workspaceFileManager()
         val target = manager.copyForSharing(relative)
         val uri = FileProvider.getUriForFile(context, "${context.packageName}.diagnostics", target)
         val intent = Intent(if (open) Intent.ACTION_VIEW else Intent.ACTION_SEND).apply {
@@ -2965,7 +3095,7 @@ class MobileRuntimePlugin : Plugin() {
         execute(call) {
             val path = call.getString("path")
                 ?: throw RuntimeFailure("WORKSPACE_PATH_INVALID", "工作区文件路径缺失")
-            RuntimeWorkspaceFiles(controller.store, context.cacheDir).delete(path)
+            workspaceFileManager().delete(path)
             null
         }
     }
@@ -4676,22 +4806,26 @@ class MobileRuntimePlugin : Plugin() {
 
     private fun <T> audited(event: AuditEvent, lock: ReentrantLock = auditedOperationLock, operation: () -> T): T {
         return lock.withLock {
-            ensurePluginActive()
-            recordAudit(event, AuditResult.STARTED)
-            try {
-                operation().also { recordAudit(event, AuditResult.SUCCEEDED) }
-            } catch (failure: RuntimeFailure) {
-                val result = if (event == AuditEvent.RUNTIME_INSTALL && failure.code == "INSTALL_CANCELLED") {
-                    AuditResult.CANCELLED
-                } else {
-                    AuditResult.FAILED
-                }
-                recordAudit(event, result, failure.code)
-                throw failure
-            } catch (error: Throwable) {
-                recordAudit(event, AuditResult.FAILED, "INTERNAL_ERROR")
-                throw error
+            auditedUnlocked(event, operation)
+        }
+    }
+
+    private fun <T> auditedUnlocked(event: AuditEvent, operation: () -> T): T {
+        ensurePluginActive()
+        recordAudit(event, AuditResult.STARTED)
+        return try {
+            operation().also { recordAudit(event, AuditResult.SUCCEEDED) }
+        } catch (failure: RuntimeFailure) {
+            val result = if (event == AuditEvent.RUNTIME_INSTALL && failure.code == "INSTALL_CANCELLED") {
+                AuditResult.CANCELLED
+            } else {
+                AuditResult.FAILED
             }
+            recordAudit(event, result, failure.code)
+            throw failure
+        } catch (error: Throwable) {
+            recordAudit(event, AuditResult.FAILED, "INTERNAL_ERROR")
+            throw error
         }
     }
 
@@ -4930,6 +5064,16 @@ class MobileRuntimePlugin : Plugin() {
         .put("connected", connected)
         .put("version", version)
         .put("appVersion", appVersion)
+
+    private fun io.deepseekharness.mobile.shizuku.HighRiskPermissions.toJs(): JSObject {
+        val cats = JSObject()
+        for (category in io.deepseekharness.mobile.shizuku.HighRiskCategory.entries) {
+            cats.put(category.wireValue, isCategoryEnabled(category))
+        }
+        return JSObject()
+            .put("enabled", enabled)
+            .put("categories", cats)
+    }
 
 }
 

@@ -84,27 +84,43 @@ internal enum class AppUpdateChannel(val id: String) {
         fun fromId(value: String?): AppUpdateChannel? = entries.firstOrNull { it.id == value }
 
         /**
+         * 未曾显式保存频道时的默认推断：本机已装 `-mobile-N` 测试构建时默认走 [BETA]，
+         * 避免重装/清数据直装测试包后退回正式版；用户一旦显式保存过 [STABLE] 或 [BETA]，
+         * 以持久化记录为唯一真源。
+         */
+        internal fun defaultForInstalled(installedVersionName: String?): AppUpdateChannel {
+            val parsed = installedVersionName?.let(AppUpdateVersion::parse)
+            return if (parsed != null && parsed.suffix != 0L) BETA else DEFAULT
+        }
+
+        /**
          * 读取用户选择的频道。
          *
          * SharedPreferences 是主存储；小型文件副本只在主存储缺失或损坏时恢复。
          * 这样旧版本用户第一次升级时可以补齐副本，同时不会让一个过期副本覆盖用户
-         * 刚刚保存的频道。
+         * 刚刚保存的频道。加 `@Synchronized` 防止并发读/写把旧值写回副本。
          */
+        @Synchronized
         fun load(context: Context): AppUpdateChannel {
             val app = context.applicationContext
             val prefs = runCatching {
                 app.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             }.getOrNull()
-            // 旧版本只有 SharedPreferences：第一次读到它时补写副本，覆盖后续更新窗口。
+            // 旧版本只有 SharedPreferences：仅当副本缺失或不一致时补写副本，减少无谓落盘。
             val stored = runCatching { prefs?.let { fromId(it.getString(KEY_CHANNEL, null)) } }.getOrNull()
             if (stored != null) {
-                runCatching { writeBackup(app, stored) }
+                if (runCatching { readBackup(app) }.getOrNull() != stored) {
+                    runCatching { writeBackup(app, stored) }
+                }
                 return stored
             }
-            val recovered = runCatching { readBackup(app) }.getOrNull() ?: return DEFAULT
-            // 回填失败不应遮蔽已经恢复出的值；commit 结果只影响下次读取。
-            prefs?.let { runCatching { it.edit().putString(KEY_CHANNEL, recovered.id).commit() } }
-            return recovered
+            val recovered = runCatching { readBackup(app) }.getOrNull()
+            if (recovered != null) {
+                // 回填失败不应遮蔽已经恢复出的值；commit 结果只影响下次读取。
+                prefs?.let { runCatching { it.edit().putString(KEY_CHANNEL, recovered.id).commit() } }
+                return recovered
+            }
+            return defaultForInstalled(runCatching { AppReleaseCatalog.installed(app).versionName }.getOrNull())
         }
 
         /**
@@ -112,6 +128,7 @@ internal enum class AppUpdateChannel(val id: String) {
          * 否则可能出现「前端以为切换成功，下次启动仍用旧频道」的状态分叉。
          * 失败时抛 [RuntimeFailure]，由调用方走已有的错误回退路径。
          */
+        @Synchronized
         fun save(context: Context, channel: AppUpdateChannel) {
             val app = context.applicationContext
             val prefs = app.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)

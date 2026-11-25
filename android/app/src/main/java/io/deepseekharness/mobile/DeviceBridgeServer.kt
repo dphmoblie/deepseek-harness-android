@@ -5,6 +5,9 @@ import io.deepseekharness.mobile.runtime.RuntimeScopedResource
 import io.deepseekharness.mobile.shizuku.DeviceCommand
 import io.deepseekharness.mobile.shizuku.DeviceFilePolicy
 import io.deepseekharness.mobile.shizuku.DeviceCommandRunner
+import io.deepseekharness.mobile.shizuku.HighRiskCategory
+import io.deepseekharness.mobile.shizuku.HighRiskPermissionStore
+import io.deepseekharness.mobile.shizuku.HighRiskPermissions
 import io.deepseekharness.mobile.shizuku.LocalDeviceFileStore
 import io.deepseekharness.mobile.shizuku.RootApprovalCoordinator
 import io.deepseekharness.mobile.shizuku.RootApprovalRegistry
@@ -70,6 +73,7 @@ class DeviceBridgeServer(
     port: Int = 0,
     private val shellEnabled: () -> Boolean = { false },
     private val rootStatusProvider: (() -> RootEngineAccess.Status?)? = null,
+    private val highRiskPermissionsProvider: (() -> HighRiskPermissions)? = null,
 ) : RuntimeScopedResource {
     private val server = ServerSocket(port, 12, InetAddress.getByName("127.0.0.1"))
     // 扩大有界线程池并用 shizukuSlots 单独限流阻塞型 Shizuku 调用：即使 2 条 Shizuku 调用同时卡在
@@ -114,6 +118,10 @@ class DeviceBridgeServer(
             }
 
     private fun rootEngineUsable(): Boolean = currentRootStatus()?.usable == true
+
+    private fun currentHighRiskPermissions(): HighRiskPermissions =
+        highRiskPermissionsProvider?.invoke()
+            ?: HighRiskPermissionStore.status(applicationContextOrNull())
 
     private fun recordRootApprovalAudit(result: AuditResult, detail: String) {
         val context = applicationContextOrNull() ?: return
@@ -202,6 +210,10 @@ class DeviceBridgeServer(
                         respond(output, 405, "{\"ok\":false,\"text\":\"\",\"errorCode\":\"METHOD_NOT_ALLOWED\"}")
                         return
                     }
+                    val highRiskPermissions = currentHighRiskPermissions()
+                    val allowUnrestrictedFiles = highRiskPermissions.isAllowed(HighRiskCategory.DEVICE_FILE_UNRESTRICTED)
+                    val maxRequestBodyBytes = if (allowUnrestrictedFiles) UNRESTRICTED_MAX_REQUEST_BODY_BYTES else MAX_REQUEST_BODY_BYTES
+                    val maxParamChars = if (allowUnrestrictedFiles) DeviceFilePolicy.UNRESTRICTED_MAX_PARAM_CHARS else DeviceFilePolicy.MAX_PARAM_CHARS
                     var auth = ""
                     var authSeen = false
                     var contentLength = 0
@@ -222,7 +234,7 @@ class DeviceBridgeServer(
                             }
                             "content-length" -> {
                                 if (contentLength != 0) throw RuntimeFailure("DEVICE_REQUEST_INVALID", "设备桥请求长度重复")
-                                contentLength = value.toIntOrNull()?.takeIf { it in 1..MAX_REQUEST_BODY_BYTES }
+                                contentLength = value.toIntOrNull()?.takeIf { it in 1..maxRequestBodyBytes }
                                     ?: throw RuntimeFailure("DEVICE_REQUEST_INVALID", "设备桥请求长度无效")
                             }
                             "transfer-encoding" -> throw RuntimeFailure("DEVICE_REQUEST_INVALID", "设备桥不支持分块请求")
@@ -233,13 +245,13 @@ class DeviceBridgeServer(
                         respond(output, 401, "{\"ok\":false,\"text\":\"\",\"errorCode\":\"UNAUTHORIZED\"}")
                         return
                     }
-                    val body = readBody(input, contentLength)
+                    val body = readBody(input, contentLength, maxRequestBodyBytes)
                     val parsed = JSONObject(body)
                     val commandName = parsed.opt("command") as? String
                         ?: throw RuntimeFailure("DEVICE_COMMAND_INVALID", "设备命令格式无效")
                     val param = parsed.opt("param") as? String
                         ?: throw RuntimeFailure("DEVICE_COMMAND_INVALID", "设备参数格式无效")
-                    if (commandName.length > 32 || param.length > DeviceFilePolicy.MAX_PARAM_CHARS) {
+                    if (commandName.length > 32 || param.length > maxParamChars) {
                         throw RuntimeFailure("DEVICE_COMMAND_INVALID", "设备参数过长")
                     }
                     // 自动化授权与设备能力都不经过 Shell；能力判定复用原生统一策略，不在 AI 插件里另算一套。
@@ -353,6 +365,12 @@ class DeviceBridgeServer(
                             requestedDisplayId = requestedDisplayId,
                             active = state?.optBoolean("active") == true,
                             sessionDisplayId = state?.optInt("displayId", 0) ?: 0,
+                            allowMainDisplay = highRiskPermissions.isAllowed(HighRiskCategory.VIRTUAL_SCREEN_UNRESTRICTED),
+                        )
+                        RootCommandGuard.verifyPermitted(
+                            requireNotNull(script),
+                            RootCommandGuard.Profile.STRICT,
+                            highRiskPermissions,
                         )
                         respondResult(output, runOneShot(DeviceCommand.SHELL, plan.command), plan.displayId)
                         return
@@ -407,7 +425,11 @@ class DeviceBridgeServer(
                     // 投递区文件通道在宿主已具备共享存储权限时直接由本地安全执行，不再强依赖 Shizuku；
                     // 仅当宿主无权限访问共享存储时才回退到 Shizuku 通道。
                     if (LocalDeviceFileStore.isFileCommand(command) && hasDirectExternalStorageAccess()) {
-                        val localResult = LocalDeviceFileStore.tryExecute(command, param)
+                        val localResult = LocalDeviceFileStore.tryExecute(
+                            command,
+                            param,
+                            allowUnrestricted = allowUnrestrictedFiles,
+                        )
                         if (localResult != null) {
                             respondResult(output, localResult)
                             return
@@ -423,7 +445,11 @@ class DeviceBridgeServer(
                     if (rootEngine) {
                         val rootGuardProfile = rootStatus?.guardProfile ?: RootCommandGuard.Profile.STRICT
                         validateShellScript(param)
-                        val assessment = RootCommandGuard.classify(param, rootGuardProfile)
+                        val assessment = RootCommandGuard.verifyPermitted(
+                            param,
+                            rootGuardProfile,
+                            currentHighRiskPermissions(),
+                        )
                         if (assessment.route == RootCommandGuard.ApprovalRoute.ALLOW) {
                             val grant = RootApprovalRegistry.grantDirect(param, assessment)
                             respondResult(output, runOneShot(command, param, true, rootGuardProfile, grant))
@@ -449,7 +475,15 @@ class DeviceBridgeServer(
                         }
                         return
                     }
-                    respondResult(output, runOneShot(command, param))
+                    if (command == DeviceCommand.SHELL) {
+                        validateShellScript(param)
+                        RootCommandGuard.verifyPermitted(
+                            param,
+                            RootCommandGuard.Profile.STRICT,
+                            highRiskPermissions,
+                        )
+                    }
+                    respondResult(output, runOneShot(command, param, allowUnrestrictedFiles = allowUnrestrictedFiles))
                 } catch (error: Throwable) {
                     val failure = error as? RuntimeFailure
                     val code = failure?.code ?: "BRIDGE_FAILED"
@@ -504,10 +538,19 @@ class DeviceBridgeServer(
             shellEnabled(),
         )
         if (!rootEngine) {
+            RootCommandGuard.verifyPermitted(
+                script,
+                RootCommandGuard.Profile.STRICT,
+                currentHighRiskPermissions(),
+            )
             return runOneShot(DeviceCommand.SHELL, script)
         }
         val guardProfile = rootStatus?.guardProfile ?: RootCommandGuard.Profile.STRICT
-        val assessment = RootCommandGuard.classify(script, guardProfile)
+        val assessment = RootCommandGuard.verifyPermitted(
+            script,
+            guardProfile,
+            currentHighRiskPermissions(),
+        )
         val grant = try {
             when (assessment.route) {
                 RootCommandGuard.ApprovalRoute.ALLOW ->
@@ -589,6 +632,7 @@ class DeviceBridgeServer(
         rootEngine: Boolean = false,
         rootGuardProfile: RootCommandGuard.Profile = RootCommandGuard.Profile.STRICT,
         rootExecutionGrant: RootExecutionGrant? = null,
+        allowUnrestrictedFiles: Boolean = false,
     ): io.deepseekharness.mobile.shizuku.DeviceCommandResult {
         // 根通道不建 Shizuku 会话：会话 ID 对这个分支没有意义（`execute` 会先于任何会话操作返回）。
         if (rootEngine) {
@@ -600,6 +644,7 @@ class DeviceBridgeServer(
                 useRootEngine = true,
                 rootGuardProfile = rootGuardProfile,
                 rootExecutionGrant = rootExecutionGrant,
+                allowUnrestrictedFiles = allowUnrestrictedFiles,
             )
         }
         val acquired = try {
@@ -623,7 +668,13 @@ class DeviceBridgeServer(
                 binderTimeoutSeconds = BRIDGE_BINDER_TIMEOUT_SECONDS,
             )
             try {
-                return runner.execute(sessionId, command, param, COMMAND_TIMEOUT_MS)
+                return runner.execute(
+                    sessionId,
+                    command,
+                    param,
+                    COMMAND_TIMEOUT_MS,
+                    allowUnrestrictedFiles = allowUnrestrictedFiles,
+                )
             } finally {
                 try {
                     shizukuRuntime.close(sessionId)
@@ -655,8 +706,8 @@ class DeviceBridgeServer(
         )
     }
 
-    private fun readBody(input: BufferedInputStream, contentLength: Int): String {
-        if (contentLength !in 1..MAX_REQUEST_BODY_BYTES) throw RuntimeFailure("DEVICE_REQUEST_INVALID", "设备桥请求长度无效")
+    private fun readBody(input: BufferedInputStream, contentLength: Int, maxRequestBodyBytes: Int): String {
+        if (contentLength !in 1..maxRequestBodyBytes) throw RuntimeFailure("DEVICE_REQUEST_INVALID", "设备桥请求长度无效")
         val buffer = ByteArrayOutputStream()
         val chunk = ByteArray(8192)
         var remaining = contentLength
@@ -713,6 +764,8 @@ class DeviceBridgeServer(
         private const val DEFAULT_ROWS = 24
         /** 文件上传包含 Base64；仍保持一个受控上限，避免把桥变成无限内存入口。 */
         private const val MAX_REQUEST_BODY_BYTES = 200_000
+        /** 开启「设备文件通道解除投递区目录与大小限制」后允许的最大请求体（容纳 4 MiB Base64 + JSON 封装）。 */
+        private const val UNRESTRICTED_MAX_REQUEST_BODY_BYTES = DeviceFilePolicy.UNRESTRICTED_MAX_PARAM_CHARS + 4096
         private const val MAX_SHELL_SCRIPT_BYTES = 16 * 1024
 
         /** 受控失败说明的正文上限：只用来解释「下一步做什么」，不是日志出口。 */

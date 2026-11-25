@@ -1,8 +1,8 @@
 diff --git a/dist/api/transform-messages.js b/dist/api/transform-messages.js
-index 1e7873e..c6db568 100644
+index 6a364cb..ae9553b 100644
 --- a/dist/api/transform-messages.js
 +++ b/dist/api/transform-messages.js
-@@ -126,6 +126,7 @@ export function transformMessages(messages, model, normalizeToolCallId) {
+@@ -139,6 +139,7 @@ export function transformMessages(messages, model, normalizeToolCallId) {
      // This preserves thinking signatures and satisfies API requirements
      const result = [];
      let pendingToolCalls = [];
@@ -10,7 +10,7 @@ index 1e7873e..c6db568 100644
      let existingToolResultIds = new Set();
      // System messages are transparent to tool-call accounting: one that lands between a tool
      // call and its results is held back and emitted after the results (synthetic ones
-@@ -146,6 +147,7 @@ export function transformMessages(messages, model, normalizeToolCallId) {
+@@ -159,6 +160,7 @@ export function transformMessages(messages, model, normalizeToolCallId) {
                  }
              }
              pendingToolCalls = [];
@@ -18,7 +18,7 @@ index 1e7873e..c6db568 100644
              existingToolResultIds = new Set();
          }
          result.push(...heldSystemMessages);
-@@ -169,11 +171,18 @@ export function transformMessages(messages, model, normalizeToolCallId) {
+@@ -182,11 +184,18 @@ export function transformMessages(messages, model, normalizeToolCallId) {
              const toolCalls = assistantMsg.content.filter((b) => b.type === "toolCall");
              if (toolCalls.length > 0) {
                  pendingToolCalls = toolCalls;

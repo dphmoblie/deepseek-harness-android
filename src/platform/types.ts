@@ -459,7 +459,38 @@ export interface RuntimeSessionSummary {
   parentId?: string
   /** 子代理的预设名（`agentPreset`，例如 `standard` / `cordis`）；只用于显示与搜索。 */
   agentName?: string
+  /**
+   * dsh 的 workspace 注册表把这条会话列入了归档集合（`~/.dsh/storages/workspace.json` 的
+   * `global.archivedSessionIds`）。
+   *
+   * 缺省 = 未归档：旧版原生桥不返回这个字段，界面一律按「未归档」处理，绝不会把读不到的
+   * 归档状态显示成「已归档」。归档状态由 dsh 自己维护，外壳只读，不改写。
+   */
+  archived?: boolean
 }
+
+/**
+ * 删除一条已归档会话的结果。
+ *
+ * 用三态结果而不是 reject：删除被拒绝的每一种原因都要能对用户说清楚（会话还在跑、
+ * 会话没归档、会话已经不在了），把它们折叠成一句「删除失败」等于不解释。
+ */
+export type RuntimeSessionDeleteResult =
+  | { deleted: true }
+  | { deleted: false; reason: RuntimeSessionDeleteReason }
+
+/**
+ * 删除被拒绝的受控原因：
+ * - `RUNTIME_RUNNING`：Harness 还在跑，会话日志可能正被写，删除只会留下半个会话；
+ * - `SESSION_NOT_ARCHIVED`：只允许删已归档会话（未归档的会话仍可能在用）；
+ * - `SESSION_NOT_FOUND`：磁盘上已经没有这条会话（可能刚被别处删掉）；
+ * - `SESSION_DELETE_FAILED`：其余文件系统失败。
+ */
+export type RuntimeSessionDeleteReason =
+  | 'RUNTIME_RUNNING'
+  | 'SESSION_NOT_ARCHIVED'
+  | 'SESSION_NOT_FOUND'
+  | 'SESSION_DELETE_FAILED'
 
 /**
  * 会话列表读不到的原因（受控枚举；对用户可见的文案由界面决定，桥不返回句子）。
@@ -557,6 +588,8 @@ export interface AppUpdateState {
   checkedAt?: number
   /** 当前生效的更新频道；available 已按它过滤。 */
   channel: AppUpdateChannel
+  /** 最近一次远端刷新是否失败（此时本地频道与已装版本仍有效，但暂未拿到最新远端候选）。 */
+  refreshFailed?: boolean
   /**
    * 本应用是否已被授予「安装未知应用」权限（原生 `canRequestPackageInstalls()`）。
    *
@@ -705,6 +738,55 @@ export interface RootEngineStatus {
 export interface DevicePowerActionResult {
   ok: boolean
   action: 'reboot' | 'powerOff'
+}
+
+/**
+ * AI 高危文件、命令与宿主能力放开权限细分项白名单（25 项，与原生 `HighRiskCategory` 一一对应）。
+ *
+ * 前 17 项对应原生 `RootCommandGuard` 中的硬编码静态拦截规则；
+ * 后 8 项对应 Root 沙箱/确认页、无障碍、设备文件、副屏与访客整卡挂载的宿主级硬编码限制。
+ * 默认全部为 `false`，且受总开关 `HighRiskPermissions.enabled`（默认 `false`）统管。
+ */
+export const HIGH_RISK_PERMISSION_CATEGORIES = [
+  'core_partition_write',
+  'system_data_destruction',
+  'shared_storage_delete',
+  'app_private_data_modify',
+  'system_permissions_owner',
+  'dev_node_write',
+  'dynamic_shell_eval',
+  'filesystem_mount',
+  'raw_device_image_tool',
+  'kernel_module_control',
+  'kernel_sysfs_proc_write',
+  'system_properties_write',
+  'package_install_remove',
+  'system_service_privilege',
+  'selinux_security_policy',
+  'device_power_control',
+  'block_flash_memory_raw',
+  'root_unconfined_sandbox',
+  'root_skip_app_confirm',
+  'accessibility_system_apps',
+  'accessibility_sensitive_windows',
+  'accessibility_lockscreen_and_burst',
+  'device_file_unrestricted',
+  'virtual_screen_unrestricted',
+  'storage_full_sdcard_mount',
+] as const
+
+export type HighRiskPermissionCategory = (typeof HIGH_RISK_PERMISSION_CATEGORIES)[number]
+
+/** 启动器「AI 高危文件与命令权限」状态（1 个总开关 + 25 个细分开关）。 */
+export interface HighRiskPermissions {
+  enabled: boolean
+  categories: Record<HighRiskPermissionCategory, boolean>
+}
+
+/** 更新「AI 高危文件与命令权限」的增量入参。 */
+export interface HighRiskPermissionsUpdate {
+  enabled?: boolean
+  categories?: Partial<Record<HighRiskPermissionCategory, boolean>>
 }
 /** 持久化的运行意图；unknown 表示从未记录。 */
 export type RuntimeIntent = 'running' | 'stopped' | 'unknown'
@@ -1850,6 +1932,16 @@ export interface RuntimeBridge {
    * 设置页手动重启/关机。**不在 AI 工具或设备桥里**；原生会先做系统身份确认。
    */
   requestDevicePowerAction: (action: 'reboot' | 'powerOff') => Promise<DevicePowerActionResult>
+  /**
+   * 读取启动器「AI 高危文件与命令权限」（1 个总开关 + 17 个细分开关）。
+   */
+  getHighRiskPermissions: () => Promise<HighRiskPermissions>
+  /**
+   * 更新启动器「AI 高危文件与命令权限」并返回最新状态。
+   *
+   * 拦截由宿主硬编码规则在 `RootCommandGuard.verifyPermitted` 中主动执行，不依赖 AI 自律。
+   */
+  setHighRiskPermissions: (update: HighRiskPermissionsUpdate) => Promise<HighRiskPermissions>
   requestShizukuPermission: () => Promise<ShizukuState>
   connectShizuku: () => Promise<ShizukuState>
   openShizuku: () => Promise<void>
@@ -2247,6 +2339,14 @@ export interface RuntimeBridge {
    */
   listSessions: () => Promise<RuntimeSessionListResult>
   /**
+   * 删除一条**已归档**会话（会话日志目录 + 投影缓存 + 注册表里的记账）。
+   *
+   * 只接受已归档会话：未归档的会话可能正被使用或仍有在跑的工作，删除它没有任何补救余地。
+   * 原生侧在 Harness 运行期间一律拒绝（`RUNTIME_RUNNING`），因为会话日志此时正在追加。
+   * 会话在工作区里是否归档由 dsh 自己维护；外壳删除前会从最近的列表快照核对一次。
+   */
+  deleteSession: (sessionId: string) => Promise<RuntimeSessionDeleteResult>
+  /**
    * 会话快照总览（无参数，只读）。
    *
    * 快照存在应用私有目录里：不进云备份、不进 rootfs；上限由原生状态返回（当前默认 10 份 / 16 GiB），
@@ -2292,15 +2392,17 @@ export interface RuntimeBridge {
    * 界面要按「能不能装」分开渲染，而不是把列表里的每一项都当成可安装。
    */
   listRuntimeReleases: () => Promise<RuntimeReleaseList>
+  /** 应用自身的纯本地更新状态（绝不触网）：立即返回已安装版本、安装权限、已持久化频道与有效缓存。 */
+  getAppUpdateLocalState: () => Promise<AppUpdateState>
   /** 应用自身的更新状态：已安装版本、当前频道，以及按频道过滤后是否有可用更新。 */
   getAppUpdateState: (forceRefresh?: boolean) => Promise<AppUpdateState>
   /** 只读取「安装未知应用」权限，不触发更新检查；首次权限说明可离线使用。 */
   getAppUpdateInstallPermission: () => Promise<AppUpdateInstallPermission>
   /**
-   * 切换应用更新频道并返回最新状态（一次往返：联网检查成功后保存频道）。
+   * 切换应用更新频道并返回最新状态（先同步落盘频道，再尝试联网检查目标频道）。
    *
-   * 检查失败保持原频道；界面仍回读 [RuntimeBridge.getAppUpdateState] 确认实际状态，
-   * 兼容旧版桥接及检查完成后的响应失败，不把开关做成乐观态。
+   * 联网检查失败时保留已保存的新频道并返回新频道的本地态（`refreshFailed: true`，不含旧频道候选），
+   * 仅当落盘本身或桥接异常失败时拒绝。
    */
   setAppUpdateChannel: (channel: AppUpdateChannel) => Promise<AppUpdateState>
   /**

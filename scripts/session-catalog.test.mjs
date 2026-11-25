@@ -460,3 +460,114 @@ test('标题折叠规则与宿主 dsh-session-title 逐条一致', async (contex
     )
   }
 })
+
+/**
+ * 归档状态：从 dsh 的 workspace 注册表只读 `global.archivedSessionIds`。
+ * 三种情形必须区分清楚——命中标 archived、未命中不写这个键、注册表坏/缺失时一条都不标。
+ */
+test('归档状态来自 workspace 注册表：命中才标，读不到就不标', async () => {
+  const root = createRoot()
+  addSession(root, { directory: 'session-live', lines: [title('在用的会话')] })
+  addSession(root, { directory: 'session-old', lines: [title('旧的会话')] })
+  const stateDirectory = join(root, 'storages')
+  mkdirSync(stateDirectory, { recursive: true })
+  const stateFile = join(stateDirectory, 'workspace.json')
+  writeFileSync(stateFile, JSON.stringify({
+    unit: { name: 'workspace', version: 2 },
+    global: { archivedSessionIds: ['session-old', 7, 'bad id', '../escape'] },
+    tables: {},
+  }))
+
+  const report = await buildCatalog(50, root, null, stateFile)
+  const byId = new Map(report.sessions.map((session) => [session.id, session]))
+  assert.equal(byId.get('session-old')?.archived, true)
+  assert.equal('archived' in byId.get('session-live'), false, '未归档的会话不能带 archived 键')
+
+  // JSON 坏掉：当作没有任何归档，列表照旧完整返回（归档状态不该让整份列表失败）。
+  writeFileSync(stateFile, '{not json')
+  const broken = await buildCatalog(50, root, null, stateFile)
+  assert.equal(broken.sessions.length, 2)
+  assert.ok(broken.sessions.every((session) => !('archived' in session)))
+
+  // 文件不存在（还没归档过任何会话）：同样一条都不标。
+  const absent = await buildCatalog(50, root, null, join(root, 'missing-workspace.json'))
+  assert.equal(absent.sessions.length, 2)
+  assert.ok(absent.sessions.every((session) => !('archived' in session)))
+})
+
+/**
+ * 归档会话单独占名额：只按「最近更新」截前 N 条时，旧归档会话会被在用的会话整批挤掉，
+ * 界面上的「已归档」于是永远是空的。这里用小样本（5 条未归档名额 + 20 条归档名额）钉住分配：
+ * 32 个会话文件的读取量在时间预算内稳定，不依赖机器负载。
+ */
+test('归档会话单独占 20 条名额，不会被在用的会话挤掉', async () => {
+  const root = createRoot()
+  const stateDirectory = join(root, 'storages')
+  mkdirSync(stateDirectory, { recursive: true })
+  const stateFile = join(stateDirectory, 'workspace.json')
+  const archivedIds = []
+  for (let index = 0; index < 7; index += 1) {
+    addSession(root, {
+      directory: `session-live-${String(index).padStart(2, '0')}`,
+      updatedAt: BASE_TIME + 10_000 + index,
+      lines: [title(`在用的会话 ${index}`)],
+    })
+  }
+  for (let index = 0; index < 25; index += 1) {
+    const id = `session-old-${String(index).padStart(2, '0')}`
+    addSession(root, {
+      directory: id,
+      updatedAt: BASE_TIME + index,
+      lines: [title(`归档的会话 ${index}`)],
+    })
+    archivedIds.push(id)
+  }
+  writeFileSync(stateFile, JSON.stringify({
+    unit: { name: 'workspace', version: 2 },
+    global: { archivedSessionIds: archivedIds },
+    tables: {},
+  }))
+
+  const report = await buildCatalog(5, root, null, stateFile)
+  const archived = report.sessions.filter((session) => session.archived === true)
+  const live = report.sessions.filter((session) => session.archived !== true)
+
+  assert.equal(report.sessions.length, 25, '总数 = 5 条未归档名额 + 20 条归档名额')
+  assert.equal(live.length, 5)
+  assert.equal(archived.length, 20)
+  assert.equal(report.truncated, true)
+  // 归档取**最近更新**的 20 条：old-24 … old-05，最旧的几条被截掉。
+  assert.ok(archived.some((session) => session.id === 'session-old-24'))
+  assert.ok(!archived.some((session) => session.id === 'session-old-00'))
+  // 合并回最近更新顺序：归档会话虽然更旧，也仍然按时间插在该在的位置上。
+  const times = report.sessions.map((session) => session.updatedAt)
+  assert.deepEqual(times, [...times].sort((left, right) => right - left))
+})
+
+test('共同截止时间内同时返回归档标题和较晚出现的未归档标题', async (context) => {
+  const root = createRoot()
+  const stateDirectory = join(root, 'storages')
+  mkdirSync(stateDirectory, { recursive: true })
+  const stateFile = join(stateDirectory, 'workspace.json')
+  addSession(root, {
+    directory: 'session-live',
+    updatedAt: BASE_TIME + 10_000,
+    lines: [...Array.from({ length: 3 }, () => toolResult('耗时输出')), title('在用的会话')],
+  })
+  const archivedId = 'session-archived'
+  addSession(root, {
+    directory: archivedId,
+    updatedAt: BASE_TIME,
+    lines: [title('归档的会话')],
+  })
+  writeFileSync(stateFile, JSON.stringify({ global: { archivedSessionIds: [archivedId] } }))
+
+  let now = BASE_TIME
+  context.mock.method(Date, 'now', () => now)
+  const report = await buildCatalog(50, root, { onScanned: () => { now += 400 } }, stateFile)
+  assert.deepEqual(report.sessions.map(session => session.id), ['session-live', archivedId])
+  assert.equal(report.sessions[0].title, '在用的会话')
+  assert.equal(report.sessions[1].archived, true)
+  assert.equal(report.sessions[1].title, '归档的会话')
+  assert.equal(report.truncated, false)
+})

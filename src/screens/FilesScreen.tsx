@@ -27,6 +27,7 @@ import {
 } from 'lucide-react'
 import { formatByteCount as formatBytes } from '../downloadTelemetry'
 import { t } from '../i18n'
+import { WorkspaceFilesCard } from '../components/WorkspaceFilesCard'
 import { STORAGE_DIR_ADD_BUSY_ID, storageDirMessage, storageDirRemoveBusyId } from '../ui/storageDir'
 import {
   MAX_STORAGE_DIRECTORIES,
@@ -700,6 +701,9 @@ export function FilesScreen({
           {t("增删共享目录将在下次启动运行时生效")}
         </p>
       </section>
+
+      {/* 工作区文件：不必先导出到 outbox 也能把 Agent 写出来的文件取走（见组件注释）。 */}
+      <WorkspaceFilesCard />
     </main>
   )
 }

@@ -19,6 +19,9 @@ import type {
   AccessibilityAutomationState,
   DiagnosticLogText,
   HarnessLog,
+  HighRiskPermissionCategory,
+  HighRiskPermissions,
+  HighRiskPermissionsUpdate,
   KeepAliveState,
   MailboxRoot,
   MailboxDirectoryState,
@@ -36,6 +39,7 @@ import type {
   RuntimeResidueCleanupState,
   RuntimeResidueState,
   RuntimeSessionListResult,
+  RuntimeSessionDeleteResult,
   RuntimeSessionSnapshotRestoreResult,
   RootEngineStatus,
   PreserveDiscardResult,
@@ -53,9 +57,9 @@ import type {
   TerminalExit,
   TerminalKind,
 } from './types'
-import { ALWAYS_ALLOWED_ACCESSIBILITY_PACKAGES, DIAGNOSTIC_RETENTION_DEFAULT, MAX_STORAGE_DIRECTORIES, MODEL_PROVIDER_IDS } from './types'
+import { ALWAYS_ALLOWED_ACCESSIBILITY_PACKAGES, DIAGNOSTIC_RETENTION_DEFAULT, HIGH_RISK_PERMISSION_CATEGORIES, MAX_STORAGE_DIRECTORIES, MODEL_PROVIDER_IDS } from './types'
 import { validateSelfCheckOperation, type SelfCheckOperation, type SelfCheckReport } from '../runtimeSelfCheck'
-import { assertMailboxSubdirectory, assertAccessibilityAutomationAction, assertAccessibilityAutomationAppConfigInput, assertAccessibilityAutomationRuleInput, assertAccessibilityPackageName, assertAccessibilityRuleId, assertAccessibilityRuleWriteMode, assertBooleanFlag, assertRuntimeVersionPinTarget, assertRuntimeVersionTarget, assertSessionId, assertStorageDirPath, assertStorageGuestPath, validateAccessibilityPasswordInput, validateDeviceCommand, validateDeviceCommandParam, validateSettings, validateSettingsUpdate, validateRuntimeSource, validatePluginCleanupRequest } from './validation'
+import { assertMailboxSubdirectory, assertAccessibilityAutomationAction, assertAccessibilityAutomationAppConfigInput, assertAccessibilityAutomationRuleInput, assertAccessibilityPackageName, assertAccessibilityRuleId, assertAccessibilityRuleWriteMode, assertBooleanFlag, assertRuntimeVersionDeleteTarget, assertRuntimeVersionPinTarget, assertRuntimeVersionSwitchTarget, assertSessionId, assertStorageDirPath, assertStorageGuestPath, validateAccessibilityPasswordInput, validateDeviceCommand, validateDeviceCommandParam, validateHighRiskPermissionsUpdate, validateSettings, validateSettingsUpdate, validateRuntimeSource, validatePluginCleanupRequest } from './validation'
 
 const SETTINGS_KEY = 'dsh-mobile-settings-v1'
 /** 文档里的固定投递区路径；浏览器预览只用来**展示**，不声称它可用（见 getMailboxState）。 */
@@ -129,6 +133,12 @@ export function createBrowserBridge(): RuntimeBridge {
     fileCount: 0,
     totalBytes: 0,
     lastEntryAtMillis: 0,
+  }
+  let highRiskPermissions: HighRiskPermissions = {
+    enabled: false,
+    categories: Object.fromEntries(
+      HIGH_RISK_PERMISSION_CATEGORIES.map(category => [category, false]),
+    ) as Record<HighRiskPermissionCategory, boolean>,
   }
   const progressListeners = new Set<(event: RuntimeProgress) => void>()
   const outputListeners = new Set<(event: TerminalChunk) => void>()
@@ -718,11 +728,11 @@ export function createBrowserBridge(): RuntimeBridge {
     // 浏览器预览里没有访客运行时，也就没有版本槽可列出或切换：如实拒绝，不编造版本列表。
     getRuntimeVersions: (): Promise<RuntimeVersionsState> => Promise.reject(new Error('浏览器预览不支持运行时版本管理')),
     switchRuntimeVersion: (target): Promise<RuntimeVersionsState> => {
-      assertRuntimeVersionTarget(target)
+      assertRuntimeVersionSwitchTarget(target)
       return Promise.reject(new Error('浏览器预览不支持运行时版本管理'))
     },
     deleteRuntimeVersion: (target): Promise<RuntimeVersionsState> => {
-      assertRuntimeVersionTarget(target)
+      assertRuntimeVersionDeleteTarget(target)
       return Promise.reject(new Error('浏览器预览不支持运行时版本管理'))
     },
     // 预览里没有版本库，也就没有「锁一个归档」这回事：先校验取值（和原生侧同一套判据），
@@ -766,6 +776,26 @@ export function createBrowserBridge(): RuntimeBridge {
       Promise.reject(new Error('浏览器预览不支持根通道开关')),
     requestDevicePowerAction: () =>
       Promise.reject(new Error('浏览器预览不支持设备电源操作')),
+    getHighRiskPermissions: (): Promise<HighRiskPermissions> =>
+      Promise.resolve({
+        enabled: highRiskPermissions.enabled,
+        categories: { ...highRiskPermissions.categories },
+      }),
+    setHighRiskPermissions: (update: HighRiskPermissionsUpdate): Promise<HighRiskPermissions> =>
+      Promise.resolve().then(() => {
+        const validated = validateHighRiskPermissionsUpdate(update)
+        highRiskPermissions = {
+          enabled: validated.enabled ?? highRiskPermissions.enabled,
+          categories: {
+            ...highRiskPermissions.categories,
+            ...(validated.categories ?? {}),
+          },
+        }
+        return {
+          enabled: highRiskPermissions.enabled,
+          categories: { ...highRiskPermissions.categories },
+        }
+      }),
     // 任务台账活在无障碍服务进程里，预览里没有那个进程，也没有可取消的任务：两条都如实拒绝。
     // **不要**回 `{ connected: false, task: null }`——界面得能区分「预览做不到」与「服务没连上」，
     // 后者在真机上是有意义的状态（提示去开服务），前者提示了也没用。
@@ -778,6 +808,10 @@ export function createBrowserBridge(): RuntimeBridge {
     // 等于把「读不到」编造成「确认没有」。
     listSessions: (): Promise<RuntimeSessionListResult> =>
       Promise.reject(new Error('浏览器模式下没有运行时会话列表')),
+    // 预览里没有原生侧的会话目录：明确拒绝，不假装删掉了什么。返回 {deleted:false} 也不行——
+    // 界面会把一次「没做」显示成「做过了但不成功」，同样不诚实。
+    deleteSession: (): Promise<RuntimeSessionDeleteResult> =>
+      Promise.reject(new Error('浏览器模式下不能删除运行时会话')),
     // 预览里没有原生侧的会话快照能力：四条一律如实拒绝。
     // **不要**返回空状态对象——那会让界面显示成「还没有快照」，等于编造一次成功。
     getRuntimeSessionSnapshotState: (): Promise<RuntimeSessionSnapshotState> =>
@@ -802,6 +836,8 @@ export function createBrowserBridge(): RuntimeBridge {
     manageHarnessVersions: () => Promise.reject(new Error('浏览器模式下不能管理 Harness 版本')),
     listRuntimeReleases: (): Promise<RuntimeReleaseList> => Promise.reject(new Error('浏览器模式下没有更新渠道')),
     downloadRuntimeRelease: (): Promise<void> => Promise.reject(new Error('浏览器模式下不能下载运行时')),
+    getAppUpdateLocalState: (): Promise<AppUpdateState> =>
+      Promise.reject(new Error('浏览器模式下没有应用更新')),
     getAppUpdateState: (forceRefresh = false): Promise<AppUpdateState> => {
       if (typeof forceRefresh !== 'boolean') return Promise.reject(new Error('应用更新刷新参数无效'))
       return Promise.reject(new Error('浏览器模式下没有应用更新'))

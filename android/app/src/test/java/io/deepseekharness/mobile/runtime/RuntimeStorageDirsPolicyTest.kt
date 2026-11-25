@@ -255,6 +255,48 @@ class RuntimeStorageDirsPolicyTest {
         }
         assertEquals(StorageDirCodes.UNREADABLE, failure.code)
     }
+
+    @Test
+    fun `unrestricted sdcard switch unlocks root and Android subdirectories and full sdcard mount`() {
+        // 1. 允许选择根目录与 Android/data、obb
+        assertEquals("", RuntimeStorageDirsPolicy.relativePathOfDocumentId("primary:", allowUnrestricted = true))
+        val fileSystem = FakeStorageDirFileSystem(
+            directories = setOf(root, "$root/Android", "$root/Android/data", "$root/Android/obb"),
+        )
+        assertEquals(root, RuntimeStorageDirsPolicy.resolveSelectedDirectory("primary:", fileSystem, allowUnrestricted = true))
+        assertEquals(
+            "$root/Android/data",
+            RuntimeStorageDirsPolicy.resolveSelectedDirectory("primary:Android/data", fileSystem, allowUnrestricted = true),
+        )
+        // 越出共享存储根仍然拒绝
+        val outside = assertThrows(RuntimeFailure::class.java) {
+            RuntimeStorageDirsPolicy.requireCanonicalPath("/data/local/tmp", allowUnrestricted = true)
+        }
+        assertEquals(StorageDirCodes.OUTSIDE_PUBLIC, outside.code)
+
+        // 2. RuntimeFullSdcardBindProvider：关闭时零影响，开启时自动挂载 /mnt/sdcard
+        val guestRoot = java.nio.file.Files.createTempDirectory("dsh-guest-sdcard").toFile()
+        try {
+            var enabled = false
+            val provider = RuntimeFullSdcardBindProvider(fileSystem, { guestRoot }, { enabled })
+            assertEquals(emptyList<ProotBindMount>(), provider.bindMounts())
+            assertEquals("", provider.cacheToken())
+
+            enabled = true
+            assertEquals("sdcard:on", provider.cacheToken())
+            assertEquals(
+                listOf(ProotBindMount(root, RuntimeStorageDirsLayout.FULL_SDCARD_GUEST_PATH)),
+                provider.bindMounts(),
+            )
+            assertTrue(java.io.File(guestRoot, "mnt/sdcard").isDirectory)
+
+            enabled = false
+            assertEquals(emptyList<ProotBindMount>(), provider.bindMounts())
+            assertEquals("", provider.cacheToken())
+        } finally {
+            guestRoot.deleteRecursively()
+        }
+    }
 }
 
 /**

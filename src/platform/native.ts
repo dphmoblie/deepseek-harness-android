@@ -17,6 +17,7 @@ import type {
   DeviceCommandResult,
   DiagnosticLogExport,
   DiagnosticLogState,
+  HighRiskPermissionsUpdate,
   KeepAliveState,
   MailboxRoot,
   NotificationPermissionResult,
@@ -46,7 +47,8 @@ import {
   assertBase64Input,
   assertDiagnosticRetentionDays,
   assertMailboxSubdirectory,
-  assertRuntimeVersionTarget,
+  assertRuntimeVersionDeleteTarget,
+  assertRuntimeVersionSwitchTarget,
   assertRuntimeVersionPinTarget,
   assertSessionId,
   assertStorageDirPath,
@@ -99,11 +101,14 @@ import {
   validateDeviceCapabilityReport,
   validateRootEngineStatus,
   validateDevicePowerActionResult,
+  validateHighRiskPermissions,
+  validateHighRiskPermissionsUpdate,
   validateAutomationTaskState,
   validatePluginCleanupRequest,
   validateRuntimeResidue,
   validateRuntimeResidueCleanup,
   validateRuntimeSessionListResult,
+  validateRuntimeSessionDeleteResult,
   validateRuntimeSessionSnapshotRestoreResult,
   validateRuntimeSessionSnapshotState,
   validatePreserveState,
@@ -158,6 +163,8 @@ interface NativeRuntimePlugin {
   repairRuntime(): Promise<unknown>
   /** 会话工作区的会话元数据；返回值在 TS 侧走校验（`unknown` → validate）。 */
   sessionList(): Promise<unknown>
+  /** 删除一条已归档会话；返回 `{deleted:true}` 或 `{deleted:false, reason}`。 */
+  deleteSession(options: { sessionId: string }): Promise<unknown>
   getRuntimeSessionSnapshotState(): Promise<unknown>
   createRuntimeSessionSnapshot(): Promise<unknown>
   restoreRuntimeSessionSnapshot(options: { id: string }): Promise<unknown>
@@ -285,6 +292,8 @@ interface NativeRuntimePlugin {
   setRootEngineEnabled(options: { enabled: boolean }): Promise<unknown>
   setRootEngineMode(options: { mode: string; guardProfile: string }): Promise<unknown>
   requestDevicePowerAction(options: { action: string }): Promise<unknown>
+  getHighRiskPermissions(): Promise<unknown>
+  setHighRiskPermissions(options: HighRiskPermissionsUpdate): Promise<unknown>
   getAutomationTaskState(): Promise<unknown>
   cancelAutomationTask(): Promise<unknown>
   clearRuntimeCache(): Promise<unknown>
@@ -292,6 +301,7 @@ interface NativeRuntimePlugin {
   /** 列出原生侧已知的运行时可用版本；结果由 TS 侧校验后再交给界面。 */
   listRuntimeReleases(): Promise<unknown>
   downloadRuntimeRelease(options: { manifestUrl: string; manifestSha256: string }): Promise<unknown>
+  getAppUpdateLocalState(): Promise<unknown>
   getAppUpdateState(options?: { forceRefresh: boolean }): Promise<unknown>
   setAppUpdateChannel(options: { channel: string }): Promise<unknown>
   downloadAppUpdate(): Promise<void>
@@ -656,13 +666,13 @@ function createNativeBridge(): RuntimeBridge {
     runRuntimeSelfCheck: operation => NativeRuntime
       .runRuntimeSelfCheck({ operation: validateSelfCheckOperation(operation) })
       .then(validateRuntimeSelfCheckReport),
-    // 版本槽与体积由原生侧回传；目标取值在前端就拦死（目前只有上一版本可切换或删除）。
+    // 切换支持上一版本和内置版本，删除只支持上一版本。
     getRuntimeVersions: () => NativeRuntime.runtimeVersions().then(validateRuntimeVersions),
     switchRuntimeVersion: target => NativeRuntime
-      .switchRuntimeVersion({ target: assertRuntimeVersionTarget(target) })
+      .switchRuntimeVersion({ target: assertRuntimeVersionSwitchTarget(target) })
       .then(validateRuntimeVersions),
     deleteRuntimeVersion: target => NativeRuntime
-      .deleteRuntimeVersion({ target: assertRuntimeVersionTarget(target) })
+      .deleteRuntimeVersion({ target: assertRuntimeVersionDeleteTarget(target) })
       .then(validateRuntimeVersions),
     // 锁定/解锁只改「满额时谁可以被自动淘汰」，不影响当前运行环境，所以随时可调。
     // 目标必须是版本库里的归档 ID（`previous` / `bundled` 是槽位、不是归档）；
@@ -687,6 +697,11 @@ function createNativeBridge(): RuntimeBridge {
     setRootEngineMode: (mode, guardProfile) => NativeRuntime.setRootEngineMode({ mode, guardProfile }).then(validateRootEngineStatus),
     setRootEngineEnabled: enabled => NativeRuntime.setRootEngineEnabled({ enabled }).then(validateRootEngineStatus),
     requestDevicePowerAction: action => NativeRuntime.requestDevicePowerAction({ action }).then(validateDevicePowerActionResult),
+    getHighRiskPermissions: () => NativeRuntime.getHighRiskPermissions().then(validateHighRiskPermissions),
+    setHighRiskPermissions: update => Promise.resolve()
+      .then(() => validateHighRiskPermissionsUpdate(update))
+      .then(validated => NativeRuntime.setHighRiskPermissions(validated))
+      .then(validateHighRiskPermissions),
     // 任务台账：`connected=false` 表示无障碍服务没连上（此时 `task` 一定是 null）——界面必须把
     // 「读不到」与「现在没有任务」分开说；校验器也按这个前提拒收自相矛盾的载荷。
     getAutomationTaskState: () => NativeRuntime.getAutomationTaskState().then(validateAutomationTaskState),
@@ -704,6 +719,12 @@ function createNativeBridge(): RuntimeBridge {
     // 会话工作区：只取元数据（标识/标题/更新时间），读不到时原生侧回受控错误字段而不是空列表，
     // 这里也不把「读不到」改写成空列表——校验器只认这两种形状。
     listSessions: () => NativeRuntime.sessionList().then(validateRuntimeSessionListResult),
+    // 会话标识的形态由原生侧再校验一次（与列表载荷同一套规则）；这里只挡明显的空值/类型错误，
+    // 不做字符集复刻——两边各写一套规则迟早对不上。
+    deleteSession: sessionId => {
+      if (typeof sessionId !== 'string' || sessionId.length === 0) return Promise.reject(new Error('会话标识缺失'))
+      return NativeRuntime.deleteSession({ sessionId }).then(validateRuntimeSessionDeleteResult)
+    },
     // 快照标识的形态由原生侧把关（`RUNTIME_SNAPSHOT_ID_INVALID`）：前端原样传过去，
     // 不在这里另造一套错误文案，避免两边对「什么算合法 id」说法不一。
     getRuntimeSessionSnapshotState: () => NativeRuntime
@@ -732,6 +753,7 @@ function createNativeBridge(): RuntimeBridge {
     listRuntimeReleases: () => NativeRuntime.listRuntimeReleases().then(validateRuntimeReleaseList),
     downloadRuntimeRelease: (manifestUrl, manifestSha256) =>
       NativeRuntime.downloadRuntimeRelease({ manifestUrl, manifestSha256 }).then(() => undefined),
+    getAppUpdateLocalState: () => NativeRuntime.getAppUpdateLocalState().then(validateAppUpdateState),
     getAppUpdateState: (forceRefresh = false) => {
       if (typeof forceRefresh !== 'boolean') return Promise.reject(new Error('应用更新刷新参数无效'))
       return NativeRuntime.getAppUpdateState({ forceRefresh }).then(validateAppUpdateState)

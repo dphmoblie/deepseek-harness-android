@@ -46,6 +46,8 @@ import android.widget.Toast
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
+import androidx.webkit.WebSettingsCompat
+import androidx.webkit.WebViewFeature
 import io.deepseekharness.mobile.accessibility.DeepSeekAccessibilityService
 import io.deepseekharness.mobile.overlay.OverlayBallPolicy
 import io.deepseekharness.mobile.overlay.OverlayBallFrameUpdates
@@ -860,6 +862,10 @@ class OverlayBallService : Service() {
                 setSupportMultipleWindows(true)
                 safeBrowsingEnabled = true
                 textZoom = AppTextScale.percentOf(resources.configuration.fontScale)
+            }
+            // 与主屏同一口径：小窗渲染的是同一个页面，算法加深会让两边深浅再次分家。
+            if (WebViewFeature.isFeatureSupported(WebViewFeature.ALGORITHMIC_DARKENING)) {
+                runCatching { WebSettingsCompat.setAlgorithmicDarkeningAllowed(web.settings, false) }
             }
             CookieManager.getInstance().apply {
                 setAcceptCookie(true)
@@ -1777,7 +1783,7 @@ class OverlayBallService : Service() {
             ),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
-        return NotificationCompat.Builder(this, CHANNEL_ID)
+        val notification = NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_overlay_ball)
             .setContentTitle(overlayString(R.string.overlay_ball_notification_title))
             .setContentText(overlayString(R.string.overlay_ball_notification_text))
@@ -1789,7 +1795,11 @@ class OverlayBallService : Service() {
             .setSilent(true)
             .setShowWhen(false)
             .setOnlyAlertOnce(true)
-            .build()
+        // 文字颜色交给 SystemUI（它按自己的深色模式选），这里只对齐强调色。
+        HarnessThemeBridge.accentColor(this)?.let { tint ->
+            notification.setColor(tint).setColorized(false)
+        }
+        return notification.build()
     }
 
     private fun ensureNotificationChannel() {

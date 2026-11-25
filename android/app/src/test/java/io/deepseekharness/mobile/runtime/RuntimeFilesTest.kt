@@ -167,6 +167,41 @@ class RuntimeFilesTest {
         assertTrue(Files.exists(marker, LinkOption.NOFOLLOW_LINKS))
     }
 
+    @Test
+    fun fallbackDeletesReadOnlyDirectorySubtreeWithoutAccessDenied() {
+        val sandbox = temporaryFolder.newFolder("sandbox").toPath()
+        val allowedParent = Files.createDirectory(sandbox.resolve("runtime"))
+        val target = Files.createDirectory(allowedParent.resolve("stale-retained-test"))
+        val readOnlyDir = Files.createDirectory(target.resolve("locked"))
+        val payload = Files.write(readOnlyDir.resolve("file.txt"), "data".toByteArray())
+        try {
+            val posix = Files.getFileAttributeView(
+                readOnlyDir,
+                java.nio.file.attribute.PosixFileAttributeView::class.java,
+                LinkOption.NOFOLLOW_LINKS,
+            )
+            if (posix != null) {
+                posix.setPermissions(
+                    setOf(
+                        java.nio.file.attribute.PosixFilePermission.OWNER_READ,
+                        java.nio.file.attribute.PosixFilePermission.OWNER_EXECUTE,
+                    ),
+                )
+            } else {
+                payload.toFile().setWritable(false, true)
+                readOnlyDir.toFile().setWritable(false, true)
+            }
+
+            RuntimeFiles.deleteTreeNoFollowFallback(target.toFile(), allowedParent.toFile())
+
+            assertFalse(Files.exists(target, LinkOption.NOFOLLOW_LINKS))
+            assertTrue(Files.isDirectory(allowedParent, LinkOption.NOFOLLOW_LINKS))
+        } finally {
+            runCatching { readOnlyDir.toFile().setWritable(true, true) }
+            runCatching { payload.toFile().setWritable(true, true) }
+        }
+    }
+
     private fun assumeSecureDirectoryStreams(path: Path) {
         assumeTrue("Default provider does not support secure directory streams", supportsSecureDirectoryStreams(path))
     }

@@ -705,6 +705,12 @@ object VirtualScreenPolicy {
      */
     const val SELF_PACKAGE_FIELD = "selfPackage"
 
+    /** 宿主注入的任意 URI scheme 放行标记（由 `VIRTUAL_SCREEN_UNRESTRICTED` 决定，宿主强制覆写不可伪造）。 */
+    const val ALLOW_ANY_URI_SCHEME_FIELD = "allowAnyUriScheme"
+
+    private val RFC3986_URI_SCHEME = Regex("^[a-z][a-z0-9+.-]*$")
+    private val BLOCKED_CUSTOM_URI_SCHEMES = setOf("file", "javascript", "data")
+
     /** 解析分支的失败码工厂：`package` 解不出启动入口时用（不是「副屏不可用」，是包本身没有入口）。 */
     fun launchUnresolvedFailure(packageName: String): RuntimeFailure = RuntimeFailure(
         LAUNCH_UNRESOLVED_CODE,
@@ -725,11 +731,18 @@ object VirtualScreenPolicy {
      * 链接校验（纯函数）：非空且有长度上限、scheme 在白名单内、不含 [LAUNCH_URI_FORBIDDEN] 里的字符。
      * scheme 大小写不敏感（`HTTPS://` 放行），返回值原样交给 `am start -d`。
      */
-    fun launchUri(value: String): String {
+    fun launchUri(value: String, allowAnyScheme: Boolean = false): String {
         require(value.length in 1..MAX_LAUNCH_URI_CHARS) { "链接长度必须在 1～$MAX_LAUNCH_URI_CHARS 个字符内" }
         require(value.none { it in LAUNCH_URI_FORBIDDEN }) { "链接不能包含空格、引号、分号、竖线、反引号或换行等字符" }
-        require(value.substringBefore(':', "").lowercase() in LAUNCH_URI_SCHEMES) {
-            "只支持 http/https/market 链接，应用私有 scheme 请改用 component 或 package"
+        val scheme = value.substringBefore(':', "").lowercase()
+        if (allowAnyScheme) {
+            require(RFC3986_URI_SCHEME.matches(scheme) && scheme !in BLOCKED_CUSTOM_URI_SCHEMES) {
+                "链接 scheme 格式无效或不被支持"
+            }
+        } else {
+            require(scheme in LAUNCH_URI_SCHEMES) {
+                "只支持 http/https/market 链接，应用私有 scheme 请改用 component 或 package"
+            }
         }
         return value
     }
@@ -751,17 +764,43 @@ object VirtualScreenPolicy {
         data class Uri(val uri: String) : LaunchRequest()
     }
 
+    const val TARGET_FORBIDDEN_CODE = "VIRTUAL_SCREEN_TARGET_FORBIDDEN"
+
+    /**
+     * AI 主动拉起、切换或跳转副屏目标应用时的防自我提权门控：
+     *  - 始终禁止将本应用（`io.deepseekharness.mobile`）拉入副屏，防止 AI 通过副屏截图+点击自行开启高危开关或确认页；
+     *  - 默认禁止拉起系统设置、权限控制器、安装器及 Root/Shizuku 管理器（与 `AccessibilityAutomationPolicy.reservedPackages` 同源），
+     *    仅在显式开启「无障碍操作受保护系统组件与权限弹窗」（[allowSystemApps]）时才放行。
+     */
+    fun requireAgentTargetAllowed(packageName: String, allowSystemApps: Boolean) {
+        val normalized = packageName.trim()
+        if (normalized == io.deepseekharness.mobile.accessibility.AccessibilityAutomationPolicy.SELF_PACKAGE) {
+            throw io.deepseekharness.mobile.runtime.RuntimeFailure(
+                TARGET_FORBIDDEN_CODE,
+                "禁止将 DeepSeek Harness 本应用拉入 AI 副屏，防止自我提权操作",
+            )
+        }
+        if (!allowSystemApps &&
+            io.deepseekharness.mobile.accessibility.AccessibilityAutomationPolicy.isReservedPackage(normalized)
+        ) {
+            throw io.deepseekharness.mobile.runtime.RuntimeFailure(
+                TARGET_FORBIDDEN_CODE,
+                "目标应用属于受保护系统组件或特权管理器；如需在副屏操作，请先在「AI 高危文件与命令权限」中开启对应开关",
+            )
+        }
+    }
+
     /**
      * launch 入参校验（纯函数）：`component`、`package`、`uri` 必须且只能给一个。
      * 同时给两个也拒绝：无法判断 AI 想要哪一个，猜一个等于替调用方做决定。
      */
-    fun launchRequest(p: JSONObject): LaunchRequest {
+    fun launchRequest(p: JSONObject, allowAnyScheme: Boolean = p.optBoolean(ALLOW_ANY_URI_SCHEME_FIELD, false)): LaunchRequest {
         val fields = listOf("component", "package", "uri").filter { !p.isNull(it) }
         require(fields.size == 1) { "launch 必须且只能提供 component、package、uri 中的一个" }
         return when (val field = fields.single()) {
             "component" -> LaunchRequest.Component(component(p.getString(field)))
             "package" -> LaunchRequest.Package(launchPackage(p.getString(field)))
-            else -> LaunchRequest.Uri(launchUri(p.getString(field)))
+            else -> LaunchRequest.Uri(launchUri(p.getString(field), allowAnyScheme = allowAnyScheme))
         }
     }
 

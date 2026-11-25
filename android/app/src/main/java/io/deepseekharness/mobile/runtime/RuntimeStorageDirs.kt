@@ -4,6 +4,8 @@ import android.content.Context
 import android.os.Build
 import android.os.Environment
 import io.deepseekharness.mobile.runtime.diagnostics.DiagnosticLevel
+import io.deepseekharness.mobile.shizuku.HighRiskCategory
+import io.deepseekharness.mobile.shizuku.HighRiskPermissionStore
 import java.io.File
 import java.io.IOException
 import java.security.MessageDigest
@@ -43,6 +45,9 @@ object RuntimeStorageDirsLayout {
 
     /** 宿主侧挂载点相对 rootfs 的路径（逐级 NoFollow 创建）。 */
     const val HOST_PREFIX = "mnt/user"
+
+    /** 仅在开启 `STORAGE_FULL_SDCARD_MOUNT` 时自动挂载的整卡访客路径。 */
+    const val FULL_SDCARD_GUEST_PATH = "/mnt/sdcard"
 
     fun guestPath(index: Int): String = "$GUEST_PREFIX/$index"
 
@@ -281,7 +286,7 @@ internal object RuntimeStorageDirsPolicy {
      * 前导 `/` 会被去掉：少数 ROM 的提供方给出 `primary:/Documents/Foo`，这与
      * `primary:Documents/Foo` 表达的是同一个目录，属于无歧义归一化，不属于猜测。
      */
-    fun relativePathOfDocumentId(documentId: String): String {
+    fun relativePathOfDocumentId(documentId: String, allowUnrestricted: Boolean = false): String {
         if (
             documentId.isEmpty() || documentId.length > RuntimeStorageDirsLimits.MAX_DOCUMENT_ID_CHARS ||
             documentId.any { it.code < 0x20 || it.code == 0x7f }
@@ -299,7 +304,7 @@ internal object RuntimeStorageDirsPolicy {
                 "只能选择内置共享存储中的目录；SD 卡与外部存储卷的路径不可靠，已拒绝",
             )
         }
-        return normalizeRelativePath(documentId.substring(separator + 1))
+        return normalizeRelativePath(documentId.substring(separator + 1), allowRoot = allowUnrestricted)
     }
 
     /** 从相对路径取展示名：最后一级目录名，截断到上限（不参与任何判定）。 */
@@ -316,18 +321,24 @@ internal object RuntimeStorageDirsPolicy {
      * 把 SAF 选择结果解析成可以落盘的宿主绝对路径。
      *
      * 判定顺序即错误码优先级：先映射（document id 规则）→ `canonicalFile` 解析符号链接
-     * → 必须是真实目录（NoFollow）→ 必须在共享存储之内（不能是根、`Android/`、应用私有目录）
-     * → 路径能作为 PRoot 绑定源。任何一条不过都抛 [RuntimeFailure]，绝不返回一个「先存下再说」的路径。
+     * → 必须是真实目录（NoFollow）→ 必须在共享存储之内（默认拒绝根、`Android/`、应用私有目录；
+     * 仅在显式开启 [allowUnrestricted] 时放行）→ 路径能作为 PRoot 绑定源。任何一条不过都抛 [RuntimeFailure]，
+     * 绝不返回一个「先存下再说」的路径。
      */
-    fun resolveSelectedDirectory(documentId: String, fileSystem: StorageDirFileSystem): String {
-        val relative = relativePathOfDocumentId(documentId)
+    fun resolveSelectedDirectory(
+        documentId: String,
+        fileSystem: StorageDirFileSystem,
+        allowUnrestricted: Boolean = false,
+    ): String {
+        val relative = relativePathOfDocumentId(documentId, allowUnrestricted = allowUnrestricted)
         val base = fileSystem.publicStorageRoot.trimEnd(PATH_SEPARATOR)
-        val canonical = fileSystem.canonicalPath("$base/$relative")
+        val candidate = if (relative.isEmpty()) base else "$base/$relative"
+        val canonical = fileSystem.canonicalPath(candidate)
             ?: throw RuntimeFailure(StorageDirCodes.UNRESOLVED, "无法解析所选目录的真实路径")
         if (!fileSystem.isRealDirectoryNoFollow(canonical)) {
             throw RuntimeFailure(StorageDirCodes.NOT_A_DIRECTORY, "所选对象不是真实目录（可能是符号链接或已被删除）")
         }
-        requireCanonicalPath(canonical)
+        requireCanonicalPath(canonical, allowUnrestricted = allowUnrestricted)
         if (!fileSystem.isReadableDirectory(canonical)) {
             throw RuntimeFailure(StorageDirCodes.UNREADABLE, "所选目录当前不可读")
         }
@@ -336,30 +347,34 @@ internal object RuntimeStorageDirsPolicy {
 
     /**
      * 规范绝对路径的准入规则。**纯字符串判定**：同样的规则既用在「刚选中的目录」上，
-     * 也用在「上次存下、这次要绑定的目录」上，因此失效条目不会绕过校验。
+     * 也用在「上次存下、这次要绑定的目录」上，因此失效条目（或高危开关被关闭后的已存条目）不会绕过校验。
      */
     fun requireCanonicalPath(
         canonicalPath: String,
         publicRoot: String = RuntimeStorageDirsLayout.PUBLIC_STORAGE,
+        allowUnrestricted: Boolean = false,
     ) {
         val root = publicRoot.trimEnd(PATH_SEPARATOR)
         requireStructuralPath(canonicalPath)
-        if (canonicalPath == root) {
+        val isRoot = canonicalPath == root
+        if (isRoot && !allowUnrestricted) {
             throw RuntimeFailure(StorageDirCodes.ROOT_REJECTED, "不能选择共享存储的根目录")
         }
-        if (!canonicalPath.startsWith("$root$PATH_SEPARATOR")) {
+        if (!isRoot && !canonicalPath.startsWith("$root$PATH_SEPARATOR")) {
             throw RuntimeFailure(StorageDirCodes.OUTSIDE_PUBLIC, "目录不在共享存储之内")
         }
-        val segments = canonicalPath.removePrefix("$root$PATH_SEPARATOR").split(PATH_SEPARATOR)
-        // `Android/data` 与 `Android/obb` 装的是各应用的私有数据：先于「Android 整体」判定，
-        // 是为了给出「应用私有目录」这个更准确的理由（两者都被拒绝，但提示不同）。
-        if (segments.size >= 2 && segments[0] == RuntimeStorageDirsLayout.ANDROID_DIRECTORY &&
-            segments[1] in RuntimeStorageDirsLayout.PRIVATE_SUBDIRECTORIES
-        ) {
-            throw RuntimeFailure(StorageDirCodes.PRIVATE_REJECTED, "不能选择应用私有目录")
-        }
-        if (segments[0] == RuntimeStorageDirsLayout.ANDROID_DIRECTORY) {
-            throw RuntimeFailure(StorageDirCodes.ANDROID_REJECTED, "不能选择 Android 目录及其子目录")
+        if (!isRoot && !allowUnrestricted) {
+            val segments = canonicalPath.removePrefix("$root$PATH_SEPARATOR").split(PATH_SEPARATOR)
+            // `Android/data` 与 `Android/obb` 装的是各应用的私有数据：先于「Android 整体」判定，
+            // 是为了给出「应用私有目录」这个更准确的理由（两者都被拒绝，但提示不同）。
+            if (segments.size >= 2 && segments[0] == RuntimeStorageDirsLayout.ANDROID_DIRECTORY &&
+                segments[1] in RuntimeStorageDirsLayout.PRIVATE_SUBDIRECTORIES
+            ) {
+                throw RuntimeFailure(StorageDirCodes.PRIVATE_REJECTED, "不能选择应用私有目录")
+            }
+            if (segments[0] == RuntimeStorageDirsLayout.ANDROID_DIRECTORY) {
+                throw RuntimeFailure(StorageDirCodes.ANDROID_REJECTED, "不能选择 Android 目录及其子目录")
+            }
         }
         // 最后一道是「能不能真的挂进访客」：与 RuntimeCommand 用同一个判定，
         // 避免这里放行、那里抛错，最后以「PRoot 起不来」的形式暴露给用户。
@@ -391,12 +406,13 @@ internal object RuntimeStorageDirsPolicy {
         }
     }
 
-    private fun normalizeRelativePath(raw: String): String {
+    private fun normalizeRelativePath(raw: String, allowRoot: Boolean = false): String {
         var value = raw
         // SAF 偶尔给出尾部分隔符（`primary:Documents/Foo/`）与前导 `/`：属于无歧义归一化。
         while (value.startsWith(PATH_SEPARATOR)) value = value.drop(1)
         while (value.endsWith(PATH_SEPARATOR)) value = value.dropLast(1)
         if (value.isEmpty()) {
+            if (allowRoot) return ""
             throw RuntimeFailure(StorageDirCodes.ROOT_REJECTED, "不能选择共享存储的根目录")
         }
         if (value.contains('\\') || value.any { it.code < 0x20 || it.code == 0x7f }) {
@@ -506,6 +522,8 @@ internal class RuntimeStorageDirs(
     private val guestRoot: () -> File,
     /** 诊断出口：只记受控字段（reason/result/count/code），绝不记路径。 */
     private val record: (DiagnosticLevel, Map<String, String>) -> Unit = { _, _ -> },
+    /** 是否允许选择共享存储根目录与 `Android/` 子目录（绑定启动器高危权限开关）。 */
+    private val allowFullSdcard: () -> Boolean = { false },
 ) : OptionalBindProvider {
     /** 白名单可选绑定的归类：访客侧 `/mnt/user/<序号>` 整体一类，一起加、一起撤。 */
     override val group: OptionalBindGroup get() = OptionalBindGroup.USER_DIRECTORIES
@@ -539,7 +557,11 @@ internal class RuntimeStorageDirs(
      */
     fun add(documentId: String): StorageDirsState {
         requireReady()
-        val canonical = RuntimeStorageDirsPolicy.resolveSelectedDirectory(documentId, fileSystem)
+        val canonical = RuntimeStorageDirsPolicy.resolveSelectedDirectory(
+            documentId,
+            fileSystem,
+            allowUnrestricted = allowFullSdcard(),
+        )
         val stored = read().entries
         if (stored.any { it.path == canonical }) {
             throw RuntimeFailure(StorageDirCodes.DUPLICATE, "该目录已在白名单中")
@@ -774,7 +796,10 @@ internal class RuntimeStorageDirs(
             )
         }
         return try {
-            RuntimeStorageDirsPolicy.requireCanonicalPath(entry.path)
+            RuntimeStorageDirsPolicy.requireCanonicalPath(
+                entry.path,
+                allowUnrestricted = allowFullSdcard(),
+            )
             if (!fileSystem.isRealDirectoryNoFollow(entry.path)) {
                 throw RuntimeFailure(StorageDirCodes.NOT_A_DIRECTORY, "目录已不存在或不再是真实目录")
             }
@@ -876,6 +901,57 @@ internal class RuntimeStorageDirs(
             fileSystem = AndroidStorageDirFileSystem(),
             guestRoot = { store.currentRoot },
             record = record,
+            allowFullSdcard = {
+                HighRiskPermissionStore.status(context)
+                    .isAllowed(HighRiskCategory.STORAGE_FULL_SDCARD_MOUNT)
+            },
         )
+    }
+}
+
+/**
+ * 整卡直挂（`/storage/emulated/0` → `/mnt/sdcard`）可选绑定提供者。
+ *
+ * 默认完全关闭：开关关闭时 `bindMounts()` 为空且 `cacheToken()` 为空串（对既有设备零影响、
+ * 不触发任何启动档重探测）；仅在用户于启动器显式开启「访客整卡直挂与存储根目录放行」且已授予
+ * 「所有文件访问」时才追加挂载，关闭开关后下一次启动即刻撤除挂载。
+ */
+internal class RuntimeFullSdcardBindProvider(
+    private val fileSystem: StorageDirFileSystem,
+    private val guestRoot: () -> File,
+    private val isEnabled: () -> Boolean,
+) : OptionalBindProvider {
+    override val group: OptionalBindGroup get() = OptionalBindGroup.FULL_SDCARD
+
+    override fun bindMounts(): List<ProotBindMount> {
+        if (!isEnabled()) return emptyList()
+        if (!fileSystem.isFeatureSupported() || !fileSystem.isSharedStorageAccessible()) return emptyList()
+        val hostPath = fileSystem.canonicalPath(fileSystem.publicStorageRoot) ?: return emptyList()
+        if (!RuntimeCommand.isSafeAbsolutePath(hostPath)) return emptyList()
+        if (!fileSystem.isRealDirectoryNoFollow(hostPath) || !fileSystem.isReadableDirectory(hostPath)) {
+            return emptyList()
+        }
+        val root = guestRoot()
+        if (!MailboxTree.isRealDirectory(root.toPath())) return emptyList()
+        if (!ensureGuestMountPoint(root, RuntimeStorageDirsLayout.FULL_SDCARD_GUEST_PATH)) return emptyList()
+        return listOf(ProotBindMount(hostPath, RuntimeStorageDirsLayout.FULL_SDCARD_GUEST_PATH))
+    }
+
+    override fun cacheToken(): String {
+        if (!isEnabled()) return ""
+        val ready = fileSystem.isFeatureSupported() && fileSystem.isSharedStorageAccessible()
+        return if (ready) "sdcard:on" else "sdcard:pending"
+    }
+
+    companion object {
+        fun from(context: Context, store: RuntimeStore): RuntimeFullSdcardBindProvider =
+            RuntimeFullSdcardBindProvider(
+                fileSystem = AndroidStorageDirFileSystem(),
+                guestRoot = { store.currentRoot },
+                isEnabled = {
+                    HighRiskPermissionStore.status(context)
+                        .isAllowed(HighRiskCategory.STORAGE_FULL_SDCARD_MOUNT)
+                },
+            )
     }
 }

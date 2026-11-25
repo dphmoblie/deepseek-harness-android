@@ -179,8 +179,15 @@ android {
         applicationId 'io.deepseekharness.mobile'
         minSdk 26
         targetSdk 35
-        versionCode 52
-        versionName '0.4.4'
+        versionCode 54
+        versionName '0.4.6'
+        def appVersionSuffix = (System.getenv('DSH_APP_VERSION_SUFFIX') ?: '').trim()
+        if (!appVersionSuffix.isEmpty()) {
+            if (!(appVersionSuffix ==~ /^-mobile-[0-9]+$/)) {
+                throw new GradleException("Invalid DSH_APP_VERSION_SUFFIX: ${appVersionSuffix}")
+            }
+            versionNameSuffix appVersionSuffix
+        }
 
         buildConfigField 'String', 'DEFAULT_MANIFEST_URL', envBuildValue('DSH_RUNTIME_MANIFEST_URL')
         buildConfigField 'String', 'DEFAULT_MANIFEST_SHA256', envBuildValue('DSH_RUNTIME_MANIFEST_SHA256')

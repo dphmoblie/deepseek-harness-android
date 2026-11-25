@@ -1,0 +1,46 @@
+/* 「工作区文件」卡片：与文件管理页的其它卡片同色同边，但列表行更紧凑——
+ * 这里的每一行只是「一个可直接取走的文件」，不需要目录浏览那套面包屑。 */
+.workspace-files {
+  margin-top: 16px;
+  padding: 16px 18px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-card);
+  background: var(--card-color, var(--surface));
+  color: var(--card-ink, var(--ink));
+  box-shadow: var(--shadow-card);
+}
+.workspace-files-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+.workspace-files-heading h2 { margin: 0 0 4px; font-size: 1rem; }
+.workspace-files-heading p { margin: 0; color: var(--card-muted, var(--muted)); font-size: .8125rem; line-height: 1.6; }
+.workspace-files-note { margin: 6px 0 0; color: var(--card-muted, var(--muted)); font-size: .8125rem; line-height: 1.6; }
+.workspace-files-list { display: grid; gap: 6px; margin: 8px 0 0; padding: 0; list-style: none; }
+/* 一行三项：图标 / 路径（吃掉剩余宽度）/ 两个动作。窄屏只把动作文案藏起来，
+ * 行不折行——折成两行会让每行高出一倍，一屏就只看得到三个文件。 */
+.workspace-files-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  min-height: 44px;
+  padding: 4px 8px;
+  border: 1px solid var(--line-faint);
+  border-radius: var(--radius-inner);
+  background: var(--card-color, var(--surface-sunken));
+}
+.workspace-files-path { flex: 1 1 auto; min-width: 0; overflow: hidden; font-size: .8125rem; text-overflow: ellipsis; white-space: nowrap; }
+.workspace-files-actions { display: inline-flex; flex: none; gap: 6px; }
+.workspace-files-action { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
+.workspace-files-error { margin-top: 10px; }
+@media (max-width: 520px) {
+  .workspace-files-heading { flex-direction: column; align-items: stretch; }
+  /* 标题下的按钮按内容宽度排，不整行拉满。 */
+  .workspace-files-heading > .button { align-self: flex-start; }
+  .workspace-files-action { min-width: 40px; padding: 5px 8px; justify-content: center; }
+  .workspace-files-action-label { display: none; }
+}

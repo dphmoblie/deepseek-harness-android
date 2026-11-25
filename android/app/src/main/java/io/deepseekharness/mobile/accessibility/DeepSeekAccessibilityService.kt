@@ -32,6 +32,8 @@ import android.widget.Toast
 import io.deepseekharness.mobile.AppThemePreference
 import io.deepseekharness.mobile.R
 import io.deepseekharness.mobile.shizuku.DeviceCommandResult
+import io.deepseekharness.mobile.shizuku.HighRiskCategory
+import io.deepseekharness.mobile.shizuku.HighRiskPermissionStore
 import io.deepseekharness.mobile.virtualscreen.VirtualScreenTextPolicy
 import io.deepseekharness.mobile.virtualscreen.VirtualScreenTreeDiff
 import io.deepseekharness.mobile.runtime.audit.AuditEvent
@@ -142,10 +144,20 @@ class DeepSeekAccessibilityService : AccessibilityService() {
         return result
     }
 
+    private fun allowSystemApps(): Boolean =
+        HighRiskPermissionStore.status(this).isAllowed(HighRiskCategory.ACCESSIBILITY_SYSTEM_APPS)
+
+    internal fun allowSensitiveWindows(): Boolean =
+        HighRiskPermissionStore.status(this).isAllowed(HighRiskCategory.ACCESSIBILITY_SENSITIVE_WINDOWS)
+
+    internal fun allowLockscreenAndBurst(): Boolean =
+        HighRiskPermissionStore.status(this).isAllowed(HighRiskCategory.ACCESSIBILITY_LOCKSCREEN_BURST)
+
     private fun executeChecked(command: String, param: String): DeviceCommandResult {
         val now = SystemClock.elapsedRealtime()
-        if (isLockedOrScreenOff()) return failure("ACCESSIBILITY_DEVICE_LOCKED", "设备已锁定或屏幕未交互")
-        if (now - lastActionAt < ACTION_INTERVAL_MS && command in setOf("accessibilityAction", "tap", "inputText")) {
+        val burstUnlocked = allowLockscreenAndBurst()
+        if (!burstUnlocked && isLockedOrScreenOff()) return failure("ACCESSIBILITY_DEVICE_LOCKED", "设备已锁定或屏幕未交互")
+        if (!burstUnlocked && now - lastActionAt < ACTION_INTERVAL_MS && command in setOf("accessibilityAction", "tap", "inputText")) {
             return failure("ACCESSIBILITY_RATE_LIMITED", "无障碍动作过于频繁，请稍后再试")
         }
         val root = rootInActiveWindow ?: return failure("ACCESSIBILITY_WINDOW_UNAVAILABLE", "当前没有可读取的应用窗口")
@@ -154,7 +166,15 @@ class DeepSeekAccessibilityService : AccessibilityService() {
             if (!AccessibilityAutomationStore.packageAllowed(this, packageName)) {
                 return failure("ACCESSIBILITY_PACKAGE_DENIED", "当前应用不在无障碍自动化白名单中")
             }
-            if (containsSensitiveWindow(root)) return failure("ACCESSIBILITY_SENSITIVE_WINDOW", "检测到密码、验证码、支付或权限窗口，已拒绝自动化")
+            // 防 AI 自我提权（硬底线，不受 `accessibility_sensitive_windows` 开关放宽）：
+            // 禁止无障碍在 Root 警告确认页激活期间、或本应用高危权限开关页面上执行任何读取与操作。
+            if (io.deepseekharness.mobile.RootCommandApprovalActivity.activeApprovalWindowOpen) {
+                return failure("ACCESSIBILITY_SENSITIVE_WINDOW", "Root 高危命令警告确认页正在显示，禁止自动化操作")
+            }
+            if (packageName == AccessibilityAutomationPolicy.SELF_PACKAGE && containsSelfPrivilegeGuardWindow(root)) {
+                return failure("ACCESSIBILITY_SENSITIVE_WINDOW", "检测到本应用高危权限或根通道确认界面，禁止 AI 自行操作")
+            }
+            if (!allowSensitiveWindows() && containsSensitiveWindow(root)) return failure("ACCESSIBILITY_SENSITIVE_WINDOW", "检测到密码、验证码、支付或权限窗口，已拒绝自动化")
             when (command) {
                 "accessibilityTree" -> if (param.isBlank()) tree(root, packageName)
                 else failure("ACCESSIBILITY_ACTION_INVALID", "无障碍层级读取不接受参数")
@@ -235,10 +255,11 @@ class DeepSeekAccessibilityService : AccessibilityService() {
 
     private fun appendNodes(node: AccessibilityNodeInfo?, result: JSONArray, depth: Int) {
         if (node == null || depth > MAX_TREE_DEPTH || result.length() >= MAX_TREE_NODES) return
+        val revealEditable = allowSensitiveWindows()
         val viewId = node.viewIdResourceName
-        val text = if (node.isEditable) "" else safeText(node.text)
-        val hint = if (node.isEditable) "" else safeText(node.hintText)
-        val description = if (node.isEditable) "" else safeText(node.contentDescription)
+        val text = if (node.isEditable && !revealEditable) "" else safeText(node.text)
+        val hint = if (node.isEditable && !revealEditable) "" else safeText(node.hintText)
+        val description = if (node.isEditable && !revealEditable) "" else safeText(node.contentDescription)
         val bounds = Rect().also(node::getBoundsInScreen)
         val entry = JSONObject()
             .put("className", node.className?.toString()?.take(120).orEmpty())
@@ -263,14 +284,19 @@ class DeepSeekAccessibilityService : AccessibilityService() {
     }
 
     private fun action(root: AccessibilityNodeInfo, packageName: String, param: String): DeviceCommandResult {
-        val request = AccessibilityAutomationPolicy.parseAction(param)
+        val sensitiveUnlocked = allowSensitiveWindows()
+        val request = AccessibilityAutomationPolicy.parseAction(
+            param = param,
+            allowReserved = allowSystemApps(),
+            allowSensitiveText = sensitiveUnlocked,
+        )
             ?: return failure("ACCESSIBILITY_ACTION_INVALID", "无障碍动作参数无效")
         if (request.packageName != packageName) return failure("ACCESSIBILITY_PACKAGE_DENIED", "动作目标不是当前前台应用")
         val node = findByViewId(root, request.viewId)
             ?: return failure("ACCESSIBILITY_NODE_NOT_FOUND", "未找到唯一的目标节点")
         return try {
-            if (node.packageName?.toString() != packageName || node.isPassword ||
-                AccessibilityAutomationPolicy.containsSensitiveText(node.viewIdResourceName)
+            if (node.packageName?.toString() != packageName || (!sensitiveUnlocked && (node.isPassword ||
+                AccessibilityAutomationPolicy.containsSensitiveText(node.viewIdResourceName)))
             ) return failure("ACCESSIBILITY_ACTION_REJECTED", "目标节点不允许此操作")
             // 用户已在系统设置中开启无障碍服务，并将目标应用加入 DSH 白名单；
             // 在这个授权边界内允许连续操作，用于自动跳过开屏广告。
@@ -508,6 +534,34 @@ class DeepSeekAccessibilityService : AccessibilityService() {
         return found
     }
 
+    /** 扫描本应用窗口是否处于高危权限设置或 Root 确认页（有界遍历，不可被开关放开）。 */
+    private fun containsSelfPrivilegeGuardWindow(root: AccessibilityNodeInfo): Boolean {
+        var found = false
+        var scanned = 0
+        fun visit(node: AccessibilityNodeInfo?, depth: Int) {
+            if (node == null || found) return
+            if (depth > MAX_TREE_DEPTH || ++scanned > MAX_SENSITIVE_SCAN_NODES) return
+            if (AccessibilityAutomationPolicy.containsSelfPrivilegeGuardText(node.viewIdResourceName) ||
+                AccessibilityAutomationPolicy.containsSelfPrivilegeGuardText(node.text) ||
+                AccessibilityAutomationPolicy.containsSelfPrivilegeGuardText(node.hintText) ||
+                AccessibilityAutomationPolicy.containsSelfPrivilegeGuardText(node.contentDescription)
+            ) {
+                found = true
+                return
+            }
+            for (index in 0 until node.childCount) {
+                val child = node.getChild(index) ?: continue
+                try {
+                    visit(child, depth + 1)
+                } finally {
+                    child.recycle()
+                }
+            }
+        }
+        visit(root, 0)
+        return found
+    }
+
     private fun isLockedOrScreenOff(): Boolean {
         val keyguard = getSystemService(KeyguardManager::class.java)
         val power = getSystemService(PowerManager::class.java)
@@ -537,12 +591,19 @@ class DeepSeekAccessibilityService : AccessibilityService() {
         if (displayId <= 0) {
             return denied("ACCESSIBILITY_WINDOW_UNAVAILABLE", "显示编号 $displayId 无效：副屏编号必须大于 0（0 是主屏）")
         }
-        if (isLockedOrScreenOff()) {
+        if (!allowLockscreenAndBurst() && isLockedOrScreenOff()) {
             return denied("ACCESSIBILITY_DEVICE_LOCKED", "设备已锁定或屏幕未交互")
         }
         val root = displayWindowRoot(displayId)
             ?: return denied("ACCESSIBILITY_WINDOW_UNAVAILABLE", "显示编号 $displayId 上没有可读取的窗口（窗口可能正在切换或刚重建，可稍后重试或先用截图）")
-        if (containsSensitiveWindow(root)) {
+        val displayPkg = root.packageName?.toString().orEmpty()
+        if (io.deepseekharness.mobile.RootCommandApprovalActivity.activeApprovalWindowOpen ||
+            (displayPkg == AccessibilityAutomationPolicy.SELF_PACKAGE && containsSelfPrivilegeGuardWindow(root))
+        ) {
+            root.recycle()
+            return denied("ACCESSIBILITY_SENSITIVE_WINDOW", "检测到本应用高危权限或根通道确认界面，禁止 AI 自行操作")
+        }
+        if (!allowSensitiveWindows() && containsSensitiveWindow(root)) {
             root.recycle()
             return denied("ACCESSIBILITY_SENSITIVE_WINDOW", "检测到密码、验证码、支付或权限窗口，已拒绝读取")
         }
@@ -620,7 +681,7 @@ class DeepSeekAccessibilityService : AccessibilityService() {
     internal fun displayImeRootFor(displayId: Int): AccessibilityNodeInfo? {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return null
         if (displayId <= 0) return null
-        if (isLockedOrScreenOff()) return null
+        if (!allowLockscreenAndBurst() && isLockedOrScreenOff()) return null
         val windows = windowsForDisplay(displayId) ?: return null
         var best: AccessibilityNodeInfo? = null
         var bestRank = Int.MAX_VALUE
@@ -789,7 +850,7 @@ class DeepSeekAccessibilityService : AccessibilityService() {
             return false
         }
         val waited = SystemClock.elapsedRealtime() - lastActionAt
-        if (waited in 0 until ACTION_INTERVAL_MS) SystemClock.sleep(ACTION_INTERVAL_MS - waited)
+        if (!allowLockscreenAndBurst() && waited in 0 until ACTION_INTERVAL_MS) SystemClock.sleep(ACTION_INTERVAL_MS - waited)
         // 走 AccessibilityAction 常量取 id：ACTION_IME_ENTER 的顶层 int 别名并不在所有 compileSdk
         // 的公开存根里，而这个内部类常量从 API 30 起一直是公开的。
         val enterAction = AccessibilityNodeInfo.AccessibilityAction.ACTION_IME_ENTER.id
@@ -834,12 +895,13 @@ class DeepSeekAccessibilityService : AccessibilityService() {
             rejectWrite("ACCESSIBILITY_ACTION_INVALID")
             return DisplayNodeActionResult(false, false, "none", errorCode = "VIRTUAL_SCREEN_INVALID", reason = "副屏显示编号无效")
         }
-        if (isLockedOrScreenOff()) {
+        val burstUnlocked = allowLockscreenAndBurst()
+        if (!burstUnlocked && isLockedOrScreenOff()) {
             rejectWrite("ACCESSIBILITY_DEVICE_LOCKED")
             return DisplayNodeActionResult(false, false, "none", errorCode = "VIRTUAL_SCREEN_LOCKED", reason = "设备已锁定或熄屏")
         }
         val now = SystemClock.elapsedRealtime()
-        if (now - lastActionAt < ACTION_INTERVAL_MS) {
+        if (!burstUnlocked && now - lastActionAt < ACTION_INTERVAL_MS) {
             rejectWrite("ACCESSIBILITY_RATE_LIMITED")
             return DisplayNodeActionResult(false, false, "none", errorCode = "VIRTUAL_SCREEN_BUSY", reason = "副屏操作过快，请稍候")
         }
@@ -854,7 +916,7 @@ class DeepSeekAccessibilityService : AccessibilityService() {
         var matched: AccessibilityNodeInfo? = null
         val ancestors = ArrayList<AccessibilityNodeInfo>()
         try {
-            if (containsSensitiveWindow(root)) {
+            if (!allowSensitiveWindows() && containsSensitiveWindow(root)) {
                 rejectWrite("ACCESSIBILITY_SENSITIVE_WINDOW")
                 return DisplayNodeActionResult(false, false, "none", errorCode = "ACCESSIBILITY_SENSITIVE_WINDOW", reason = "检测到密码、验证码、支付或权限窗口，已拒绝操作")
             }
@@ -1029,11 +1091,12 @@ class DeepSeekAccessibilityService : AccessibilityService() {
             rejectWrite("ACCESSIBILITY_ACTION_INVALID")
             return null
         }
-        if (isLockedOrScreenOff()) {
+        val burstUnlocked = allowLockscreenAndBurst()
+        if (!burstUnlocked && isLockedOrScreenOff()) {
             rejectWrite("ACCESSIBILITY_DEVICE_LOCKED")
             return null
         }
-        if (now - lastActionAt < ACTION_INTERVAL_MS) {
+        if (!burstUnlocked && now - lastActionAt < ACTION_INTERVAL_MS) {
             rejectWrite("ACCESSIBILITY_RATE_LIMITED")
             return null
         }
@@ -1044,14 +1107,15 @@ class DeepSeekAccessibilityService : AccessibilityService() {
         var candidate: AccessibilityNodeInfo? = null
         var transferred = false
         try {
-            if (containsSensitiveWindow(root)) {
+            val sensitiveUnlocked = allowSensitiveWindows()
+            if (!sensitiveUnlocked && containsSensitiveWindow(root)) {
                 rejectWrite("ACCESSIBILITY_SENSITIVE_WINDOW")
                 return null
             }
             // 不在这里按下焦点：取焦点是**公开动作**（会推进节流并写审计），只能由真正要写的动作触发。
             // 这一步只如实报告「有没有一个可以写的节点」，把选择权留给调用方。
             candidate = root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
-            val focus = if (candidate != null && candidate.isEditable && !candidate.isPassword) {
+            val focus = if (candidate != null && candidate.isEditable && (sensitiveUnlocked || !candidate.isPassword)) {
                 candidate
             } else {
                 candidate?.recycle()
@@ -1554,7 +1618,7 @@ class DeepSeekAccessibilityService : AccessibilityService() {
             )
         }
         val requested = param?.trim().orEmpty().ifEmpty { rootPackage }
-        if (!AccessibilityAutomationPolicy.validPackage(requested)) {
+        if (!AccessibilityAutomationPolicy.validPackage(requested, allowReserved = allowSystemApps())) {
             return failure("AUTOMATION_RULES_PACKAGE_INVALID", "包名不合法：$requested")
         }
         if (!AccessibilityAutomationStore.packageAllowed(this, requested)) {

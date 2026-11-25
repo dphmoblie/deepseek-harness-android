@@ -151,6 +151,7 @@ class DeviceCommandRunner(
         useRootEngine: Boolean = false,
         rootGuardProfile: RootCommandGuard.Profile = RootCommandGuard.Profile.STRICT,
         rootExecutionGrant: RootExecutionGrant? = null,
+        allowUnrestrictedFiles: Boolean = false,
     ): DeviceCommandResult {
         if (useRootEngine && command == DeviceCommand.SHELL) {
             return executeOnRootEngine(param, timeoutMs, rootGuardProfile, rootExecutionGrant)
@@ -160,7 +161,7 @@ class DeviceCommandRunner(
             throw RuntimeFailure("DEVICE_COMMAND_BUSY", "设备 Shell 会话正忙")
         }
         try {
-            val input = buildInput(pending.requestId, command, param)
+            val input = buildInput(pending.requestId, command, param, allowUnrestrictedFiles)
             // 不再有 stty -echo / 固定 sleep / 清空缓冲的时序：那套做法既关不掉 mksh 行编辑器的
             // 自带回显，又引入竞态（sleep 结束前到达的输出会被误清）。现在解析只认 shell 内部
             // 展开的双哨兵，回显既不能伪造标记，也不会落进两个标记之间的 payload。
@@ -432,11 +433,16 @@ class DeviceCommandRunner(
         else -> null
     }
 
-    internal fun buildInput(requestId: String, command: DeviceCommand, param: String): String {
+    internal fun buildInput(
+        requestId: String,
+        command: DeviceCommand,
+        param: String,
+        allowUnrestrictedFiles: Boolean = false,
+    ): String {
         if (!REQUEST_ID_PATTERN.matches(requestId)) {
             throw RuntimeFailure("DEVICE_COMMAND_INVALID", "设备命令请求标识无效")
         }
-        val body = buildBody(requestId, command, param)
+        val body = buildBody(requestId, command, param, allowUnrestrictedFiles)
         // 标记里的 ${dsh_nonce} 保持**未展开的字面量**：回显看到的永远是它，
         // 只有内层 shell 展开后才会出现 `__DSH_B_<请求标识>_<pid>-<随机数>__` 这样的真实标记。
         val inner = "dsh_nonce=\$\$-\$RANDOM; " +
@@ -456,7 +462,12 @@ class DeviceCommandRunner(
      * 由应用进程自己起 `su -c`。把 `su` 拼进 Shizuku 会话字符串会绕开设计规范的分区边界
      * （那条会话的父进程是 UID 2000 的 shell），所以这条路被刻意删掉了。
      */
-    private fun buildBody(requestId: String, command: DeviceCommand, param: String): Body = when (command) {
+    private fun buildBody(
+        requestId: String,
+        command: DeviceCommand,
+        param: String,
+        allowUnrestrictedFiles: Boolean = false,
+    ): Body = when (command) {
         DeviceCommand.SCREENSHOT -> Body("screencap -p | toybox base64", "\$?")
         // uiDump 的失败分级由脚本内的状态变量携带（3/4/5），而不是 `$?` 的 0/1。
         DeviceCommand.UI_DUMP -> Body(uiDumpScript(requestId), "\$$UI_DUMP_STATUS_VARIABLE")
@@ -536,10 +547,10 @@ class DeviceCommandRunner(
             val seconds = millis / 1000.0
             Body("sleep $seconds", "\$?")
         }
-        DeviceCommand.FILE_LIST -> fileListBody(param)
-        DeviceCommand.FILE_READ, DeviceCommand.FILE_DOWNLOAD -> fileReadBody(param)
-        DeviceCommand.FILE_WRITE, DeviceCommand.FILE_UPLOAD -> fileWriteBody(param)
-        DeviceCommand.FILE_MKDIR -> fileMkdirBody(param)
+        DeviceCommand.FILE_LIST -> fileListBody(param, allowUnrestrictedFiles)
+        DeviceCommand.FILE_READ, DeviceCommand.FILE_DOWNLOAD -> fileReadBody(param, allowUnrestrictedFiles)
+        DeviceCommand.FILE_WRITE, DeviceCommand.FILE_UPLOAD -> fileWriteBody(param, allowUnrestrictedFiles)
+        DeviceCommand.FILE_MKDIR -> fileMkdirBody(param, allowUnrestrictedFiles)
         DeviceCommand.BACKGROUND_TASKS -> {
             if (param.length > 240) throw RuntimeFailure("DEVICE_COMMAND_INVALID", "后台任务查询参数过长")
             val request = try { org.json.JSONObject(param) } catch (_: Exception) {
@@ -573,8 +584,12 @@ class DeviceCommandRunner(
         }
     }
 
-    /** 生成投递区文件命令的公共安全检查：根目录固定，真实路径由 readlink 再次收敛。 */
-    private fun filePrelude(request: DeviceFilePolicy.Request): String {
+    /** 生成投递区文件命令的公共安全检查：根目录固定，真实路径由 readlink 再次收敛；仅在显式开启 `DEVICE_FILE_UNRESTRICTED` 时允许整机绝对路径。 */
+    private fun filePrelude(request: DeviceFilePolicy.Request, allowUnrestricted: Boolean = false): String {
+        if (allowUnrestricted && request.root == DeviceFilePolicy.Root.DEVICE && request.path.startsWith("/")) {
+            val target = singleQuote(request.path)
+            return "dsh_target=$target; dsh_parent=\$(dirname \"\$dsh_target\"); "
+        }
         val root = singleQuote(request.root.absolutePath)
         val path = singleQuote(request.path)
         return "dsh_root=$root; " +
@@ -586,48 +601,83 @@ class DeviceCommandRunner(
             "case \"\$dsh_parent_real\" in \"\$dsh_root\"|\"\$dsh_root\"/*) ;; *) exit $FILE_ESCAPE_EXIT ;; esac; "
     }
 
-    private fun fileListBody(param: String): Body {
-        val request = DeviceFilePolicy.parse(param)
-        val script = filePrelude(request) +
-            "if [ -L \"\$dsh_target\" ] || [ ! -d \"\$dsh_target\" ]; then exit $FILE_NOT_FOUND_EXIT; fi; " +
-            "ls -1Ap \"\$dsh_target\" | head -n ${DeviceFilePolicy.MAX_LIST_ENTRIES}"
+    private fun fileListBody(param: String, allowUnrestricted: Boolean = false): Body {
+        val request = DeviceFilePolicy.parse(param, allowUnrestricted = allowUnrestricted)
+        val unrestrictedAbsolute = allowUnrestricted && request.root == DeviceFilePolicy.Root.DEVICE && request.path.startsWith("/")
+        val script = if (unrestrictedAbsolute) {
+            filePrelude(request, allowUnrestricted = true) +
+                "if [ ! -d \"\$dsh_target\" ]; then exit $FILE_NOT_FOUND_EXIT; fi; " +
+                "ls -1Ap \"\$dsh_target\" | head -n ${DeviceFilePolicy.MAX_LIST_ENTRIES}"
+        } else {
+            filePrelude(request, allowUnrestricted = false) +
+                "if [ -L \"\$dsh_target\" ] || [ ! -d \"\$dsh_target\" ]; then exit $FILE_NOT_FOUND_EXIT; fi; " +
+                "ls -1Ap \"\$dsh_target\" | head -n ${DeviceFilePolicy.MAX_LIST_ENTRIES}"
+        }
         return Body(script, "\$?")
     }
 
-    private fun fileReadBody(param: String): Body {
-        val request = DeviceFilePolicy.parse(param)
-        if (request.path.isEmpty()) throw RuntimeFailure("DEVICE_FILE_INVALID", "读取目标不能为空")
-        val script = filePrelude(request) +
-            "if [ -L \"\$dsh_target\" ] || [ ! -f \"\$dsh_target\" ]; then exit $FILE_NOT_FOUND_EXIT; fi; " +
-            "dsh_real=\$(readlink -f \"\$dsh_target\" 2>/dev/null) || exit $FILE_ESCAPE_EXIT; " +
-            "case \"\$dsh_real\" in \"\$dsh_root\"|\"\$dsh_root\"/*) ;; *) exit $FILE_ESCAPE_EXIT ;; esac; " +
-            "dsh_size=\$(wc -c < \"\$dsh_target\") || exit $FILE_FAILED_EXIT; " +
-            "[ \"\$dsh_size\" -le ${DeviceFilePolicy.MAX_FILE_BYTES} ] || exit $FILE_TOO_LARGE_EXIT; " +
-            "toybox base64 \"\$dsh_target\""
+    private fun fileReadBody(param: String, allowUnrestricted: Boolean = false): Body {
+        val request = DeviceFilePolicy.parse(param, allowUnrestricted = allowUnrestricted)
+        if (request.path.isEmpty() || request.path == "/") {
+            throw RuntimeFailure("DEVICE_FILE_INVALID", "读取目标不能为空或根目录")
+        }
+        val maxBytes = if (allowUnrestricted) DeviceFilePolicy.UNRESTRICTED_MAX_FILE_BYTES else DeviceFilePolicy.MAX_FILE_BYTES
+        val unrestrictedAbsolute = allowUnrestricted && request.root == DeviceFilePolicy.Root.DEVICE && request.path.startsWith("/")
+        val script = if (unrestrictedAbsolute) {
+            filePrelude(request, allowUnrestricted = true) +
+                "if [ ! -f \"\$dsh_target\" ]; then exit $FILE_NOT_FOUND_EXIT; fi; " +
+                "dsh_size=\$(wc -c < \"\$dsh_target\") || exit $FILE_FAILED_EXIT; " +
+                "[ \"\$dsh_size\" -le $maxBytes ] || exit $FILE_TOO_LARGE_EXIT; " +
+                "toybox base64 \"\$dsh_target\""
+        } else {
+            filePrelude(request, allowUnrestricted = false) +
+                "if [ -L \"\$dsh_target\" ] || [ ! -f \"\$dsh_target\" ]; then exit $FILE_NOT_FOUND_EXIT; fi; " +
+                "dsh_real=\$(readlink -f \"\$dsh_target\" 2>/dev/null) || exit $FILE_ESCAPE_EXIT; " +
+                "case \"\$dsh_real\" in \"\$dsh_root\"|\"\$dsh_root\"/*) ;; *) exit $FILE_ESCAPE_EXIT ;; esac; " +
+                "dsh_size=\$(wc -c < \"\$dsh_target\") || exit $FILE_FAILED_EXIT; " +
+                "[ \"\$dsh_size\" -le $maxBytes ] || exit $FILE_TOO_LARGE_EXIT; " +
+                "toybox base64 \"\$dsh_target\""
+        }
         return Body(script, "\$?")
     }
 
-    private fun fileWriteBody(param: String): Body {
-        val request = DeviceFilePolicy.parse(param, requireContent = true)
-        if (request.path.isEmpty()) throw RuntimeFailure("DEVICE_FILE_INVALID", "写入目标不能为空")
+    private fun fileWriteBody(param: String, allowUnrestricted: Boolean = false): Body {
+        val request = DeviceFilePolicy.parse(param, requireContent = true, allowUnrestricted = allowUnrestricted)
+        if (request.path.isEmpty() || request.path == "/") {
+            throw RuntimeFailure("DEVICE_FILE_INVALID", "写入目标不能为空或根目录")
+        }
         val content = request.contentBase64 ?: throw RuntimeFailure("DEVICE_FILE_INVALID", "文件内容缺失")
+        val maxBytes = if (allowUnrestricted) DeviceFilePolicy.UNRESTRICTED_MAX_FILE_BYTES else DeviceFilePolicy.MAX_FILE_BYTES
+        val unrestrictedAbsolute = allowUnrestricted && request.root == DeviceFilePolicy.Root.DEVICE && request.path.startsWith("/")
         val encoded = singleQuote(content)
         val overwrite = if (request.overwrite) "1" else "0"
-        val script = filePrelude(request) +
+        val parentSetup = if (unrestrictedAbsolute) "mkdir -p \"\$dsh_parent\" || exit $FILE_FAILED_EXIT; " else ""
+        val script = filePrelude(request, allowUnrestricted = allowUnrestricted) +
+            parentSetup +
             "if [ -e \"\$dsh_target\" ] || [ -L \"\$dsh_target\" ]; then " +
             "[ \"$overwrite\" = 1 ] || exit $FILE_EXISTS_EXIT; fi; " +
             "dsh_tmp=\"\$dsh_parent/.dsh-upload-\$\$\"; " +
             "rm -f \"\$dsh_tmp\"; " +
             "printf '%s' $encoded | toybox base64 -d > \"\$dsh_tmp\" || { rm -f \"\$dsh_tmp\"; exit $FILE_FAILED_EXIT; }; " +
             "dsh_size=\$(wc -c < \"\$dsh_tmp\") || { rm -f \"\$dsh_tmp\"; exit $FILE_FAILED_EXIT; }; " +
-            "[ \"\$dsh_size\" -le ${DeviceFilePolicy.MAX_FILE_BYTES} ] || { rm -f \"\$dsh_tmp\"; exit $FILE_TOO_LARGE_EXIT; }; " +
+            "[ \"\$dsh_size\" -le $maxBytes ] || { rm -f \"\$dsh_tmp\"; exit $FILE_TOO_LARGE_EXIT; }; " +
             "mv -f \"\$dsh_tmp\" \"\$dsh_target\" || { rm -f \"\$dsh_tmp\"; exit $FILE_FAILED_EXIT; }"
         return Body(script, "\$?")
     }
 
-    private fun fileMkdirBody(param: String): Body {
-        val request = DeviceFilePolicy.parse(param)
-        if (request.path.isEmpty()) throw RuntimeFailure("DEVICE_FILE_INVALID", "目录目标不能为空")
+    private fun fileMkdirBody(param: String, allowUnrestricted: Boolean = false): Body {
+        val request = DeviceFilePolicy.parse(param, allowUnrestricted = allowUnrestricted)
+        if (request.path.isEmpty() || request.path == "/") {
+            throw RuntimeFailure("DEVICE_FILE_INVALID", "目录目标不能为空或根目录")
+        }
+        val unrestrictedAbsolute = allowUnrestricted && request.root == DeviceFilePolicy.Root.DEVICE && request.path.startsWith("/")
+        if (unrestrictedAbsolute) {
+            val script = filePrelude(request, allowUnrestricted = true) +
+                "if [ -e \"\$dsh_target\" ]; then " +
+                "[ -d \"\$dsh_target\" ] || exit $FILE_EXISTS_EXIT; " +
+                "else mkdir -p \"\$dsh_target\" || exit $FILE_FAILED_EXIT; fi"
+            return Body(script, "\$?")
+        }
         // mkdir -p 会跟随中间目录的符号链接；先后逐级检查，避免投递区内的链接把目标带出固定根目录。
         val noFollowChecks = buildString {
             append("dsh_cursor=\"\$dsh_root\"; ")
@@ -637,7 +687,7 @@ class DeviceCommandRunner(
                 append("[ ! -L \"\$dsh_cursor\" ] || exit $FILE_ESCAPE_EXIT; ")
             }
         }
-        val script = filePrelude(request) +
+        val script = filePrelude(request, allowUnrestricted = false) +
             noFollowChecks +
             "if [ -e \"\$dsh_target\" ] || [ -L \"\$dsh_target\" ]; then " +
             "[ ! -L \"\$dsh_target\" ] || exit $FILE_ESCAPE_EXIT; " +

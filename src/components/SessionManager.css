@@ -139,6 +139,13 @@
   cursor: pointer;
 }
 .session-badge:hover { color: var(--card-ink, var(--ink)); border-color: var(--line-strong); }
+/* 窄屏只显示数量：完整文案（「N 个子代理」）在 aria-label 里，视觉上省下的宽度留给标题。 */
+.session-badge-count { display: none; }
+@media (max-width: 520px) {
+  .session-badge { padding: 4px 9px; }
+  .session-badge-text { display: none; }
+  .session-badge-count { display: inline; }
+}
 .session-subagents {
   position: relative;
   display: grid;
@@ -175,4 +182,51 @@
 .session-orphans { padding-top: 6px; border-top: 1px dashed var(--line); }
 @media (max-width: 520px) {
   .session-subagents { padding-left: 10px; }
+}
+
+/* ---- 已归档标记 ----
+ * 不另开分区：已归档只是卡片副标题行上的一个小标记，会话仍在它原本的位置上（按最近更新排序）。
+ * 标记放在副标题行而不是标题行，是为了不挤压标题宽度——363px 下标题本来就只剩一行，
+ * 再塞一个胶囊会把「排查 Shizuku 授权超时」截成一个字。 */
+.session-meta { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.session-meta-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.session-archived-pill {
+  flex: none;
+  padding: 1px 6px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--card-muted, var(--muted));
+  background: var(--surface-sunken);
+  font-size: .625rem;
+  font-weight: 600;
+  line-height: 1.5;
+  white-space: nowrap;
+}
+/* 已归档的卡片压一档存在感：它仍然可点开，但不再是「当前工作」的一部分。 */
+.session-card--archived {
+  background: var(--card-color, var(--surface-sunken));
+  box-shadow: none;
+}
+.session-card--archived .session-icon { color: var(--card-muted, var(--muted)); background: transparent; }
+.session-card--archived .session-copy strong { color: var(--card-muted, var(--ink)); font-weight: 600; }
+/* 删除确认：贴在卡片下方的一条，不弹全屏对话框——删除的是一条会话，不是一次页面级操作。 */
+.session-delete-confirm {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 0 2px 2px;
+  padding: 8px 10px;
+  border: 1px solid var(--danger-line);
+  border-radius: var(--radius-inner);
+  color: var(--card-ink, var(--ink));
+  background: var(--red-soft);
+  font-size: .75rem;
+  line-height: 1.5;
+}
+.session-delete-actions { display: inline-flex; flex: none; gap: 6px; }
+.session-delete-failure { margin-bottom: 10px; }
+@media (max-width: 520px) {
+  .session-delete-confirm { flex-direction: column; align-items: stretch; }
+  .session-delete-actions { justify-content: flex-end; }
 }

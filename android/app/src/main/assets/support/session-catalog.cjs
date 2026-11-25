@@ -25,11 +25,19 @@
  *   `fallbackMaxWords: 5`、`fallbackMaxBytes: 40`、`maxTitleBytes: 80`。
  * - **路径写死在访客内**（`/root/.dsh/sessions`）：宿主只传条数上限，不传任何路径。
  *
- * 用法：`node session-catalog.cjs [limit] [rootDir]`
- *   - `limit`   返回条数上限，默认 50，最大 50；
- *   - `rootDir` **仅供本机测试**（默认 `/root/.dsh/sessions`）；应用从不传它。
+ * 归档状态：会话是否归档由 dsh 自己的 workspace 注册表维护，落在
+ * `$DSH_HOME/storages/workspace.json` 的 `global.archivedSessionIds`（纯 JSON，不压缩）。
+ * 这里**只读**这个集合，给命中的会话加一个 `archived: true`；读不到、结构不对或超限时
+ * 一律当作「没有任何会话归档」——归档状态读不到不该让整份会话列表失败，也不该
+ * 把未知状态说成已归档（外壳据此分「未归档 / 已归档」两个分区）。
  *
- * 成功：stdout 一行 `{"sessions":[{id,title,updatedAt,depth,parentId?,agentName?}...],"truncated":bool}`；
+ * 用法：`node session-catalog.cjs [limit] [rootDir] [workspaceStatePath]`
+ *   - `limit`   **未归档**会话的条数上限，默认 50，最大 50；归档会话另有 20 条名额
+ *               （总上限 80），因此旧归档会话不会被在用的会话整批挤掉；
+ *   - `rootDir` **仅供本机测试**（默认 `/root/.dsh/sessions`）；应用从不传它。
+ *   - `workspaceStatePath` **仅供本机测试**（默认 `rootDir/../storages/workspace.json`）。
+ *
+ * 成功：stdout 一行 `{"sessions":[{id,title,updatedAt,depth,archived?,parentId?,agentName?}...],"truncated":bool}`；
  * 失败：stdout 一行 `{"error":"<受控码>"}` 且退出码为 1。
  * `truncated` 为真表示「没读全」——会话条数超过上限、本次时间预算用尽，或部分项目目录
  * 无法读取；若所有项目都无法读取则走 `error`，绝不用空列表冒充「没有会话」。
@@ -43,8 +51,19 @@ const { Readable } = require('node:stream')
 
 /** 访客内会话根目录：`$DSH_HOME/sessions`，其中 `$DSH_HOME = /root/.dsh`。 */
 const DEFAULT_ROOT = '/root/.dsh/sessions'
+/**
+ * 未归档会话的条数上限（默认值）。
+ *
+ * 归档会话**单独留名额**（见 [MAX_ARCHIVED]）：只按「最近更新」取前 N 条时，旧归档会话会被
+ * 在用的会话整批挤出列表，界面上「已归档」永远是空的——那不是「没有归档会话」，是没读到。
+ * 两侧一起读，界面才有真实的两个档位。
+ */
 const DEFAULT_LIMIT = 50
 const MAX_LIMIT = 50
+/** 归档会话的条数上限：同样按最近更新取，只是不占未归档的名额。 */
+const MAX_ARCHIVED = 20
+/** 一次最多回传多少条会话（50 条未归档 + 20 条已归档）；宿主侧的上限与之同值。 */
+const MAX_SESSIONS_TOTAL = MAX_LIMIT + MAX_ARCHIVED
 /** 本次扫描的总时间预算（毫秒）：用尽时带上已读到的部分返回，并由 `truncated` 说明没读全。 */
 const TIME_BUDGET_MS = 3000
 /**
@@ -74,6 +93,11 @@ const ZSTD_MAGIC = 0xFD2FB528
 const MAX_DELEGATION_DEPTH = 8
 /** `agentPreset` 的真实形态是包名式标识（实测 `standard` / `cordis`），过宽就等于把任意文本带出去。 */
 const AGENT_NAME = /^[A-Za-z0-9._-]{1,32}$/
+/** workspace 注册表（归档集合的载体）的默认位置：`$DSH_HOME/storages/workspace.json`。 */
+const WORKSPACE_STATE_FILE = 'workspace.json'
+/** 归档集合的读取上限（字节与条数）：一个身份不明的超大注册表不该把整次列表拖慢。 */
+const MAX_WORKSPACE_STATE_BYTES = 1024 * 1024
+const MAX_ARCHIVED_IDS = 5000
 
 /** 会话日志文件名：`session.jsonl`（旧 v0）或 `session.v<N>.jsonl`，zstd 编码再加 `.zstd`。 */
 const SESSION_FILE = /^session(?:\.v([0-9]+))?\.jsonl(?:\.zstd)?$/
@@ -169,6 +193,44 @@ function isSessionIdentifier(value) {
   if (value.startsWith('.')) return false
   if (ID_FORBIDDEN.test(value) || /\s/.test(value)) return false
   return true
+}
+
+/** workspace 注册表的默认位置：与 `sessions/` 同级（`$DSH_HOME/storages/workspace.json`）。 */
+function defaultWorkspaceStatePath(root) {
+  return path.join(root, '..', 'storages', WORKSPACE_STATE_FILE)
+}
+
+/**
+ * 读 dsh 的 workspace 注册表，取出归档集合。
+ *
+ * 任何异常（文件不存在、超大、JSON 坏、结构不对）都返回空集合：归档状态是**附加**
+ * 信息，读不到时唯一的诚实表达是「一条都没被标成已归档」——外壳仍会列出全部会话，
+ * 只是不分区。绝不因为注册表读不了就让整份会话列表失败。
+ */
+function readArchivedSessionIds(workspaceStatePath) {
+  let raw
+  try {
+    const stats = fs.statSync(workspaceStatePath)
+    if (!stats.isFile() || stats.size > MAX_WORKSPACE_STATE_BYTES) return new Set()
+    raw = fs.readFileSync(workspaceStatePath)
+  } catch {
+    return new Set()
+  }
+  let document
+  try {
+    document = JSON.parse(raw.toString('utf8'))
+  } catch {
+    return new Set()
+  }
+  const globalSlot = document !== null && typeof document === 'object' ? document.global : null
+  const archived = globalSlot !== null && typeof globalSlot === 'object' ? globalSlot.archivedSessionIds : null
+  if (!Array.isArray(archived)) return new Set()
+  const ids = new Set()
+  for (const value of archived) {
+    if (ids.size >= MAX_ARCHIVED_IDS) break
+    if (isSessionIdentifier(value)) ids.add(value)
+  }
+  return ids
 }
 
 /**
@@ -472,41 +534,63 @@ function parseEvent(line) {
   }
 }
 
-/** 主流程：列目录 → 按最近更新排序取前 N 条 → 逐条读标题与分组元数据。`hooks` 仅供单测观察（见 `readSession`）。 */
-async function buildCatalog(limit, root, hooks = null) {
+/** 最近更新在前；同一时间按 id 升序，保证同一次读取的排序稳定（便于比对与单测）。 */
+function byRecency(left, right) {
+  return (right.updatedAt - left.updatedAt) || (left.id < right.id ? -1 : left.id > right.id ? 1 : 0)
+}
+
+/**
+ * 主流程：列目录 → 按最近更新排序 → **未归档取 `limit` 条、归档取 [MAX_ARCHIVED] 条** →
+ * 两组共用扫描截止时间 → 合并回最近更新顺序。`hooks` 仅供单测观察（见 `readSession`）。
+ */
+async function buildCatalog(limit, root, hooks = null, workspaceStatePath = defaultWorkspaceStatePath(root)) {
   const started = Date.now()
   const deadline = started + TIME_BUDGET_MS
+  // 归档集合在读任何会话日志之前取一次：它只有几百个 id，读失败也不影响列会话。
+  const archivedIds = readArchivedSessionIds(workspaceStatePath)
   const { candidates, unreadable, missing } = collectCandidates(root)
   if (missing) return { sessions: [], truncated: false }
   if (candidates.length === 0 && unreadable > 0) {
     // 有目录却一个都读不了：这是「读不到」，不是「没有会话」。
     throw controlledError('SESSION_CATALOG_UNREADABLE')
   }
-  candidates.sort((left, right) => (right.updatedAt - left.updatedAt) || (left.id < right.id ? -1 : left.id > right.id ? 1 : 0))
-  const selected = candidates.slice(0, limit)
+  candidates.sort(byRecency)
+  // 归档会话单独留名额：只按「最近更新」截前 N 条时，旧归档会话会被在用的会话整批挤掉，
+  // 界面上的「已归档」因此永远是空的。两侧各取各的，再合回最近更新顺序。
+  const unarchived = candidates.filter((candidate) => !archivedIds.has(candidate.id)).slice(0, limit)
+  const archived = candidates.filter((candidate) => archivedIds.has(candidate.id)).slice(0, MAX_ARCHIVED)
   // 有项目目录无法读取时，返回的候选列表只是可见子集，必须显式告诉调用方存在遗漏。
-  let truncated = candidates.length > selected.length || unreadable > 0
+  const selectedCount = unarchived.length + archived.length
+  let truncated = candidates.length > selectedCount || unreadable > 0
   const sessions = []
-  for (const candidate of selected) {
-    let detail = { depth: 0, title: '' }
-    try {
-      detail = await readSession(candidate.log, deadline, hooks)
-    } catch (error) {
-      if (error !== null && typeof error === 'object' && error.code === 'SESSION_CATALOG_ZSTD_UNSUPPORTED') throw error
-      // 单个会话读不动（权限、损坏）：仍然列出它的 id 与时间，只是没有标题、按主会话处理。
-      detail = { depth: 0, title: '' }
-    }
-    const session = { id: candidate.id, title: detail.title, updatedAt: candidate.updatedAt, depth: detail.depth }
-    // 可选字段只在真实存在时出现：界面据此区分「子代理」与「没有父的子代理」。
-    if (detail.parentId !== undefined) session.parentId = detail.parentId
-    if (detail.agentName !== undefined) session.agentName = detail.agentName
-    sessions.push(session)
-    if (Date.now() > deadline) {
-      truncated = true
-      break
+
+  async function scan(group) {
+    for (const candidate of group) {
+      if (Date.now() > deadline) break
+      let detail = { depth: 0, title: '' }
+      try {
+        detail = await readSession(candidate.log, deadline, hooks)
+      } catch (error) {
+        if (error !== null && typeof error === 'object' && error.code === 'SESSION_CATALOG_ZSTD_UNSUPPORTED') throw error
+        // 单个会话读不动（权限、损坏）：仍然列出它的 id 与时间，只是没有标题、按主会话处理。
+      }
+      const session = { id: candidate.id, title: detail.title, updatedAt: candidate.updatedAt, depth: detail.depth }
+      // 归档状态来自 dsh 的 workspace 注册表；只有真的在归档集合里才写这个键。
+      if (archivedIds.has(candidate.id)) session.archived = true
+      // 可选字段只在真实存在时出现：界面据此区分「子代理」与「没有父的子代理」。
+      if (detail.parentId !== undefined) session.parentId = detail.parentId
+      if (detail.agentName !== undefined) session.agentName = detail.agentName
+      sessions.push(session)
+      if (Date.now() > deadline) truncated = true
     }
   }
-  return { sessions, truncated }
+
+  // 每组同时最多读一份日志，避免一组把另一组的读取挡到截止时间之后。
+  await Promise.all([scan(unarchived), scan(archived)])
+  return {
+    sessions: sessions.sort(byRecency),
+    truncated: truncated || sessions.length < selectedCount,
+  }
 }
 
 /** 参数解析：条数上限夹到 `[1, MAX_LIMIT]`，根目录必须是绝对路径（应用从不传它）。 */
@@ -514,11 +598,24 @@ function parseArguments(argv) {
   const rawLimit = Number.parseInt(argv[2] ?? '', 10)
   const limit = Number.isFinite(rawLimit) ? Math.min(Math.max(rawLimit, 1), MAX_LIMIT) : DEFAULT_LIMIT
   const rawRoot = argv[3]
-  if (rawRoot === undefined) return { limit, root: DEFAULT_ROOT }
+  if (rawRoot === undefined) {
+    return { limit, root: DEFAULT_ROOT, workspaceStatePath: defaultWorkspaceStatePath(DEFAULT_ROOT) }
+  }
   if (typeof rawRoot !== 'string' || rawRoot.length === 0 || rawRoot.includes('\u0000') || !path.isAbsolute(rawRoot)) {
     throw controlledError('SESSION_CATALOG_ROOT_INVALID')
   }
-  return { limit, root: rawRoot }
+  // 第三个参数只给单测用：指向「和 sessions/ 同级」的 workspace 注册表。
+  const rawWorkspaceState = argv[4]
+  if (rawWorkspaceState === undefined) {
+    return { limit, root: rawRoot, workspaceStatePath: defaultWorkspaceStatePath(rawRoot) }
+  }
+  if (
+    typeof rawWorkspaceState !== 'string' || rawWorkspaceState.length === 0 ||
+    rawWorkspaceState.includes('\u0000') || !path.isAbsolute(rawWorkspaceState)
+  ) {
+    throw controlledError('SESSION_CATALOG_ROOT_INVALID')
+  }
+  return { limit, root: rawRoot, workspaceStatePath: rawWorkspaceState }
 }
 
 /**
@@ -537,8 +634,8 @@ function output(payload, code) {
 }
 
 async function main(argv) {
-  const { limit, root } = parseArguments(argv)
-  const catalog = await buildCatalog(limit, root)
+  const { limit, root, workspaceStatePath } = parseArguments(argv)
+  const catalog = await buildCatalog(limit, root, null, workspaceStatePath)
   output(catalog, 0)
 }
 
@@ -551,4 +648,4 @@ if (require.main === module) {
   })
 }
 
-module.exports = { MAX_SCAN_BYTES, MAX_COMPRESSED_BYTES, buildCatalog, cleanTitleText, decodeSegment, fallbackSessionTitle, normalizeSessionTitle, parseArguments, truncateTitleUtf8 }
+module.exports = { MAX_SCAN_BYTES, MAX_COMPRESSED_BYTES, MAX_ARCHIVED, MAX_SESSIONS_TOTAL, buildCatalog, cleanTitleText, decodeSegment, fallbackSessionTitle, normalizeSessionTitle, parseArguments, readArchivedSessionIds, truncateTitleUtf8 }

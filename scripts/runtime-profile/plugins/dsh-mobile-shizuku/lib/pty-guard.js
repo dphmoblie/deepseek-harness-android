@@ -332,23 +332,33 @@ export function installPtyGuard(ctx, options = {}) {
   const disposers = []
 
   const bindService = (serviceName, patcher) => {
-    if (ctx[serviceName]) {
-      disposers.push(patcher(ctx[serviceName], options))
-      return
-    }
-    if (typeof ctx.inject === 'function') {
-      try {
-        ctx.inject([serviceName], child => {
-          const dispose = patcher(child?.[serviceName], options)
-          if (typeof child?.effect === 'function') {
-            child.effect(() => dispose)
-          } else {
-            disposers.push(dispose)
+    try {
+      // Cordis v4 的 ctx 代理对未声明在顶层 `inject` 里的服务属性会同步抛出
+      // `cannot get property "<name>" without inject`，因此必须先走 `ctx.inject`，
+      // 绝不能先读 `ctx[serviceName]` 试探。
+      if (typeof ctx.inject === 'function') {
+        const fiber = ctx.inject([serviceName], child => {
+          try {
+            const dispose = patcher(child?.[serviceName], options)
+            if (typeof child?.effect === 'function') {
+              child.effect(() => dispose)
+            } else {
+              disposers.push(dispose)
+            }
+          } catch {
+            // 可选守卫：注入回调异常绝不拖垮主插件。
           }
         })
-      } catch {
-        // 可选守卫：注入异常绝不拖垮主插件。
+        if (typeof fiber?.dispose === 'function') {
+          disposers.push(() => fiber.dispose())
+        }
+        return
       }
+      if (ctx[serviceName]) {
+        disposers.push(patcher(ctx[serviceName], options))
+      }
+    } catch {
+      // 可选守卫：任何服务访问或注入异常绝不拖垮主插件。
     }
   }
 

@@ -35,6 +35,10 @@ object VirtualScreenAgentStarter {
             require(packageName.length in 1..192 && VirtualScreenPreferences.targetKind(packageName) == VirtualScreenTargetKind.PACKAGE) {
                 "VIRTUAL_SCREEN_INVALID"
             }
+            val allowSystemApps = io.deepseekharness.mobile.shizuku.HighRiskPermissionStore
+                .status(context)
+                .isAllowed(io.deepseekharness.mobile.shizuku.HighRiskCategory.ACCESSIBILITY_SYSTEM_APPS)
+            VirtualScreenPolicy.requireAgentTargetAllowed(packageName, allowSystemApps)
             val waitReadyMs = if (data.has("waitReadyMs")) {
                 val raw = data.opt("waitReadyMs")
                 require(raw is Int || raw is Long) { "VIRTUAL_SCREEN_INVALID" }

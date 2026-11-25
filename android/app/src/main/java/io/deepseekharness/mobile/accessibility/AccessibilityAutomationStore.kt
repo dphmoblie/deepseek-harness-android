@@ -48,9 +48,17 @@ object AccessibilityAutomationStore {
     fun whitelistEnabled(context: Context): Boolean = context.applicationContext
         .getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE).all[KEY_WHITELIST_ENABLED] as? Boolean ?: true
 
-    fun packageAllowed(context: Context, packageName: String): Boolean = AccessibilityAutomationPolicy.packageAllowed(
-        packageName, allowedPackages(context), whitelistEnabled(context),
-    )
+    fun packageAllowed(context: Context, packageName: String): Boolean {
+        val allowReserved = io.deepseekharness.mobile.shizuku.HighRiskPermissionStore
+            .status(context)
+            .isAllowed(io.deepseekharness.mobile.shizuku.HighRiskCategory.ACCESSIBILITY_SYSTEM_APPS)
+        return AccessibilityAutomationPolicy.packageAllowed(
+            packageName = packageName,
+            allowedPackages = allowedPackages(context),
+            whitelistEnabled = whitelistEnabled(context),
+            allowReserved = allowReserved,
+        )
+    }
 
     fun allowedPackages(context: Context): Set<String> {
         val values = context.applicationContext

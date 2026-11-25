@@ -10,6 +10,7 @@ import type { AutomationRuleDefaults } from './components/AutomationRuleForm'
 import { AutomationAppConfigForm } from './components/AutomationAppConfigForm'
 import { AutomationDisclaimer } from './components/AutomationDisclaimer'
 import { AppDisclaimer } from './components/AppDisclaimer'
+import { HighRiskPermissionsCard } from './components/HighRiskPermissionsCard'
 import { AutomationTaskCard } from './components/AutomationTaskCard'
 import { AppBackground } from './components/AppBackground'
 import { LanguageSettings } from './components/LanguageSettings'
@@ -345,7 +346,7 @@ const SETTINGS_HOME_ENTRIES: SettingsHomeEntry[] = [
     group: 'device',
     title: '设备 Shell 设置',
     hint: 'Shizuku 授权与设备命令',
-    keywords: ['shizuku', '授权', '权限', '连接', '设备shell', 'ai shell', 'device shell'],
+    keywords: ['shizuku', '授权', '权限', '连接', '设备shell', 'ai shell', 'device shell', '高危', '拦截', '文件权限', '命令权限', 'high risk'],
     target: { kind: 'page', page: 'device-shell' },
     icon: <Smartphone size={20} />,
   },
@@ -613,6 +614,19 @@ const INSTALL_WATCHDOG_MS = 15 * 60_000
  * 用户面对的是一个没有任何按钮的加载页——连「重试」都点不到。
  */
 const BOOT_STATE_TIMEOUT_MS = 15_000
+
+/**
+ * 「文件已不在目录里」的两个受控码：投递区与共享目录各一个（两族错误码都是已发布契约，
+ * 不能为了省事合成一个）。只有这两个码会触发「重读目录 + 过期说明」，
+ * 其余失败（没有可处理的应用、分享缓存不可用、路径非法）原样抛出。
+ */
+const DIRECTORY_MISSING_CODES: ReadonlySet<string> = new Set(['MAILBOX_DIRECTORY_NOT_FOUND', 'STORAGE_DIR_NOT_A_DIRECTORY'])
+
+/** 从桥接错误里取受控码；取不到返回空串（当作「不是目录过期」处理）。 */
+function errorCodeOf(error: unknown): string {
+  if (error instanceof Error && 'code' in error && typeof error.code === 'string') return error.code
+  return ''
+}
 
 /**
  * 保存设置后的前台服务生效复核。
@@ -3123,6 +3137,7 @@ function SettingsScreen({ accessibility, busy, harnessVersionBusy, diagnostic, d
             {t("提供设备命令与操作权限；不可用时不影响 Harness")}
           </p>
         </section>
+        <HighRiskPermissionsCard bridge={runtimeBridge} />
         </>
         )}
 
@@ -5035,8 +5050,10 @@ export function App() {
   const deleteSessionSnapshot = useCallback((id: string) => runtimeBridge.deleteRuntimeSessionSnapshot(id), [])
   // 应用更新入口默认直连发布目录；原生仍保留缓存参数，供明确的缓存读取场景使用。
   const loadAppUpdate = useCallback((forceRefresh = true) => runtimeBridge.getAppUpdateState(forceRefresh), [])
-  const setAppUpdateChannel = useCallback((channel: AppUpdateChannel) => runtimeBridge.setAppUpdateChannel(channel), [])
+  const loadAppUpdateLocal = useCallback(() => runtimeBridge.getAppUpdateLocalState(), [])
   const appUpdateReminder = useAppUpdateReminder(language !== null && !booting && !appDisclaimerOpen && !onboardingOpen && !firstRunPermissionsOpen, loadAppUpdate)
+  const { changeChannel } = appUpdateReminder
+  const setAppUpdateChannel = useCallback((channel: AppUpdateChannel) => changeChannel(() => runtimeBridge.setAppUpdateChannel(channel)), [changeChannel])
   const downloadAppUpdate = useCallback(() => runtimeBridge.downloadAppUpdate(), [])
   const installAppUpdate = useCallback(() => runtimeBridge.installAppUpdate(), [])
   const openAppUpdateInstallSettings = useCallback(() => runtimeBridge.openAppUpdateInstallSettings(), [])
@@ -5844,13 +5861,33 @@ export function App() {
    */
   const externalFileAction = useCallback((action: 'share' | 'open', path: string) => {
     const root = filesRootRef.current
-    void run(`external-file-${action}`, () => runtimeBridge.externalFileAction({
-      source: root.kind,
-      ...(root.kind === 'mailbox' ? { root: root.root } : { guestPath: root.guestPath }),
-      path,
-      action,
-    }), action === 'share' ? t("已打开分享面板") : t("已打开文件"))
-  }, [run])
+    void run(`external-file-${action}`, async isCurrent => {
+      try {
+        await runtimeBridge.externalFileAction({
+          source: root.kind,
+          ...(root.kind === 'mailbox' ? { root: root.root } : { guestPath: root.guestPath }),
+          path,
+          action,
+        })
+      } catch (error) {
+        /*
+         * 「列表里点得到、复制时却打不开」是**目录快照过期**的典型形态：文件被别的应用移走，
+         * 或者工作区导出那一步没真正落到 outbox。此时先把当前目录重读一遍（过期条目随之消失），
+         * 再给一句能自助的说明——原生侧的「文件不存在或不可用」只说了一半，用户没有下一步可做。
+         * 其余失败（没有可处理的应用、分享缓存不可用）原样抛出，不冒充成「文件没了」。
+         */
+        if (!DIRECTORY_MISSING_CODES.has(errorCodeOf(error))) throw error
+        if (isCurrent()) {
+          if (root.kind === 'mailbox') {
+            await readMailboxDirectory(root.root, mailboxDirectory?.root === root.root ? mailboxDirectory.path : undefined, isCurrent).catch(() => {})
+          } else {
+            await readStorageDirectory(root.guestPath, storageDirectory?.guestPath === root.guestPath ? storageDirectory.path : undefined, isCurrent).catch(() => {})
+          }
+        }
+        throw new Error(t("文件已不在当前目录（可能被移走，或从工作区导出没完成），列表已刷新；请重试或重新导出。"))
+      }
+    }, action === 'share' ? t("已打开分享面板") : t("已打开文件"))
+  }, [mailboxDirectory, readMailboxDirectory, readStorageDirectory, run, storageDirectory])
 
   /**
    * 在当前目录新建文件夹：名称必须由用户明确输入（避免静默写入公共存储）。
@@ -5994,6 +6031,7 @@ export function App() {
           restoreSnapshot={restoreSessionSnapshot}
           deleteSnapshot={deleteSessionSnapshot}
           loadUpdate={loadAppUpdate}
+          loadLocalUpdate={loadAppUpdateLocal}
           setUpdateChannel={setAppUpdateChannel}
           downloadUpdate={downloadAppUpdate}
           installUpdate={installAppUpdate}

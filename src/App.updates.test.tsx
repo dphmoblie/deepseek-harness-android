@@ -95,16 +95,74 @@ describe('应用更新入口与缓存交互', () => {
     expect(screen.queryByRole('dialog', { name: '发现应用新版本' })).toBeNull()
   })
 
-  it('离线检查失败不阻断启动或提醒开关', async () => {
+  it('离线检查失败不阻断启动或提醒开关，且保留本地测试频道不回锁', async () => {
     localStorage.removeItem(APP_UPDATE_REMINDER_ENABLED_KEY)
+    bridge.getAppUpdateLocalState.mockResolvedValue({
+      installedVersion: '0.4.6-mobile-690',
+      installedVersionCode: 54,
+      channel: 'beta',
+      installAllowed: true,
+    })
     bridge.getAppUpdateState.mockRejectedValue(new Error('offline'))
     render(<App />)
     await openVersions()
-    await screen.findByText('暂时读不到应用更新状态：请检查网络后重试。')
+    await screen.findByText('暂时无法连接发布目录，已保留当前更新频道，请检查网络后重试。')
+    const betaSwitch = screen.getByRole('switch', { name: '接收测试版本' })
+    expect(betaSwitch).toBeChecked()
+    expect(betaSwitch).toBeEnabled()
+    expect(screen.getByText('未检查')).toBeVisible()
+    expect(screen.getByRole('button', { name: '下载更新' })).toBeDisabled()
     fireEvent.click(screen.getByRole('switch', { name: '每日更新提醒' }))
     expect(localStorage.getItem(APP_UPDATE_REMINDER_ENABLED_KEY)).toBe('false')
     // 更新检查失败既不拦启动，也不替用户打开 Harness。
     expect(bridge.openHarness).not.toHaveBeenCalled()
+  })
+
+  it('切换频道时远端检查失败仍保留已落盘的新频道，并清除旧频道候选', async () => {
+    render(<App />)
+    await openVersions()
+    await screen.findByText('0.3.0 · 4.0 KB')
+    bridge.setAppUpdateChannel.mockResolvedValueOnce({
+      installedVersion: '0.4.6-mobile-690',
+      installedVersionCode: 54,
+      channel: 'beta',
+      installAllowed: true,
+      refreshFailed: true,
+    })
+    fireEvent.click(screen.getByRole('switch', { name: '接收测试版本' }))
+    expect(await screen.findByText('更新频道已保存，但暂时无法检查远端更新，请稍后重试。')).toBeVisible()
+    const betaSwitch = screen.getByRole('switch', { name: '接收测试版本' })
+    expect(betaSwitch).toBeChecked()
+    expect(betaSwitch).toBeEnabled()
+    expect(screen.queryByText('0.3.0 · 4.0 KB')).toBeNull()
+    expect(screen.getByRole('button', { name: '下载更新' })).toBeDisabled()
+  })
+
+  it('离线重新检查时采用最新安装权限，并保留同频道缓存', async () => {
+    render(<App />)
+    await openVersions()
+    await screen.findByText('0.3.0 · 4.0 KB')
+    expect(screen.getByRole('button', { name: '去系统设置允许安装' })).toBeVisible()
+
+    bridge.getAppUpdateLocalState.mockResolvedValueOnce({
+      installedVersion: cachedUpdate.installedVersion,
+      installedVersionCode: cachedUpdate.installedVersionCode,
+      channel: cachedUpdate.channel,
+      installAllowed: true,
+    })
+    let failRefresh!: (error: Error) => void
+    bridge.getAppUpdateState.mockImplementationOnce(() => new Promise<AppUpdateState>((_, reject) => { failRefresh = reject }))
+    fireEvent.click(screen.getByRole('button', { name: '重新检查' }))
+    expect(await screen.findByText('下载完成后交给系统安装器安装，装完应用会重启')).toBeVisible()
+    expect(screen.getByRole('button', { name: '下载更新' })).toBeDisabled()
+
+    await act(async () => {
+      failRefresh(new Error('offline'))
+      await Promise.resolve()
+    })
+    expect(screen.queryByRole('button', { name: '去系统设置允许安装' })).toBeNull()
+    expect(screen.getByText('重新检查失败，仍显示上次缓存的更新信息。')).toBeVisible()
+    expect(screen.getByText('0.3.0 · 4.0 KB')).toBeVisible()
   })
 
   it('打开系统安装设置失败给出错误提示，不产生未处理拒绝', async () => {
@@ -173,12 +231,13 @@ describe('应用更新入口与缓存交互', () => {
     expect(screen.getByRole('button', { name: '下载更新' })).toBeEnabled()
   })
 
-  it('切换异常且回读失败时清除旧候选，重试后才能继续更新', async () => {
+  it('切换异常且远端与本地回读均失败时清除旧候选，重试后才能继续更新', async () => {
     bridge.setAppUpdateChannel.mockRejectedValueOnce(new Error('切换响应丢失'))
     render(<App />)
     await openVersions()
     await screen.findByText('0.3.0 · 4.0 KB')
     bridge.getAppUpdateState.mockRejectedValueOnce(new Error('offline'))
+    bridge.getAppUpdateLocalState.mockRejectedValueOnce(new Error('local-offline'))
     fireEvent.click(screen.getByRole('switch', { name: '接收测试版本' }))
     expect(await screen.findByText('暂时读不到应用更新状态：请检查网络后重试。')).toBeVisible()
     expect(screen.queryByText('0.3.0 · 4.0 KB')).toBeNull()

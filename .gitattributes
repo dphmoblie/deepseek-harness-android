@@ -20,4 +20,5 @@ CMakeLists.txt text eol=lf
 #  - pnpm 按行文本比对应用补丁，CRLF 会让上下文匹配不上，安装直接失败；
 #  - pnpm-lock.yaml 记录的是补丁文件字节的 sha256（patch_hash），行尾一变校验就对不上。
 # Windows 上 core.autocrlf=true 时，默认的 text=auto 会在检出时写成 CRLF，所以这里显式关掉。
-scripts/runtime-profile/patches/*.patch -text
+# unified diff 的上下文前缀空格可以紧接源码 Tab，不属于源码缩进错误。
+scripts/runtime-profile/patches/*.patch -text whitespace=-space-before-tab

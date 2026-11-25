@@ -35,6 +35,9 @@ import type {
   DiagnosticLogText,
   ExternalBrowserState,
   HarnessLog,
+  HighRiskPermissionCategory,
+  HighRiskPermissions,
+  HighRiskPermissionsUpdate,
   KeepAliveState,
   MailboxAvailability,
   MailboxDirectoryState,
@@ -65,6 +68,8 @@ import type {
   PluginCleanupLedger,
   RuntimeSessionListReason,
   RuntimeSessionListResult,
+  RuntimeSessionDeleteReason,
+  RuntimeSessionDeleteResult,
   RuntimeSessionSummary,
   RuntimeSessionSnapshot,
   RuntimeSessionSnapshotRestoreResult,
@@ -116,6 +121,7 @@ import {
   DIAGNOSTIC_RETENTION_MIN,
   HARNESS_LOG_MAX_CHARS,
   HARNESS_LOG_WINDOW_OPTIONS,
+  HIGH_RISK_PERMISSION_CATEGORIES,
   MAX_STORAGE_DIRECTORIES,
   MODEL_PROVIDER_IDS,
   VIRTUAL_SCREEN_AUTO_FOLLOW_VALUES,
@@ -662,12 +668,12 @@ export function validateExternalBrowserState(value: unknown): ExternalBrowserSta
   return { browsers, selected: state.selected ?? null }
 }
 
-/**
- * 运行时版本操作目标：目前只有「上一版本」可切换或删除。
- *
- * 取值在前端就拦死，不让原生侧去猜未知目标。
- */
-export function assertRuntimeVersionTarget(value: unknown): 'previous' {
+export function assertRuntimeVersionSwitchTarget(value: unknown): 'previous' | 'bundled' {
+  if (value !== 'previous' && value !== 'bundled') throw new Error('运行时版本操作目标无效')
+  return value
+}
+
+export function assertRuntimeVersionDeleteTarget(value: unknown): 'previous' {
   if (value !== 'previous') throw new Error('运行时版本操作目标无效')
   return value
 }
@@ -1229,8 +1235,9 @@ const DEVICE_COMMANDS = new Set<DeviceCommand>([
   'shell',
   'backgroundTasks',
 ])
-// 文件上传通过 Base64 传递，原生侧仍有 128 KiB 解码上限；这里保留 JSON 参数的有界窗口。
-const MAX_DEVICE_PARAM_CHARS = 180_000
+// 默认 128 KiB 上限由原生 DeviceFilePolicy 硬强制执行；当用户显式开启「设备文件通道解除投递区目录与大小限制」后
+// 宿主放行最高 4 MiB Base64 载荷，前端粗上界与其保持一致。
+const MAX_DEVICE_PARAM_CHARS = 4 * Math.ceil((4 * 1024 * 1024) / 3) + 512
 /** 「白名单验证密码」的长度区间；密码本身不会被前端留存或回显。 */
 const ACCESSIBILITY_PASSWORD_MIN_CHARS = 6
 const ACCESSIBILITY_PASSWORD_MAX_CHARS = 64
@@ -2240,6 +2247,11 @@ export function validateAppUpdateState(value: unknown): AppUpdateState {
   if (typeof state.installAllowed !== 'boolean') throw new Error('应用更新安装权限状态无效')
   if (state.channel !== 'stable' && state.channel !== 'beta') throw new Error('应用更新频道状态无效')
   const channel: AppUpdateChannel = state.channel
+  const refresh: Pick<AppUpdateState, 'refreshFailed'> = {}
+  if (state.refreshFailed !== undefined) {
+    if (typeof state.refreshFailed !== 'boolean') throw new Error('应用更新刷新状态无效')
+    if (state.refreshFailed) refresh.refreshFailed = true
+  }
   const cache: Pick<AppUpdateState, 'cached' | 'checkedAt'> = {}
   if (state.cached !== undefined || state.checkedAt !== undefined) {
     if (typeof state.cached !== 'boolean' || !Number.isSafeInteger(state.checkedAt) ||
@@ -2251,7 +2263,7 @@ export function validateAppUpdateState(value: unknown): AppUpdateState {
   }
 
   if (state.available === undefined) {
-    return { installedVersion, installedVersionCode, channel, installAllowed: state.installAllowed, ...cache }
+    return { installedVersion, installedVersionCode, channel, installAllowed: state.installAllowed, ...cache, ...refresh }
   }
 
   const release = asRecord(state.available, '可用应用更新')
@@ -2270,6 +2282,7 @@ export function validateAppUpdateState(value: unknown): AppUpdateState {
     installAllowed: state.installAllowed,
     available: { version, bytes, sha256: release.sha256, notes: release.notes },
     ...cache,
+    ...refresh,
   }
 }
 
@@ -2293,8 +2306,8 @@ function isCatalogSessionId(value: unknown): value is string {
 }
 /** 会话标识长度上限：与原生侧 `SessionCatalogPayload.MAX_IDENTIFIER_CHARS` 同值。 */
 const MAX_SESSION_ID_CHARS = 200
-/** 会话条数上限：访客脚本与原生侧都按 50 截断，超出的载荷视为不可信。 */
-const MAX_RUNTIME_SESSIONS = 50
+/** 会话条数上限：访客脚本与原生侧都按「50 条未归档 + 20 条已归档 = 80」回传，超出视为不可信。 */
+const MAX_RUNTIME_SESSIONS = 80
 /** 标题长度上限（UTF-16 字符数，与原生侧 `MAX_TITLE_CHARS` 同口径）：宿主侧标题最长 80 字节，200 字符只是防御性天花板。 */
 const MAX_SESSION_TITLE_CHARS = 200
 /** 更新时间上限（毫秒，2100-01-01）：明显越界的取值视为不可信。 */
@@ -2452,10 +2465,41 @@ export function validateRuntimeSessionListResult(value: unknown): RuntimeSession
     const summary: RuntimeSessionSummary = { id, title, updatedAt: updatedAt as number, depth: depth as number }
     if (parentId !== undefined) summary.parentId = parentId
     if (agentName !== undefined) summary.agentName = agentName
+    // 归档标记：缺失按「未归档」处理（旧版桥没有这个字段）。一旦出现就必须是布尔——
+    // 把字符串 "true" 之类当成已归档会让界面把一个仍在用的会话归到「已归档」里。
+    if (entry.archived !== undefined) {
+      if (typeof entry.archived !== 'boolean') throw new Error('会话归档标记格式无效')
+      if (entry.archived) summary.archived = true
+    }
     return summary
   })
 
   return { status: 'ready', sessions, truncated: requiredBoolean(result.truncated, '会话列表截断标记') }
+}
+
+/** 删除会话被拒绝的原因：受控白名单，界面据此给出各自的说明。 */
+const SESSION_DELETE_REASONS = new Set<RuntimeSessionDeleteReason>([
+  'RUNTIME_RUNNING',
+  'SESSION_NOT_ARCHIVED',
+  'SESSION_NOT_FOUND',
+  'SESSION_DELETE_FAILED',
+])
+
+/**
+ * 校验删除会话的结果。
+ *
+ * 只认两种形状：`{deleted:true}` 或 `{deleted:false, reason}`；其余一律按载荷非法拒绝。
+ * 不做「缺字段就猜成失败」的容错——删除是破坏性操作，结论必须明确。
+ */
+export function validateRuntimeSessionDeleteResult(value: unknown): RuntimeSessionDeleteResult {
+  const result = asRecord(value, '删除会话结果')
+  if (result.deleted === true) return { deleted: true }
+  if (result.deleted !== false) throw new Error('删除会话结果格式无效')
+  const reason = result.reason
+  if (typeof reason !== 'string' || !SESSION_DELETE_REASONS.has(reason as RuntimeSessionDeleteReason)) {
+    throw new Error('删除会话失败原因无效')
+  }
+  return { deleted: false, reason: reason as RuntimeSessionDeleteReason }
 }
 
 /**
@@ -3159,3 +3203,53 @@ const PRESERVE_CATEGORIES = new Set<PreserveCategory>(['conversations', 'plugins
 const MAX_PRESERVE_DIRECTORIES = 8
 const MAX_PRESERVE_ITEMS = 32
 const MAX_PRESERVE_PATH_CHARS = 300
+
+const HIGH_RISK_CATEGORY_SET = new Set<string>(HIGH_RISK_PERMISSION_CATEGORIES)
+
+/**
+ * 校验启动器「AI 高危文件与命令权限」状态（1 个总开关 + 17 个细分开关）。
+ *
+ * 17 个细分键必须全部是显式布尔值，不允许静默把缺键当 true。
+ */
+export function validateHighRiskPermissions(value: unknown): HighRiskPermissions {
+  const source = asRecord(value, '高危文件与命令权限状态')
+  const enabled = requiredBoolean(source.enabled, '高危权限总开关')
+  const rawCategories = asRecord(source.categories, '高危权限细分项')
+  const categories = {} as Record<HighRiskPermissionCategory, boolean>
+  for (const category of HIGH_RISK_PERMISSION_CATEGORIES) {
+    categories[category] = requiredBoolean(rawCategories[category], `高危权限细分项 ${category}`)
+  }
+  return { enabled, categories }
+}
+
+/**
+ * 校验「AI 高危文件与命令权限」更新入参：拒绝未知细分键或非布尔值。
+ */
+export function validateHighRiskPermissionsUpdate(value: unknown): HighRiskPermissionsUpdate {
+  const source = asRecord(value, '高危权限更新参数')
+  let enabled: boolean | undefined
+  if (source.enabled !== undefined) {
+    if (typeof source.enabled !== 'boolean') throw new Error('高危权限总开关格式无效')
+    enabled = source.enabled
+  }
+  let categories: Partial<Record<HighRiskPermissionCategory, boolean>> | undefined
+  if (source.categories !== undefined) {
+    const rawCats = asRecord(source.categories, '高危权限细分项')
+    const parsed: Partial<Record<HighRiskPermissionCategory, boolean>> = {}
+    for (const [key, val] of Object.entries(rawCats)) {
+      if (!HIGH_RISK_CATEGORY_SET.has(key)) throw new Error(`未知的高危权限细分项：${key}`)
+      if (typeof val !== 'boolean') throw new Error(`高危权限细分项 ${key} 的取值必须是布尔值`)
+      parsed[key as HighRiskPermissionCategory] = val
+    }
+    if (Object.keys(parsed).length > 0) {
+      categories = parsed
+    }
+  }
+  if (enabled === undefined && categories === undefined) {
+    throw new Error('高危权限更新参数不能为空')
+  }
+  return {
+    ...(enabled === undefined ? {} : { enabled }),
+    ...(categories === undefined ? {} : { categories }),
+  }
+}

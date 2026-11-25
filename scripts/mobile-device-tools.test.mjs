@@ -1042,3 +1042,41 @@ test('极危根命令在 ask 策略下先经 dsh 官方询问，取消信号时�
   assert.match(prompts[0].displayReason.zh, /打开应用极危警告页/u)
   assert.ok(f.requests.some(r => r.command === 'shellApprovalCancel' && r.param === challengeId))
 })
+
+test('宿主放开能力在插件侧可透传（root=device 绝对路径、自定义 URI Scheme 与 android 系统弹窗），由宿主硬编码开关兜底', async t => {
+  const f = fixture(t, () => ok('{"ok":true}'))
+
+  // 1. root=device 支持绝对路径，inbox 仍拒绝绝对路径与 .. 穿越
+  const fileList = f.tools.get('mobile_device_file_list')
+  await fileList.execute({ root: 'device', path: '/data/local/tmp' }, {})
+  assert.deepEqual(JSON.parse(f.requests[0].param), { root: 'device', path: '/data/local/tmp' })
+  await assert.rejects(fileList.execute({ root: 'inbox', path: '/data/local/tmp' }, {}), /DEVICE_FILE_INVALID/u)
+  await assert.rejects(fileList.execute({ root: 'device', path: '/data/../etc' }, {}), /DEVICE_FILE_INVALID/u)
+
+  // 2. 副屏 launch 透传自定义应用 URI Scheme，仍硬拒绝 file/javascript/data
+  const vsAction = f.tools.get('mobile_virtual_screen_action')
+  await vsAction.execute({ sessionId: virtualSession, action: 'launch', uri: 'weixin://dl/scan' }, {})
+  assert.deepEqual(JSON.parse(f.requests[1].param), { sessionId: virtualSession, action: 'launch', uri: 'weixin://dl/scan' })
+  for (const blocked of ['file:///sdcard/a', 'javascript:alert(1)', 'data:text/html,x']) {
+    await assert.rejects(vsAction.execute({ sessionId: virtualSession, action: 'launch', uri: blocked }, {}), /VIRTUAL_SCREEN_INVALID/u)
+  }
+
+  // 3. 无障碍透传 android 系统框架弹窗及系统应用内的 android:id/* 通用按钮，仍拒绝任意单段非法包名
+  const a11yAction = f.tools.get('mobile_accessibility_action')
+  await a11yAction.execute({ packageName: 'android', action: 'click', viewId: 'android:id/button1' }, {})
+  await a11yAction.execute({ packageName: 'com.android.settings', action: 'click', viewId: 'android:id/button1' }, {})
+  assert.deepEqual(JSON.parse(f.requests[2].param), {
+    packageName: 'android',
+    action: 'click',
+    selector: { viewId: 'android:id/button1' },
+  })
+  assert.deepEqual(JSON.parse(f.requests[3].param), {
+    packageName: 'com.android.settings',
+    action: 'click',
+    selector: { viewId: 'android:id/button1' },
+  })
+  await assert.rejects(
+    a11yAction.execute({ packageName: 'foo', action: 'click', viewId: 'foo:id/btn' }, {}),
+    /ACCESSIBILITY_ACTION_INVALID/u,
+  )
+})
