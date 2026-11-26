@@ -812,8 +812,21 @@ class RuntimeStore(context: Context) {
         val profilesDir = File(dshHome, "profiles")
         val webProfileDir = File(profilesDir, "web")
         val profilePatchFile = File(webProfileDir, "cordis.patch.yml")
+        val homePatchFile = File(dshHome, "cordis.patch.yml")
 
-        if (appProviders.isEmpty() && previousDigests.isEmpty() && !RuntimeFiles.existsNoFollow(profilePatchFile)) {
+        val homeText = if (RuntimeFiles.isDirectoryNoFollow(dshHome)) {
+            readOptionalHomePatch(homePatchFile)
+        } else {
+            null
+        }
+        val homeNeedsMigration = homeText != null && HarnessProfilePatchDocument.hasLlmPiAiConfig(homeText)
+
+        if (
+            appProviders.isEmpty() &&
+            previousDigests.isEmpty() &&
+            !homeNeedsMigration &&
+            !RuntimeFiles.existsNoFollow(profilePatchFile)
+        ) {
             return
         }
 
@@ -835,11 +848,32 @@ class RuntimeStore(context: Context) {
             null
         }
 
-        val outcome = HarnessProfilePatchDocument.mergeLlmPiAi(existingText, appProviders, previousDigests)
+        val homeMigration = if (homeNeedsMigration) {
+            HarnessProfilePatchDocument.migrateHomeLlmPiAi(existingText, homeText)
+        } else {
+            null
+        }
+        val baseProfileText = if (
+            homeMigration != null &&
+            homeMigration.homeChanged &&
+            homeMigration.profileChanged &&
+            homeMigration.profileYamlText != null
+        ) {
+            homeMigration.profileYamlText
+        } else {
+            existingText
+        }
+
+        val outcome = HarnessProfilePatchDocument.mergeLlmPiAi(baseProfileText, appProviders, previousDigests)
         val rendered = outcome.yamlText
             ?: throw RuntimeFailure("RUNTIME_CONFIG_FAILED", "profile 配置文件格式无效，无法同步模型供应商")
 
-        if (outcome.changed) {
+        val shouldWriteProfile = outcome.changed || (homeMigration?.profileChanged == true && homeMigration.homeChanged)
+        val shouldWriteHome = homeMigration?.homeChanged == true && homeMigration.homeYamlText != null
+
+        // 崩溃安全顺序：先把迁入与合并后的 profile 补丁原子落盘，再从 home 补丁剥离 `llm-pi-ai.config`。
+        // 即使两步之间发生中断，用户的模型供应商配置也不会丢失，下次启动会继续完成 home 补丁清理。
+        if (shouldWriteProfile) {
             writeGeneratedFileAtomically(
                 directory = webProfileDir,
                 target = profilePatchFile,
@@ -849,9 +883,30 @@ class RuntimeStore(context: Context) {
                 failureMessage = "无法写入 profile 模型供应商配置",
             )
         }
+        if (shouldWriteHome) {
+            writeGeneratedFileAtomically(
+                directory = dshHome,
+                target = homePatchFile,
+                pendingName = ".cordis.patch.yml.home.new",
+                bytes = homeMigration!!.homeYamlText!!.toByteArray(Charsets.UTF_8),
+                chmodDir = false,
+                failureMessage = "无法清理全局补丁中的模型供应商覆盖",
+            )
+        }
         if (outcome.managedDigests != previousDigests) {
             saveSyncedProviderDigestsLocked(outcome.managedDigests)
         }
+    }
+
+    /**
+     * 只读探查 `$DSH_HOME/cordis.patch.yml`（home patch）：符号链接、目录、超限或读取失败一律返回 `null`
+     * （失败关闭，绝不跟随链接或修改异常文件）。
+     */
+    private fun readOptionalHomePatch(homePatchFile: File): String? {
+        if (!RuntimeFiles.existsNoFollow(homePatchFile)) return null
+        if (!RuntimeFiles.isRegularFileNoFollow(homePatchFile)) return null
+        if (homePatchFile.length() > HarnessProfilePatchDocument.MAX_DOCUMENT_BYTES.toLong()) return null
+        return runCatching { homePatchFile.readText(Charsets.UTF_8) }.getOrNull()
     }
 
     private fun ensureRealDirectory(directory: File, invalidMessage: String) {

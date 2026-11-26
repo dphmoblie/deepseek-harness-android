@@ -4,7 +4,9 @@ import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertThrows
+import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.io.File
 
 class RuntimeModelProvidersTest {
 
@@ -123,5 +125,26 @@ class RuntimeModelProvidersTest {
             val bad = JSONObject(provider.toString()).put("models", JSONArray().put(JSONObject(model.toString()).put("input", JSONArray().put("image").put("image"))))
             RuntimeValidation.customModelProviders(JSONArray().put(bad))
         }
+    }
+
+    @Test
+    fun runtimeStoreKeepsLlmPiAiOutOfCliOverlayAndMigratesHomePatchBeforeClearingIt() {
+        val storeSource = File("src/main/java/io/deepseekharness/mobile/runtime/RuntimeStore.kt").readText()
+        // 命令行 --patch 覆盖层（launcher-providers.patch.json）只允许写 sandbox，禁止再写 llm-pi-ai。
+        assertTrue(
+            "prepareProviderPatch 必须以 RuntimeSandboxRunner.overlay(null) 写出仅含 sandbox 的覆盖层",
+            storeSource.contains("RuntimeSandboxRunner.overlay(null)"),
+        )
+        // 启动同步必须检查并迁移 $DSH_HOME/cordis.patch.yml 中的 llm-pi-ai.config，且先落盘 profile 再清理 home。
+        assertTrue(
+            "syncProfileProvidersLocked 必须调用 migrateHomeLlmPiAi 迁移全局 home 补丁",
+            storeSource.contains("HarnessProfilePatchDocument.migrateHomeLlmPiAi("),
+        )
+        val writeProfileIndex = storeSource.indexOf("target = profilePatchFile")
+        val writeHomeIndex = storeSource.indexOf("target = homePatchFile")
+        assertTrue(
+            "必须先原子写入 profilePatchFile，再原子清理 homePatchFile（避免中途中断丢供应商）",
+            writeProfileIndex > 0 && writeHomeIndex > writeProfileIndex,
+        )
     }
 }

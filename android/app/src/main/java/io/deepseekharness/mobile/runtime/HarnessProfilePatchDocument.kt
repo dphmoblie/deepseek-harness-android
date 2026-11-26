@@ -18,9 +18,10 @@ import java.io.ByteArrayInputStream
 import java.security.MessageDigest
 
 /**
- * 访客 profile 补丁文档（`/root/.dsh/profiles/web/cordis.patch.yml`）中 `llm-pi-ai` 条目的安全并写。
+ * 访客 profile 补丁文档（`/root/.dsh/profiles/web/cordis.patch.yml`）中 `llm-pi-ai` 条目的安全并写，
+ * 以及把全局 home 补丁（`/root/.dsh/cordis.patch.yml`）里的 `llm-pi-ai.config` 迁入 profile 补丁。
  *
- * ## 为什么把 `llm-pi-ai` 从 `--patch` 迁到这里
+ * ## 为什么把 `llm-pi-ai` 从 `--patch` 与 home 补丁迁到这里
  *
  * dsh 的配置叠层顺序（`@deepseek-ai/dsh-app-boot` 的 `readProfilePatches`）为：
  *
@@ -29,12 +30,16 @@ import java.security.MessageDigest
  * ```
  *
  * 而 `dsh-config-editor`（官方 Web UI 的「模型」设置页）只读写 `profiles/web/cordis.patch.yml`，
- * 并在落盘前用整套叠层重算一次最终配置：只要 CLI `--patch` 里带了 `llm-pi-ai`，重算结果
- * 就会被命令行覆盖层整块顶掉，Web UI 直接抛出
+ * 并在落盘前用整套叠层重算一次最终配置：只要 `~/.dsh/cordis.patch.yml`（home patch）或 CLI `--patch`
+ * 里带了 `llm-pi-ai` 的 `config` 覆盖，重算结果就会把 profile 层的修改整块顶掉，Web UI 既会把供应商字段
+ * 仅当作占位符显示，又会在保存时直接抛出
  * `Configuration for "llm-pi-ai" is overridden by a home patch or command-line overlay` 并拒绝保存。
  *
  * 迁到 `profiles/web/cordis.patch.yml` 后：
  * - `--patch`（`launcher-providers.patch.json`）只保留 `sandbox` 运行器覆盖；
+ * - `~/.dsh/cordis.patch.yml` 若遗留了 `llm-pi-ai.config`（手动编写、AI 代写或桌面迁移），启动前会先
+ *   无损迁入 `profiles/web/cordis.patch.yml`，再从 home 补丁仅剥离 `llm-pi-ai` 的 `config` 键（保留其它条目、
+ *   `disabled` 开关与 `!!js` 标签）；
  * - App 配置的内置/自定义供应商与官方 Web UI 共用同一层文档，Web UI 可以自由新建、修改供应商
  *   与模型输入模态（图片识别）、推理等级、compat 等配置；
  * - 通过逐供应商 SHA-256 摘要追踪 App 管理的条目：App 侧未改动时**绝不覆盖**用户在 Web UI 里的编辑，
@@ -48,6 +53,7 @@ internal object HarnessProfilePatchDocument {
     const val LLM_PI_AI_ID = "llm-pi-ai"
     const val LLM_PI_AI_NAME = "@deepseek-ai/dsh-llm-pi-ai"
     const val PROFILE_PATCH_RELATIVE_PATH = "root/.dsh/profiles/web/cordis.patch.yml"
+    const val HOME_PATCH_RELATIVE_PATH = "root/.dsh/cordis.patch.yml"
 
     private val JS_TAG = Tag("tag:yaml.org,2002:js")
 
@@ -110,6 +116,22 @@ internal object HarnessProfilePatchDocument {
     )
 
     /**
+     * 将 `$DSH_HOME/cordis.patch.yml`（home patch）中的 `llm-pi-ai.config` 迁入
+     * `profiles/web/cordis.patch.yml`（profile patch）的合并结果。
+     *
+     * @property profileYamlText 迁入后的 profile 补丁全文；**任一文档损坏或结构非法时为 `null`**（失败关闭）。
+     * @property homeYamlText 剥离 `llm-pi-ai.config` 后的 home 补丁全文；失败关闭时为 `null`。
+     * @property profileChanged profile 补丁是否需要落盘。
+     * @property homeChanged home 补丁是否需要落盘。
+     */
+    data class HomeMigrationOutcome(
+        val profileYamlText: String?,
+        val homeYamlText: String?,
+        val profileChanged: Boolean,
+        val homeChanged: Boolean,
+    )
+
+    /**
      * 按 App 设置构建待同步的 `llm-pi-ai.config.providers` 映射。
      */
     fun buildAppProviders(
@@ -162,12 +184,12 @@ internal object HarnessProfilePatchDocument {
         val entries = parseEntries(existingText)
             ?: return MergeOutcome(yamlText = null, managedDigests = previousDigests, changed = false)
 
-        val rowIndex = entries.indexOfLast { isLlmPiAiConfigRow(it) }
-        val existingRow = if (rowIndex >= 0) deepCopyMap(entries[rowIndex]) else null
+        val configRowIndex = entries.indexOfLast { isLlmPiAiConfigRow(it) && it.containsKey("config") }
+        val existingConfigRow = if (configRowIndex >= 0) deepCopyMap(entries[configRowIndex]) else null
 
         val existingConfig: MutableMap<String, Any?> = when {
-            existingRow == null || !existingRow.containsKey("config") || existingRow["config"] == null -> linkedMapOf()
-            existingRow["config"] is Map<*, *> -> deepCopyMap(existingRow["config"] as Map<*, *>)
+            existingConfigRow == null || existingConfigRow["config"] == null -> linkedMapOf()
+            existingConfigRow["config"] is Map<*, *> -> deepCopyMap(existingConfigRow["config"] as Map<*, *>)
             else -> return MergeOutcome(yamlText = null, managedDigests = previousDigests, changed = false)
         }
 
@@ -208,38 +230,16 @@ internal object HarnessProfilePatchDocument {
             )
         }
 
-        val updatedEntries = entries.mapTo(mutableListOf()) { deepCopyMap(it) }
-        if (existingProviders.isEmpty()) {
-            if (rowIndex >= 0) {
-                existingConfig.remove("providers")
-                val row = existingRow ?: linkedMapOf()
-                if (existingConfig.isEmpty()) {
-                    row.remove("config")
-                } else {
-                    row["config"] = existingConfig
-                }
-                val onlyIdentity = row.keys.all { it == "id" || it == "name" }
-                if (onlyIdentity) {
-                    updatedEntries.removeAt(rowIndex)
-                } else {
-                    updatedEntries[rowIndex] = row
-                }
+        val updatedEntries = if (existingProviders.isEmpty()) {
+            existingConfig.remove("providers")
+            if (existingConfig.isEmpty()) {
+                stripAllLlmPiAiConfigs(entries)
+            } else {
+                upsertLlmPiAiConfig(entries, existingConfig)
             }
         } else {
             existingConfig["providers"] = existingProviders
-            if (rowIndex >= 0) {
-                val row = existingRow ?: linkedMapOf()
-                row["config"] = existingConfig
-                updatedEntries[rowIndex] = row
-            } else {
-                updatedEntries.add(
-                    linkedMapOf(
-                        "id" to LLM_PI_AI_ID,
-                        "name" to LLM_PI_AI_NAME,
-                        "config" to existingConfig,
-                    ),
-                )
-            }
+            upsertLlmPiAiConfig(entries, existingConfig)
         }
 
         val rendered = renderEntries(updatedEntries)
@@ -247,6 +247,107 @@ internal object HarnessProfilePatchDocument {
             yamlText = rendered,
             managedDigests = currentDigests,
             changed = true,
+        )
+    }
+
+    /**
+     * 快速判定给定补丁文本是否包含会覆盖 `llm-pi-ai` 配置的条目（含 `config: null` / `config: {}`）。
+     * 文档损坏或非数组时返回 `false`（失败关闭）。
+     */
+    fun hasLlmPiAiConfig(text: String?): Boolean {
+        val entries = parseEntries(text) ?: return false
+        return entries.any { isLlmPiAiConfigRow(it) && it.containsKey("config") }
+    }
+
+    /**
+     * 将 `$DSH_HOME/cordis.patch.yml`（home patch）中的 `llm-pi-ai.config` 无损迁入
+     * `profiles/web/cordis.patch.yml`（profile patch），并从 home 补丁剥离所有 `llm-pi-ai` 的 `config` 键。
+     *
+     * 在 dsh 叠层语义里 home patch 优先级高于 profile patch，因此同名供应商以 home patch 为准，
+     * 同时保留 profile patch 里不冲突的供应商与兄弟条目，以及 home patch 里的非 `llm-pi-ai` 条目、
+     * `disabled` 开关和 `!!js` 标签。即便 home patch 只写了 `config: null` 或 `config: {}`，
+     * 在 dsh 合并语义里仍会整块顶掉 profile 配置并触发覆盖锁定，因此也必须剥离。
+     */
+    fun migrateHomeLlmPiAi(
+        profileText: String?,
+        homeText: String?,
+    ): HomeMigrationOutcome {
+        if (homeText.isNullOrBlank()) {
+            return HomeMigrationOutcome(
+                profileYamlText = profileText ?: "",
+                homeYamlText = homeText ?: "",
+                profileChanged = false,
+                homeChanged = false,
+            )
+        }
+        val homeEntries = parseEntries(homeText)
+            ?: return HomeMigrationOutcome(null, null, profileChanged = false, homeChanged = false)
+        val effectiveHomeRow = homeEntries.lastOrNull { isLlmPiAiConfigRow(it) && it.containsKey("config") }
+            ?: return HomeMigrationOutcome(
+                profileYamlText = profileText ?: "",
+                homeYamlText = homeText,
+                profileChanged = false,
+                homeChanged = false,
+            )
+
+        val homeConfigRaw = effectiveHomeRow["config"]
+        val homeConfig: Map<*, *>? = when (homeConfigRaw) {
+            null -> null
+            is Map<*, *> -> homeConfigRaw
+            else -> return HomeMigrationOutcome(null, null, profileChanged = false, homeChanged = false)
+        }
+        val homeProvidersRaw = homeConfig?.get("providers")
+        val homeProviders: Map<*, *>? = when (homeProvidersRaw) {
+            null -> null
+            is Map<*, *> -> homeProvidersRaw
+            else -> return HomeMigrationOutcome(null, null, profileChanged = false, homeChanged = false)
+        }
+
+        val hasNonProviderHomeKeys = homeConfig?.keys?.any { it != "providers" } == true
+        val hasHomePayload = hasNonProviderHomeKeys || (homeProviders != null && homeProviders.isNotEmpty())
+
+        var renderedProfile = profileText ?: ""
+        var profileChanged = false
+        if (hasHomePayload) {
+            val profileEntries = parseEntries(profileText)
+                ?: return HomeMigrationOutcome(null, null, profileChanged = false, homeChanged = false)
+            val profileConfigIndex = profileEntries.indexOfLast { isLlmPiAiConfigRow(it) && it.containsKey("config") }
+            val mergedConfig: MutableMap<String, Any?> = when {
+                profileConfigIndex < 0 || profileEntries[profileConfigIndex]["config"] == null -> linkedMapOf()
+                profileEntries[profileConfigIndex]["config"] is Map<*, *> ->
+                    deepCopyMap(profileEntries[profileConfigIndex]["config"] as Map<*, *>)
+                else -> return HomeMigrationOutcome(null, null, profileChanged = false, homeChanged = false)
+            }
+
+            for ((key, value) in homeConfig!!) {
+                val keyName = key.toString()
+                if (keyName == "providers") continue
+                mergedConfig[keyName] = deepCopyValue(value)
+            }
+            if (homeProviders != null && homeProviders.isNotEmpty()) {
+                val mergedProviders: MutableMap<String, Any?> = when {
+                    !mergedConfig.containsKey("providers") || mergedConfig["providers"] == null -> linkedMapOf()
+                    mergedConfig["providers"] is Map<*, *> -> deepCopyMap(mergedConfig["providers"] as Map<*, *>)
+                    else -> return HomeMigrationOutcome(null, null, profileChanged = false, homeChanged = false)
+                }
+                for ((id, spec) in homeProviders) {
+                    mergedProviders[id.toString()] = deepCopyValue(spec)
+                }
+                mergedConfig["providers"] = mergedProviders
+            }
+
+            val updatedProfileEntries = upsertLlmPiAiConfig(profileEntries, mergedConfig)
+            renderedProfile = renderEntries(updatedProfileEntries)
+            profileChanged = renderedProfile != (profileText ?: "")
+        }
+
+        val updatedHomeEntries = stripAllLlmPiAiConfigs(homeEntries)
+        val renderedHome = renderEntries(updatedHomeEntries)
+        return HomeMigrationOutcome(
+            profileYamlText = renderedProfile,
+            homeYamlText = renderedHome,
+            profileChanged = profileChanged,
+            homeChanged = true,
         )
     }
 
@@ -262,11 +363,11 @@ internal object HarnessProfilePatchDocument {
     ): PreservedMergeOutcome {
         val preservedEntries = parseEntries(preservedText)
             ?: return PreservedMergeOutcome(yamlText = null, changed = false)
-        val preservedRow = preservedEntries.lastOrNull { isLlmPiAiConfigRow(it) }
+        val preservedRow = preservedEntries.lastOrNull { isLlmPiAiConfigRow(it) && it.containsKey("config") }
             ?: return PreservedMergeOutcome(yamlText = existingText ?: "", changed = false)
 
         val preservedConfig = when {
-            !preservedRow.containsKey("config") || preservedRow["config"] == null ->
+            preservedRow["config"] == null ->
                 return PreservedMergeOutcome(yamlText = existingText ?: "", changed = false)
             preservedRow["config"] is Map<*, *> -> preservedRow["config"] as Map<*, *>
             else -> return PreservedMergeOutcome(yamlText = null, changed = false)
@@ -283,34 +384,30 @@ internal object HarnessProfilePatchDocument {
 
         val existingEntries = parseEntries(existingText)
             ?: return PreservedMergeOutcome(yamlText = null, changed = false)
-        val rowIndex = existingEntries.indexOfLast { isLlmPiAiConfigRow(it) }
-        val updatedEntries = existingEntries.mapTo(mutableListOf()) { deepCopyMap(it) }
+        val existingConfigIndex = existingEntries.indexOfLast { isLlmPiAiConfigRow(it) && it.containsKey("config") }
 
-        if (rowIndex >= 0) {
-            val row = updatedEntries[rowIndex]
-            val existingConfig: MutableMap<String, Any?> = when {
-                !row.containsKey("config") || row["config"] == null -> linkedMapOf()
+        val mergedConfig: MutableMap<String, Any?> = if (existingConfigIndex >= 0) {
+            val row = existingEntries[existingConfigIndex]
+            val baseConfig: MutableMap<String, Any?> = when {
+                row["config"] == null -> linkedMapOf()
                 row["config"] is Map<*, *> -> deepCopyMap(row["config"] as Map<*, *>)
                 else -> return PreservedMergeOutcome(yamlText = null, changed = false)
             }
             val mergedProviders: MutableMap<String, Any?> = when {
-                !existingConfig.containsKey("providers") || existingConfig["providers"] == null -> linkedMapOf()
-                existingConfig["providers"] is Map<*, *> -> deepCopyMap(existingConfig["providers"] as Map<*, *>)
+                !baseConfig.containsKey("providers") || baseConfig["providers"] == null -> linkedMapOf()
+                baseConfig["providers"] is Map<*, *> -> deepCopyMap(baseConfig["providers"] as Map<*, *>)
                 else -> return PreservedMergeOutcome(yamlText = null, changed = false)
             }
             for ((id, spec) in preservedProviders) {
                 mergedProviders[id.toString()] = deepCopyValue(spec)
             }
-            existingConfig["providers"] = mergedProviders
-            row["config"] = existingConfig
+            baseConfig["providers"] = mergedProviders
+            baseConfig
         } else {
-            updatedEntries += linkedMapOf(
-                "id" to LLM_PI_AI_ID,
-                "name" to LLM_PI_AI_NAME,
-                "config" to deepCopyMap(preservedConfig),
-            )
+            deepCopyMap(preservedConfig)
         }
 
+        val updatedEntries = upsertLlmPiAiConfig(existingEntries, mergedConfig)
         val rendered = renderEntries(updatedEntries)
         return PreservedMergeOutcome(yamlText = rendered, changed = rendered != (existingText ?: ""))
     }
@@ -336,7 +433,70 @@ internal object HarnessProfilePatchDocument {
         if (row["id"] != LLM_PI_AI_ID) return false
         if (row.containsKey("insert")) return false
         val name = row["name"]
-        return name == null || name == LLM_PI_AI_NAME
+        return name == null || name == "" || name == LLM_PI_AI_NAME
+    }
+
+    /**
+     * 将 `config` 写入最后一个匹配的 `llm-pi-ai` 行（不存在则追加），同时清理更早匹配行上的
+     * 冗余 `config`，避免 `dsh-config-editor` 编辑或重置时被隐藏旧行回流干扰。
+     */
+    private fun upsertLlmPiAiConfig(
+        entries: List<Map<*, *>>,
+        config: MutableMap<String, Any?>,
+    ): MutableList<Map<String, Any?>> {
+        val targetIndex = entries.indexOfLast { isLlmPiAiConfigRow(it) }
+        val updated = mutableListOf<Map<String, Any?>>()
+        if (targetIndex < 0) {
+            for (row in entries) updated.add(deepCopyMap(row))
+            updated.add(
+                linkedMapOf(
+                    "id" to LLM_PI_AI_ID,
+                    "name" to LLM_PI_AI_NAME,
+                    "config" to config,
+                ),
+            )
+            return updated
+        }
+        for (index in entries.indices) {
+            val row = deepCopyMap(entries[index])
+            if (index == targetIndex) {
+                if (row["name"] == "") {
+                    row["name"] = LLM_PI_AI_NAME
+                }
+                row["config"] = config
+                updated.add(row)
+            } else if (isLlmPiAiConfigRow(row) && row.containsKey("config")) {
+                row.remove("config")
+                val onlyIdentity = row.keys.all { it == "id" || it == "name" }
+                if (!onlyIdentity) {
+                    updated.add(row)
+                }
+            } else {
+                updated.add(row)
+            }
+        }
+        return updated
+    }
+
+    /**
+     * 剥离所有匹配 `llm-pi-ai` 行上的 `config` 键；若该行只剩 `id`/`name` 标识键则整行移除，
+     * 保留 `disabled` 等其它属性与所有非 `llm-pi-ai` 行。
+     */
+    private fun stripAllLlmPiAiConfigs(entries: List<Map<*, *>>): MutableList<Map<String, Any?>> {
+        val updated = mutableListOf<Map<String, Any?>>()
+        for (source in entries) {
+            if (isLlmPiAiConfigRow(source) && source.containsKey("config")) {
+                val row = deepCopyMap(source)
+                row.remove("config")
+                val onlyIdentity = row.keys.all { it == "id" || it == "name" }
+                if (!onlyIdentity) {
+                    updated.add(row)
+                }
+            } else {
+                updated.add(deepCopyMap(source))
+            }
+        }
+        return updated
     }
 
     private fun mergeProviderSpec(

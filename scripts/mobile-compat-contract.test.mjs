@@ -1459,3 +1459,33 @@ test('副屏控件树按显示编号读取窗口，不能退化为默认显示�
     assert.ok(!body.includes('getWindows()'), '副屏读取不能退回只读默认显示屏的 getWindows()')
   }
 })
+
+test('模型供应商同步不得落入命令行覆盖层，且启动前必须安全迁移全局 home 补丁', async () => {
+  const store = await readFile(resolve(appRoot, 'android/app/src/main/java/io/deepseekharness/mobile/runtime/RuntimeStore.kt'), 'utf8')
+  const patchDoc = await readFile(resolve(appRoot, 'android/app/src/main/java/io/deepseekharness/mobile/runtime/HarnessProfilePatchDocument.kt'), 'utf8')
+
+  // 命令行 --patch（launcher-providers.patch.json）只允许保留 sandbox 覆盖，避免触发 dsh-config-editor 锁定。
+  assert.match(store, /RuntimeSandboxRunner\.overlay\(null\)/u)
+
+  // 全局 home 补丁（$DSH_HOME/cordis.patch.yml）若含 llm-pi-ai.config，同样会顶掉 profiles/web/cordis.patch.yml
+  // 并触发 "Configuration for \"llm-pi-ai\" is overridden by a home patch or command-line overlay"。
+  // 启动前必须先检查并无损迁入 profile 补丁，再按「先 profile、后 home」的崩溃安全顺序原子落盘。
+  const syncStart = store.indexOf('private fun syncProfileProvidersLocked(')
+  const syncEnd = store.indexOf('private fun ensureRealDirectory(', syncStart)
+  assert.ok(syncStart >= 0 && syncEnd > syncStart, '找不到 syncProfileProvidersLocked')
+  const syncBody = store.slice(syncStart, syncEnd)
+  assert.match(syncBody, /val homePatchFile = File\(dshHome,\s*"cordis\.patch\.yml"\)/u)
+  assert.match(syncBody, /HarnessProfilePatchDocument\.hasLlmPiAiConfig\(homeText\)/u)
+  assert.match(syncBody, /HarnessProfilePatchDocument\.migrateHomeLlmPiAi\(existingText,\s*homeText\)/u)
+  const profileWriteAt = syncBody.indexOf('target = profilePatchFile')
+  const homeWriteAt = syncBody.indexOf('target = homePatchFile')
+  assert.ok(profileWriteAt > 0 && homeWriteAt > profileWriteAt, '必须先原子写入 profilePatchFile，再原子清理 homePatchFile')
+  // 读取 home 补丁必须不跟随符号链接并校验大小上限（失败关闭）。
+  assert.match(syncBody, /RuntimeFiles\.isRegularFileNoFollow\(homePatchFile\)/u)
+  assert.match(syncBody, /MAX_DOCUMENT_BYTES/u)
+
+  // 纯逻辑层必须提供 home 补丁识别、迁移与全量剥离逻辑。
+  assert.match(patchDoc, /fun hasLlmPiAiConfig\(/u)
+  assert.match(patchDoc, /fun migrateHomeLlmPiAi\(/u)
+  assert.match(patchDoc, /private fun stripAllLlmPiAiConfigs\(/u)
+})

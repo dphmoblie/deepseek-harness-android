@@ -376,4 +376,240 @@ class HarnessProfilePatchDocumentTest {
         assertNull(badExisting.yamlText)
         assertFalse(badExisting.changed)
     }
+
+    @Test
+    fun `migrates home patch llm-pi-ai providers into profile patch and strips home override`() {
+        val homePatch = """
+            - id: llm-pi-ai
+              name: "@deepseek-ai/dsh-llm-pi-ai"
+              config:
+                providers:
+                  deep:
+                    displayName: deep
+                    api: openai-completions
+                    baseURL: https://api.diosirapi.co.uk
+                    models:
+                      - id: deepseek-v3
+                        name: deepseek-v3
+                        contextWindow: 131072
+                        maxTokens: 8192
+        """.trimIndent() + "\n"
+
+        assertTrue(HarnessProfilePatchDocument.hasLlmPiAiConfig(homePatch))
+        val migrated = HarnessProfilePatchDocument.migrateHomeLlmPiAi(profileText = null, homeText = homePatch)
+        assertTrue(migrated.profileChanged)
+        assertTrue(migrated.homeChanged)
+        assertEquals("[]\n", migrated.homeYamlText)
+        assertNotNull(migrated.profileYamlText)
+
+        val rows = parseYamlList(migrated.profileYamlText!!)
+        assertEquals(1, rows.size)
+        assertEquals("llm-pi-ai", rows[0]["id"])
+        assertEquals("@deepseek-ai/dsh-llm-pi-ai", rows[0]["name"])
+        @Suppress("UNCHECKED_CAST")
+        val providers = (rows[0]["config"] as Map<String, Any?>)["providers"] as Map<String, Any?>
+        @Suppress("UNCHECKED_CAST")
+        val deep = providers["deep"] as Map<String, Any?>
+        assertEquals("https://api.diosirapi.co.uk", deep["baseURL"])
+        assertEquals("openai-completions", deep["api"])
+        assertFalse(HarnessProfilePatchDocument.hasLlmPiAiConfig(migrated.homeYamlText))
+    }
+
+    @Test
+    fun `preserves sibling rows, !!js tags, and disabled flags in home patch during migration`() {
+        val homePatch = """
+            - id: custom-dir
+              config:
+                root: !!js "dshHomePath('custom')"
+            - id: llm-pi-ai
+              disabled: false
+              config:
+                providers:
+                  deep:
+                    api: openai-completions
+                    baseURL: https://api.diosirapi.co.uk
+        """.trimIndent() + "\n"
+
+        val migrated = HarnessProfilePatchDocument.migrateHomeLlmPiAi(
+            profileText = "- id: web-row\n  config:\n    ok: true\n",
+            homeText = homePatch,
+        )
+        assertTrue(migrated.profileChanged)
+        assertTrue(migrated.homeChanged)
+        assertTrue(migrated.homeYamlText!!.contains("!!js"))
+        assertTrue(migrated.homeYamlText!!.contains("dshHomePath('custom')"))
+        assertTrue(migrated.homeYamlText!!.contains("disabled: false"))
+        assertFalse(migrated.homeYamlText!!.contains("diosirapi"))
+        assertFalse(HarnessProfilePatchDocument.hasLlmPiAiConfig(migrated.homeYamlText))
+
+        val profileRows = parseYamlList(migrated.profileYamlText!!)
+        assertEquals(2, profileRows.size)
+        assertEquals("web-row", profileRows[0]["id"])
+        assertEquals("llm-pi-ai", profileRows[1]["id"])
+    }
+
+    @Test
+    fun `merges home patch providers over existing profile providers without losing profile-only entries`() {
+        val profilePatch = """
+            - id: llm-pi-ai
+              name: "@deepseek-ai/dsh-llm-pi-ai"
+              config:
+                providers:
+                  profile-only:
+                    apiKeyEnv: PROFILE_ONLY_KEY
+                  deep:
+                    api: openai-completions
+                    baseURL: https://stale.example.com/v1
+        """.trimIndent() + "\n"
+
+        val homePatch = """
+            - id: llm-pi-ai
+              config:
+                providers:
+                  deep:
+                    api: openai-completions
+                    baseURL: https://api.diosirapi.co.uk
+        """.trimIndent() + "\n"
+
+        val migrated = HarnessProfilePatchDocument.migrateHomeLlmPiAi(profilePatch, homePatch)
+        assertTrue(migrated.profileChanged)
+        assertTrue(migrated.homeChanged)
+        assertEquals("[]\n", migrated.homeYamlText)
+
+        val rows = parseYamlList(migrated.profileYamlText!!)
+        assertEquals(1, rows.size)
+        @Suppress("UNCHECKED_CAST")
+        val providers = (rows[0]["config"] as Map<String, Any?>)["providers"] as Map<String, Any?>
+        assertTrue(providers.containsKey("profile-only"))
+        @Suppress("UNCHECKED_CAST")
+        val deep = providers["deep"] as Map<String, Any?>
+        assertEquals("https://api.diosirapi.co.uk", deep["baseURL"])
+    }
+
+    @Test
+    fun `strips empty or null llm-pi-ai config override in home patch without polluting profile patch`() {
+        val existingProfile = """
+            - id: llm-pi-ai
+              name: "@deepseek-ai/dsh-llm-pi-ai"
+              config:
+                providers:
+                  web-only:
+                    apiKeyEnv: WEB_ONLY_KEY
+        """.trimIndent() + "\n"
+
+        for (homePatch in listOf(
+            "- id: llm-pi-ai\n  config: null\n",
+            "- id: llm-pi-ai\n  config: {}\n",
+            "- id: llm-pi-ai\n  config:\n    providers: {}\n",
+        )) {
+            assertTrue(homePatch, HarnessProfilePatchDocument.hasLlmPiAiConfig(homePatch))
+            val migrated = HarnessProfilePatchDocument.migrateHomeLlmPiAi(existingProfile, homePatch)
+            assertFalse(homePatch, migrated.profileChanged)
+            assertEquals(existingProfile, migrated.profileYamlText)
+            assertTrue(homePatch, migrated.homeChanged)
+            assertEquals("[]\n", migrated.homeYamlText)
+        }
+    }
+
+    @Test
+    fun `ignores home patch without llm-pi-ai config override`() {
+        val disabledOnly = "- id: llm-pi-ai\n  disabled: true\n"
+        assertFalse(HarnessProfilePatchDocument.hasLlmPiAiConfig(disabledOnly))
+        val untouched = HarnessProfilePatchDocument.migrateHomeLlmPiAi(null, disabledOnly)
+        assertFalse(untouched.profileChanged)
+        assertFalse(untouched.homeChanged)
+        assertEquals(disabledOnly, untouched.homeYamlText)
+
+        val unrelated = "- id: theme\n  config:\n    mode: dark\n"
+        assertFalse(HarnessProfilePatchDocument.hasLlmPiAiConfig(unrelated))
+        val untouchedOther = HarnessProfilePatchDocument.migrateHomeLlmPiAi(null, unrelated)
+        assertFalse(untouchedOther.profileChanged)
+        assertFalse(untouchedOther.homeChanged)
+        assertEquals(unrelated, untouchedOther.homeYamlText)
+    }
+
+    @Test
+    fun `handles multiple llm-pi-ai rows without dropping earlier config or resurfacing stale rows`() {
+        val multiRowProfile = """
+            - id: llm-pi-ai
+              name: ""
+              config:
+                providers:
+                  web-only:
+                    apiKeyEnv: WEB_ONLY_KEY
+            - id: llm-pi-ai
+              disabled: false
+        """.trimIndent() + "\n"
+
+        // 尾行仅设 disabled:false 时，不能丢掉前一行保存的 web-only，并应合并成单条有效配置。
+        val appProviders = HarnessProfilePatchDocument.buildAppProviders(
+            enabledBuiltIn = listOf(ModelProvider.OPENAI),
+            customProviders = emptyList(),
+        )
+        val merged = HarnessProfilePatchDocument.mergeLlmPiAi(multiRowProfile, appProviders, emptyMap())
+        assertTrue(merged.changed)
+        val rows = parseYamlList(merged.yamlText!!)
+        assertEquals(1, rows.size)
+        assertEquals(false, rows[0]["disabled"])
+        @Suppress("UNCHECKED_CAST")
+        val providers = (rows[0]["config"] as Map<String, Any?>)["providers"] as Map<String, Any?>
+        assertTrue(providers.containsKey("web-only"))
+        assertTrue(providers.containsKey("openai"))
+
+        // 升级迁移同样能读到尾行 disabled:false 之前那条 llm-pi-ai 配置。
+        val preserved = HarnessProfilePatchDocument.mergePreservedLlmPiAi(null, multiRowProfile)
+        assertTrue(preserved.changed)
+        assertTrue(preserved.yamlText!!.contains("web-only"))
+
+        // 多条带 config 的旧行在清空 App 托管供应商时应一并清理，不让旧行回流。
+        val duplicateConfigProfile = """
+            - id: llm-pi-ai
+              config:
+                providers:
+                  stale:
+                    apiKeyEnv: STALE_KEY
+            - id: llm-pi-ai
+              config:
+                providers:
+                  openai:
+                    apiKeyEnv: OPENAI_API_KEY
+        """.trimIndent() + "\n"
+        val cleared = HarnessProfilePatchDocument.mergeLlmPiAi(
+            existingText = duplicateConfigProfile,
+            appProviders = emptyMap(),
+            previousDigests = merged.managedDigests,
+        )
+        assertTrue(cleared.changed)
+        assertEquals("[]\n", cleared.yamlText)
+    }
+
+    @Test
+    fun `home migration fails closed on corrupted YAML or invalid config types`() {
+        val validHome = "- id: llm-pi-ai\n  config:\n    providers:\n      deep:\n        baseURL: https://api.diosirapi.co.uk\n"
+
+        val badHomeYaml = HarnessProfilePatchDocument.migrateHomeLlmPiAi(null, "- [unclosed")
+        assertNull(badHomeYaml.profileYamlText)
+        assertNull(badHomeYaml.homeYamlText)
+        assertFalse(badHomeYaml.profileChanged)
+        assertFalse(badHomeYaml.homeChanged)
+
+        val badHomeConfig = HarnessProfilePatchDocument.migrateHomeLlmPiAi(null, "- id: llm-pi-ai\n  config: invalid\n")
+        assertNull(badHomeConfig.profileYamlText)
+        assertNull(badHomeConfig.homeYamlText)
+        assertFalse(badHomeConfig.homeChanged)
+
+        val badHomeProviders = HarnessProfilePatchDocument.migrateHomeLlmPiAi(
+            null,
+            "- id: llm-pi-ai\n  config:\n    providers: not-a-map\n",
+        )
+        assertNull(badHomeProviders.profileYamlText)
+        assertNull(badHomeProviders.homeYamlText)
+        assertFalse(badHomeProviders.homeChanged)
+
+        val badProfile = HarnessProfilePatchDocument.migrateHomeLlmPiAi("not: a-list\n", validHome)
+        assertNull(badProfile.profileYamlText)
+        assertNull(badProfile.homeYamlText)
+        assertFalse(badProfile.profileChanged)
+        assertFalse(badProfile.homeChanged)
+    }
 }
