@@ -44,6 +44,7 @@ import {
 import {
   assertAppOrientationMode,
   validateAppOrientation,
+  validateNavigationBarHidden,
   assertBase64Input,
   assertDiagnosticRetentionDays,
   assertMailboxSubdirectory,
@@ -137,6 +138,8 @@ import {
 interface NativeRuntimePlugin {
   getAppOrientation(): Promise<unknown>
   setAppOrientation(options: { mode: AppOrientationMode }): Promise<unknown>
+  getNavigationBarHidden(): Promise<unknown>
+  setNavigationBarHidden(options: { hidden: boolean }): Promise<unknown>
   listHarnessReleases(): Promise<unknown>
   manageHarnessVersions(options: { operation: HarnessVersionOperation; version?: string }): Promise<unknown>
   managePlugins(options: PluginRequest): Promise<PluginCatalog>
@@ -349,6 +352,8 @@ function createNativeBridge(): RuntimeBridge {
   return {
     getAppOrientation: () => NativeRuntime.getAppOrientation().then(validateAppOrientation),
     setAppOrientation: mode => NativeRuntime.setAppOrientation({ mode: assertAppOrientationMode(mode) }).then(validateAppOrientation),
+    getNavigationBarHidden: () => NativeRuntime.getNavigationBarHidden().then(validateNavigationBarHidden),
+    setNavigationBarHidden: hidden => NativeRuntime.setNavigationBarHidden({ hidden: assertBooleanFlag(hidden, '导航栏状态') }).then(validateNavigationBarHidden),
     listHarnessReleases: () => NativeRuntime.listHarnessReleases().then(validateHarnessReleases),
     manageHarnessVersions: (operation, version) => NativeRuntime.manageHarnessVersions(harnessVersionRequest(operation, version)).then(validateHarnessVersions),
     managePlugins: request => NativeRuntime.managePlugins(validatePluginRequest(request)).then(validatePluginCatalog),

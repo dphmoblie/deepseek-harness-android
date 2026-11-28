@@ -1810,6 +1810,10 @@ export function validateAppOrientation(value: unknown): AppOrientationMode {
   return assertAppOrientationMode(asRecord(value, '应用方向').mode)
 }
 
+export function validateNavigationBarHidden(value: unknown): boolean {
+  return requiredBoolean(asRecord(value, '导航栏状态').hidden, '导航栏状态')
+}
+
 /**
  * 校验投递区可用性档位。
  *
