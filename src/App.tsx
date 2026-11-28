@@ -16,6 +16,7 @@ import { AppBackground } from './components/AppBackground'
 import { LanguageSettings } from './components/LanguageSettings'
 import { AppearanceSettings } from './components/AppearanceSettings'
 import { AppOrientationSettings } from './components/AppOrientationSettings'
+import { NavigationBarSetting } from './components/NavigationBarSetting'
 import { SessionManager } from './components/SessionManager'
 import { DiagnosticLogPanel, HarnessLogPanel } from './ui/logs'
 import { FilesScreen, type FilesRoot } from './screens/FilesScreen'
@@ -3105,6 +3106,7 @@ function SettingsScreen({ accessibility, busy, harnessVersionBusy, diagnostic, d
               onChange={event => setDraft({ ...settings, keepScreenAwake: event.target.checked })}
             />
           </label>
+          {Capacitor.isNativePlatform() && <NavigationBarSetting />}
         </section>
         {/* 明暗模式与强调色：存储与 DOM 落地全在 src/theme.ts，这里只负责挂载。 */}
         <AppOrientationSettings />

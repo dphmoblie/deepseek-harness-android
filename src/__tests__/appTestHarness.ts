@@ -45,6 +45,8 @@ import type {
 export const bridge = {
   getAppOrientation: vi.fn(),
   setAppOrientation: vi.fn(),
+  getNavigationBarHidden: vi.fn(),
+  setNavigationBarHidden: vi.fn(),
   setAppLanguage: vi.fn(),
   /** 语言门禁的启动探测：默认「用户没选过」，需要「原生已选过就跳门禁」的用例自行改返回值。 */
   getAppLanguage: vi.fn(),
@@ -402,6 +404,8 @@ export function beforeEachAppTest(): void {
   bridge.setAppTheme.mockResolvedValue(undefined)
   bridge.getAppOrientation.mockResolvedValue('system')
   bridge.setAppOrientation.mockImplementation((mode: AppOrientationMode) => Promise.resolve(mode))
+  bridge.getNavigationBarHidden.mockResolvedValue(false)
+  bridge.setNavigationBarHidden.mockImplementation((hidden: boolean) => Promise.resolve(hidden))
   bridge.applyHarnessTheme.mockResolvedValue(undefined)
   bridge.clearHarnessTheme.mockResolvedValue(undefined)
   bridge.pickHarnessBackground.mockResolvedValue({ uri: 'content://test/background', mime: 'video/mp4', kind: 'video' })

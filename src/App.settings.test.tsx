@@ -856,6 +856,34 @@ describe('外观设置接线', () => {
     }
   })
 
+  it('安卓显示设置能切换底部导航栏并读回原生保存值', async () => {
+    const native = vi.spyOn(Capacitor, 'isNativePlatform').mockReturnValue(true)
+    window.localStorage.setItem('dsh-mobile-permissions-v1', '1')
+    bridge.setNavigationBarHidden.mockRejectedValueOnce(new Error('save failed'))
+    try {
+      render(<App />)
+      await arriveAtSettingsHome()
+      await openSettingsPage('外观与显示', '显示与配色')
+      const toggle = await screen.findByRole('switch', { name: '隐藏底部导航栏' })
+      await waitFor(() => expect(toggle).toBeEnabled())
+      expect(toggle).not.toBeChecked()
+
+      fireEvent.click(toggle)
+      expect(await screen.findByText('无法保存导航栏设置，请重试。')).toBeVisible()
+      expect(toggle).not.toBeChecked()
+
+      fireEvent.click(toggle)
+      await waitFor(() => expect(toggle).toBeChecked())
+      expect(bridge.setNavigationBarHidden).toHaveBeenNthCalledWith(2, true)
+
+      fireEvent.click(toggle)
+      await waitFor(() => expect(toggle).not.toBeChecked())
+      expect(bridge.setNavigationBarHidden).toHaveBeenNthCalledWith(3, false)
+    } finally {
+      native.mockRestore()
+    }
+  })
+
   it('「外观与显示」摆三行入口，对话页外观同步独立成页', async () => {
     render(<App />)
   await arriveAtSettingsHome()

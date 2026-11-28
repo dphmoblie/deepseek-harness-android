@@ -27,6 +27,7 @@ internal object AppWindowInsets {
                 .setInsetsIgnoringVisibility(bars, Insets.NONE)
                 .build()
         }
+        NavigationBarPreference.apply(activity)
         ViewCompat.requestApplyInsets(content)
     }
 }

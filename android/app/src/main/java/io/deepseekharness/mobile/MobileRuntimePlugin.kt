@@ -501,6 +501,39 @@ class MobileRuntimePlugin : Plugin() {
         }
     }
 
+    @PluginMethod
+    fun getNavigationBarHidden(call: PluginCall) {
+        execute(call) { JSObject().put("hidden", NavigationBarPreference.isHidden(context)) }
+    }
+
+    @PluginMethod
+    fun setNavigationBarHidden(call: PluginCall) {
+        val hidden = call.data.opt("hidden") as? Boolean
+        if (hidden == null) {
+            call.reject("导航栏隐藏设置必须为布尔值", "NAVIGATION_BAR_INVALID")
+            return
+        }
+        val host = activity
+        if (host == null) {
+            call.reject("当前没有可用的界面，无法切换导航栏", "NAVIGATION_BAR_UNAVAILABLE")
+            return
+        }
+        host.runOnUiThread {
+            if (host.isFinishing || host.isDestroyed || destroying.get()) {
+                call.reject("当前界面已关闭，无法切换导航栏", "NAVIGATION_BAR_UNAVAILABLE")
+                return@runOnUiThread
+            }
+            try {
+                NavigationBarPreference.change(host, hidden)
+                call.resolve(JSObject().put("hidden", hidden))
+            } catch (failure: RuntimeFailure) {
+                call.reject(failure.message, failure.code)
+            } catch (_: Exception) {
+                call.reject("无法切换导航栏", "NAVIGATION_BAR_APPLY_FAILED")
+            }
+        }
+    }
+
     /** 只读取应用宿主的方向；与目标应用副屏的 orientation 设置相互独立。 */
     @PluginMethod
     fun getAppOrientation(call: PluginCall) {
