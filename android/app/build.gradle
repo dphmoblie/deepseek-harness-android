@@ -300,8 +300,13 @@ tasks.named('preBuild').configure {
     dependsOn(generateDevicePluginAssets)
 }
 
+// 发布版 lint 也会打包资源。只有生成 APK 或 AAB 的任务需要团队签名。
+def releaseArtifactTasks = [
+    'assembleRelease', 'packageRelease', 'packageReleaseUniversalApk',
+    'bundleRelease', 'packageReleaseBundle', 'signReleaseBundle',
+]
 tasks.configureEach { task ->
-    if (teamSigning == null && (task.name.startsWith("assembleRelease") || task.name.startsWith("bundleRelease") || task.name.startsWith("packageRelease"))) {
+    if (teamSigning == null && releaseArtifactTasks.contains(task.name)) {
         task.doFirst {
             throw new GradleException(
                 '缺少团队签名配置：请配置 android/keystore.properties（参照 keystore.properties.example），' +
