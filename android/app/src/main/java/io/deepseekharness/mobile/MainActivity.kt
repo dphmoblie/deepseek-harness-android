@@ -4,6 +4,7 @@ import android.content.Intent
 import android.content.res.AssetFileDescriptor
 import android.content.res.Configuration
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.provider.OpenableColumns
 import android.system.ErrnoException
@@ -295,9 +296,16 @@ class MainActivity : BridgeActivity() {
         return try {
             input.use { source ->
                 try {
+                    val flags = OsConstants.O_WRONLY or OsConstants.O_TRUNC or OsConstants.O_NOFOLLOW
+                    val closeOnExec = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+                        OsConstants.O_CLOEXEC
+                    } else {
+                        // Android 8.0 的内核支持该标志，Java 常量从 8.1 起才对外公开。
+                        LINUX_O_CLOEXEC
+                    }
                     val output = Os.open(
                         target.absolutePath,
-                        OsConstants.O_WRONLY or OsConstants.O_TRUNC or OsConstants.O_NOFOLLOW or OsConstants.O_CLOEXEC,
+                        flags or closeOnExec,
                         0,
                     )
                     try {
@@ -419,6 +427,7 @@ class MainActivity : BridgeActivity() {
 
         private const val ANY_MIME_TYPE = "*/*"
         private const val COPY_BUFFER_BYTES = 16 * 1024
+        private const val LINUX_O_CLOEXEC = 0x80000
         private const val MAX_IMPORT_FILES = 16
         private const val MAX_FILE_NAME_LENGTH = 120
         private const val MAX_SOURCE_NAME_LENGTH = 512
